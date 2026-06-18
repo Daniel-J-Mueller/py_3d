@@ -5,7 +5,7 @@ from .camera import Camera, ProjectedPoint
 from .assets import MESH_ASSET_FORMAT, load_mesh_asset, mesh_asset_metadata
 from .collision import BowlCollider, BoxCollider, CompoundSphereCollider, PlaneCollider, SphereCollider
 from .color import Color
-from .fluid import FluidBlob, FluidWorld, VectorFluidParticle, VectorFluidWorld
+from .fluid import FluidBlob, FluidWorld, GPUVectorFluidWorld, VectorFluidParticle, VectorFluidWorld
 from . import draw
 from .gpu import GPURenderer, GPUSceneBatch, build_gpu_scene_batch, detect_gpu_backends
 from .hud import HUDAnimation, HUDImage, HUDRect, HUDText, LiveHUD
@@ -19,7 +19,7 @@ from .overlays import FloatingTextBulletin, TextBulletin
 from .player import PlayerModel
 from .physics import KinematicBowl, PhysicsWorld, SphereBody, StaticBox, StaticPlane, World
 from .portal import PortalPair, PortalSurface, portal_camera_for, scene_with_portal_textures
-from .primitives import BlobSurface, Bowl, Box, Capsule, HangingConeLampPrimitive, LampPrimitive, Line3, Mesh, Plane, Point3, Sphere, Triangle
+from .primitives import BlobSurface, Bowl, Box, Capsule, HangingConeLampPrimitive, LampPrimitive, Line3, Mesh, Plane, Point3, Sphere, TransformedMesh, Triangle
 from .render import CPURenderer, RenderEngine, RenderSettings, Renderer
 from .scene import Scene
 from .sky import SkyPrefab
@@ -44,6 +44,7 @@ __all__ = [
     "FloatingTextBulletin",
     "GPURenderer",
     "GPUSceneBatch",
+    "GPUVectorFluidWorld",
     "HangingConeLampPrimitive",
     "HUDAnimation",
     "HUDImage",
@@ -84,6 +85,7 @@ __all__ = [
     "Sun",
     "TextBulletin",
     "Triangle",
+    "TransformedMesh",
     "PixelWindow",
     "ValueNoise3D",
     "Vec3",

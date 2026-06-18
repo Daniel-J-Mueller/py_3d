@@ -87,6 +87,45 @@ class Mesh:
 
 
 @dataclass(frozen=True)
+class TransformedMesh:
+    """A mesh rendered at a per-instance transform."""
+
+    mesh: Mesh
+    center: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
+    rotation: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "center", as_vec3(self.center))
+        object.__setattr__(self, "rotation", as_vec3(self.rotation))
+
+    def to_triangles(self, **kwargs) -> tuple[Triangle, ...]:
+        del kwargs
+        if not self.mesh.triangles:
+            return ()
+        terms = _rotation_terms(self.rotation)
+        transformed: list[Triangle] = []
+        for triangle in self.mesh.triangles:
+            normal_a = _rotate_euler_precomputed(triangle.normal_a, terms) if triangle.normal_a is not None else None
+            normal_b = _rotate_euler_precomputed(triangle.normal_b, terms) if triangle.normal_b is not None else None
+            normal_c = _rotate_euler_precomputed(triangle.normal_c, terms) if triangle.normal_c is not None else None
+            transformed.append(
+                Triangle(
+                    self.center + _rotate_euler_precomputed(triangle.a, terms),
+                    self.center + _rotate_euler_precomputed(triangle.b, terms),
+                    self.center + _rotate_euler_precomputed(triangle.c, terms),
+                    triangle.material,
+                    triangle.uv_a,
+                    triangle.uv_b,
+                    triangle.uv_c,
+                    normal_a,
+                    normal_b,
+                    normal_c,
+                )
+            )
+        return tuple(transformed)
+
+
+@dataclass(frozen=True)
 class LampPrimitive:
     """A small low-poly table lamp built from primitive triangle geometry."""
 

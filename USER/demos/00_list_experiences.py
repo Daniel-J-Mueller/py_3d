@@ -66,7 +66,7 @@ EXPERIENCES = [
     Experience(
         "Fan Cloth Water",
         "15_render_fan_cloth_water.py",
-        "A fan blowing a spring cloth and a vector-cloud liquid stirred by a spinning fan blade.",
+        "A fan blowing spring cloth while wind shear and a small impeller stir a particle-fluid water vessel.",
         ("python", "examples/fan_cloth_water_demo.py", "--live"),
         (
             "python",
@@ -82,6 +82,26 @@ EXPERIENCES = [
         ),
         Path("USER/environments/fan_cloth_water/renderings/fan_cloth_water.png"),
         "WASD mouse look, menu tunes wind, water swirl, sky, reflections.",
+    ),
+    Experience(
+        "Wind Pool Water",
+        "18_live_wind_pool_water.py",
+        "A bath of liquid particles forms a reflective pool while wind rushes over the surface.",
+        ("python", "examples/wind_pool_water_demo.py", "--live"),
+        (
+            "python",
+            "examples/wind_pool_water_demo.py",
+            "--quality",
+            "fast",
+            "--width",
+            "480",
+            "--height",
+            "270",
+            "--output",
+            "USER/environments/wind_pool_water/renderings/wind_pool_water.png",
+        ),
+        Path("USER/environments/wind_pool_water/renderings/wind_pool_water.png"),
+        "WASD mouse look, menu tunes wind, quality, and reflections.",
     ),
     Experience(
         "Sea Lion Asset Viewer",
@@ -113,7 +133,7 @@ QUALITY_ARGS = {
 def command_for(experience: Experience, settings: MenuSettings) -> tuple[str, ...]:
     command = list(experience.launch_command)
     quality = "safe" if settings.safe_mode else settings.quality
-    if "examples/fruit_bowl_live.py" in command or "examples/fan_cloth_water_demo.py" in command:
+    if "examples/fruit_bowl_live.py" in command or "examples/fan_cloth_water_demo.py" in command or "examples/wind_pool_water_demo.py" in command:
         if "--quality" not in command:
             command.extend(QUALITY_ARGS.get(quality, QUALITY_ARGS["balanced"]))
     if settings.background_blur and "--menu-blur" not in command:
@@ -438,6 +458,8 @@ class NativeShowcaseMenu:
             return
         self.status = status
         self._mark_dirty()
+        if not preview:
+            self.window.close()
 
     def _stop_child(self) -> None:
         if self.child is not None:

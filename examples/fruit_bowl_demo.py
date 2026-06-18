@@ -43,6 +43,7 @@ from py_3d import (
     SurfacePerturbation,
     TextBulletin,
     Triangle,
+    TransformedMesh,
     Vec3,
     draw,
 )
@@ -51,6 +52,7 @@ from py_3d import (
 OUTPUT_DIR = Path("renderings-tests")
 FRUIT_BOWL_OUTPUT_DIR = Path("USER") / "environments" / "fruit_bowl" / "renderings"
 USER_SETTINGS_PATH = Path("USER") / "settings.json"
+_BANANA_MESH_CACHE: dict[tuple[float, int, int, int], Mesh] = {}
 
 
 DEFAULT_RENDER_QUALITY_PRESETS = {
@@ -213,7 +215,7 @@ class Fruit:
     banana_yaw: float = 0.0
     marker_color: tuple[int, int, int] = (40, 30, 25)
 
-    def to_primitives(self) -> tuple[Sphere | Mesh | Line3, ...]:
+    def to_primitives(self) -> tuple[Sphere | Mesh | TransformedMesh | Line3, ...]:
         if self.visual == "banana":
             return (
                 banana_mesh(
@@ -253,7 +255,7 @@ def banana_mesh(
     rotation: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0),
     sections: int = 10,
     sides: int = 8,
-) -> Mesh:
+) -> TransformedMesh:
     """Return a small curved tube mesh suitable for a banana-like fruit."""
 
     if sections < 2:
@@ -262,8 +264,18 @@ def banana_mesh(
         raise ValueError("banana sides must be at least 3")
 
     rotation = as_rotation(rotation, yaw_degrees)
-    centerline = banana_centerline_offsets(radius, sections=sections, rotation=rotation)
+    return TransformedMesh(_banana_template_mesh(radius, material, sections, sides), center, rotation)
+
+
+def _banana_template_mesh(radius: float, material: Material, sections: int, sides: int) -> Mesh:
+    key = (float(radius), int(sections), int(sides), id(material))
+    cached = _BANANA_MESH_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    centerline = banana_centerline_offsets(radius, sections=sections, rotation=Vec3(0.0, 0.0, 0.0))
     rings: list[list[Vec3]] = []
+    binormal = Vec3(0.0, 0.0, 1.0)
 
     for section in range(sections + 1):
         amount = section / sections
@@ -271,7 +283,6 @@ def banana_mesh(
         previous_center = centerline[max(0, section - 1)]
         next_center = centerline[min(sections, section + 1)]
         tangent = (next_center - previous_center).normalized(Vec3(1.0, 0.0, 0.0))
-        binormal = rotate_euler(Vec3(0.0, 0.0, 1.0), rotation)
         normal = binormal.cross(tangent).normalized(Vec3(0.0, 1.0, 0.0))
         taper = sin(pi * amount) ** 0.5
         tube_radius = radius * 0.24 * (0.35 + 0.65 * taper)
@@ -279,7 +290,7 @@ def banana_mesh(
         for side in range(sides):
             theta = tau * side / sides
             local = section_center + normal * (cos(theta) * tube_radius) + binormal * (sin(theta) * tube_radius)
-            ring.append(center + local)
+            ring.append(local)
         rings.append(ring)
 
     triangles: list[Triangle] = []
@@ -305,7 +316,11 @@ def banana_mesh(
             a = rings[ring_index][next_side if reverse else side]
             b = rings[ring_index][side if reverse else next_side]
             triangles.append(Triangle(a, b, cap_center, cap_material))
-    return Mesh(triangles)
+    mesh = Mesh(triangles)
+    if len(_BANANA_MESH_CACHE) > 32:
+        _BANANA_MESH_CACHE.clear()
+    _BANANA_MESH_CACHE[key] = mesh
+    return mesh
 
 
 def banana_collider(

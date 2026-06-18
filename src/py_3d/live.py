@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from array import array
 from dataclasses import dataclass, field
-from math import asin, atan2, cos, degrees, radians, sin, tan
+from math import asin, atan2, cos, degrees, radians, sin, sqrt, tan
 from time import perf_counter, sleep
 from typing import Iterable
+from weakref import ref
 
 from .buffer import PixelBuffer
 from .camera import Camera
@@ -18,7 +19,7 @@ from .lights import Lamp, Sun
 from .materials import Material
 from .math3d import Vec3
 from .overlays import FloatingTextBulletin, TextBulletin
-from .primitives import Bowl, Box, Capsule, Line3, Mesh, Plane, Point3, Sphere, Triangle
+from .primitives import Bowl, Box, Capsule, Line3, Mesh, Plane, Point3, Sphere, TransformedMesh, Triangle
 from .render import RenderEngine, RenderSettings, _triangles_for
 from .scene import Scene
 from .window import PixelWindow, WindowEvent
@@ -250,6 +251,7 @@ _OVERLAY_VERTEX_FORMAT = "2f 2f"
 _OVERLAY_VERTEX_ATTRIBUTES = ("in_position", "in_texcoord")
 _MENU_BUTTON_ACTIONS = {"apply", "done", "cancel", "resume", "quit"}
 _MENU_GROUP_ORDER = ("Graphics", "Sky", "Physics", "Camera", "Demo", "Main")
+_VERTEX_STRIDE_BYTES = _FLOATS_PER_VERTEX * 4
 
 
 @dataclass(frozen=True)
@@ -809,6 +811,18 @@ class _Template:
     vertices: tuple[tuple[float, float, float, float, float, float, float, float], ...]
 
 
+@dataclass
+class _ResidentObjectEntry:
+    key: tuple[int, str]
+    fingerprint: tuple
+    triangle_bytes: bytes
+    line_bytes: bytes
+    triangle_vertices: int
+    line_vertices: int
+    triangle_first: int = 0
+    line_first: int = 0
+
+
 class LiveSceneBatchBuilder:
     """Build GPU vertex payloads from py_3d scenes with generated-mesh caches."""
 
@@ -816,41 +830,64 @@ class LiveSceneBatchBuilder:
         self._sphere_templates: dict[tuple[float, int | None, int, int, bool], _Template] = {}
         self._bowl_templates: dict[tuple[float, float, float, int | None, int, int, bool], _Template] = {}
         self._capsule_templates: dict[tuple[float, float, int, int, bool], _Template] = {}
+        self._box_templates: dict[tuple[float, float, float, bool], _Template] = {}
+        self._mesh_templates: dict[tuple[int, bool], tuple[object, tuple[_Template, Material] | None]] = {}
+        self._transformed_mesh_templates: dict[tuple[int, bool], tuple[object, tuple[tuple[_Template, Material, bool], ...]]] = {}
         self.active_textures: list[PixelBuffer] = []
         self._frame_texture_slots: dict[int, int] = {}
 
+    def begin_frame(self, textures: Iterable[PixelBuffer] = ()) -> None:
+        self.active_textures = list(textures)[:_MAX_TEXTURES]
+        self._frame_texture_slots = {id(texture): index for index, texture in enumerate(self.active_textures)}
+
     def build(self, scene: Scene, settings: RenderSettings) -> tuple[bytes, bytes, int, int]:
-        self.active_textures = []
-        self._frame_texture_slots = {}
+        self.begin_frame()
         triangle_data = array("f")
         line_data = array("f")
 
         for obj in scene.objects:
-            if isinstance(obj, Point3):
-                continue
-            if isinstance(obj, Line3):
-                self._append_line(line_data, obj.start, obj.end, obj.material)
-                continue
-
-            if settings.wireframe:
-                for triangle in _triangles_for(obj, settings):
-                    self._append_triangle_wireframe(line_data, triangle)
-                continue
-
-            if isinstance(obj, Sphere):
-                self._append_sphere(triangle_data, obj, settings)
-            elif isinstance(obj, Bowl):
-                self._append_bowl(triangle_data, obj, settings)
-            elif isinstance(obj, Capsule):
-                self._append_capsule(triangle_data, obj, settings)
-            elif isinstance(obj, (Box, Mesh, Plane, Triangle)):
-                self._append_triangles(triangle_data, _triangles_for(obj, settings), settings)
-            else:
-                self._append_triangles(triangle_data, _triangles_for(obj, settings), settings)
+            self._append_object(triangle_data, line_data, obj, settings)
 
         triangle_vertices = len(triangle_data) // _FLOATS_PER_VERTEX
         line_vertices = len(line_data) // _FLOATS_PER_VERTEX
         return triangle_data.tobytes(), line_data.tobytes(), triangle_vertices, line_vertices
+
+    def build_object(self, obj, settings: RenderSettings) -> tuple[bytes, bytes, int, int]:
+        triangle_data = array("f")
+        line_data = array("f")
+        self._append_object(triangle_data, line_data, obj, settings)
+        triangle_vertices = len(triangle_data) // _FLOATS_PER_VERTEX
+        line_vertices = len(line_data) // _FLOATS_PER_VERTEX
+        return triangle_data.tobytes(), line_data.tobytes(), triangle_vertices, line_vertices
+
+    def _append_object(self, triangle_data: array, line_data: array, obj, settings: RenderSettings) -> None:
+        if isinstance(obj, Point3):
+            return
+        if isinstance(obj, Line3):
+            self._append_line(line_data, obj.start, obj.end, obj.material)
+            return
+
+        if settings.wireframe:
+            for triangle in _triangles_for(obj, settings):
+                self._append_triangle_wireframe(line_data, triangle)
+            return
+
+        if isinstance(obj, Sphere):
+            self._append_sphere(triangle_data, obj, settings)
+        elif isinstance(obj, Bowl):
+            self._append_bowl(triangle_data, obj, settings)
+        elif isinstance(obj, Capsule):
+            self._append_capsule(triangle_data, obj, settings)
+        elif isinstance(obj, Box):
+            self._append_box(triangle_data, obj, settings)
+        elif isinstance(obj, TransformedMesh):
+            self._append_transformed_mesh(triangle_data, obj, settings)
+        elif isinstance(obj, Mesh):
+            self._append_mesh(triangle_data, obj, settings)
+        elif isinstance(obj, (Plane, Triangle)):
+            self._append_triangles(triangle_data, _triangles_for(obj, settings), settings)
+        else:
+            self._append_triangles(triangle_data, _triangles_for(obj, settings), settings)
 
     def _append_sphere(self, payload: array, sphere: Sphere, settings: RenderSettings) -> None:
         key = (
@@ -912,17 +949,138 @@ class LiveSceneBatchBuilder:
             self._capsule_templates[key] = template
         _append_template(payload, template, capsule.material, capsule.center, Vec3(0.0, 0.0, 0.0), self.texture_index_for(capsule.material))
 
+    def _append_box(self, payload: array, box: Box, settings: RenderSettings) -> None:
+        key = (box.size.x, box.size.y, box.size.z, settings.smooth_shading)
+        template = self._box_templates.get(key)
+        if template is None:
+            template = _template_from_triangles(
+                Box((0.0, 0.0, 0.0), box.size, Material()).to_triangles(),
+                smooth_shading=settings.smooth_shading,
+            )
+            self._box_templates[key] = template
+        _append_template(payload, template, box.material, box.center, Vec3(0.0, 0.0, 0.0), -1)
+
+    def _append_mesh(self, payload: array, mesh: Mesh, settings: RenderSettings) -> None:
+        key = (id(mesh), settings.smooth_shading)
+        cached_entry = self._mesh_templates.get(key)
+        cached: tuple[_Template, Material] | None
+        if cached_entry is not None and cached_entry[0]() is mesh:
+            cached = cached_entry[1]
+        else:
+            if cached_entry is not None:
+                self._mesh_templates.pop(key, None)
+            triangles = mesh.to_triangles()
+            cached = self._template_for_homogeneous_mesh(triangles, settings)
+            self._remember_mesh_template(key, mesh, cached)
+        if cached is None:
+            self._append_triangles(payload, mesh.to_triangles(), settings)
+            return
+        template, material = cached
+        self._append_template_with_texture_policy(payload, template, material)
+
+    def _append_transformed_mesh(self, payload: array, instance: TransformedMesh, settings: RenderSettings) -> None:
+        for template, material, use_texture in self._transformed_mesh_groups(instance.mesh, settings):
+            texture_index = self.texture_index_for(material) if use_texture else -1
+            _append_template(payload, template, material, instance.center, instance.rotation, texture_index)
+
+    def _transformed_mesh_groups(
+        self,
+        mesh: Mesh,
+        settings: RenderSettings,
+    ) -> tuple[tuple[_Template, Material, bool], ...]:
+        key = (id(mesh), settings.smooth_shading)
+        cached_entry = self._transformed_mesh_templates.get(key)
+        if cached_entry is not None and cached_entry[0]() is mesh:
+            return cached_entry[1]
+        if cached_entry is not None:
+            self._transformed_mesh_templates.pop(key, None)
+
+        groups: list[tuple[Material, list[Triangle]]] = []
+        for triangle in mesh.triangles:
+            for material, material_triangles in groups:
+                if triangle.material == material:
+                    material_triangles.append(triangle)
+                    break
+            else:
+                groups.append((triangle.material, [triangle]))
+
+        templates: list[tuple[_Template, Material, bool]] = []
+        for material, triangles in groups:
+            use_texture = material.texture is not None and all(triangle.has_texture_coordinates() for triangle in triangles)
+            templates.append((_template_from_triangles(triangles, smooth_shading=settings.smooth_shading), material, use_texture))
+        cached = tuple(templates)
+        self._remember_transformed_mesh_templates(key, mesh, cached)
+        return cached
+
+    def _remember_transformed_mesh_templates(
+        self,
+        key: tuple[int, bool],
+        mesh: Mesh,
+        cached: tuple[tuple[_Template, Material, bool], ...],
+    ) -> None:
+        try:
+            mesh_ref = ref(mesh)
+        except TypeError:
+            return
+        if len(self._transformed_mesh_templates) > 128:
+            for stale_key, (cached_ref, _cached_template) in tuple(self._transformed_mesh_templates.items()):
+                if cached_ref() is None:
+                    self._transformed_mesh_templates.pop(stale_key, None)
+            if len(self._transformed_mesh_templates) > 128:
+                self._transformed_mesh_templates.clear()
+        self._transformed_mesh_templates[key] = (mesh_ref, cached)
+
+    def _remember_mesh_template(
+        self,
+        key: tuple[int, bool],
+        mesh: Mesh,
+        cached: tuple[_Template, Material] | None,
+    ) -> None:
+        try:
+            mesh_ref = ref(mesh)
+        except TypeError:
+            return
+        if len(self._mesh_templates) > 128:
+            for stale_key, (cached_ref, _cached_template) in tuple(self._mesh_templates.items()):
+                if cached_ref() is None:
+                    self._mesh_templates.pop(stale_key, None)
+            if len(self._mesh_templates) > 128:
+                self._mesh_templates.clear()
+        self._mesh_templates[key] = (mesh_ref, cached)
+
+    def _template_for_homogeneous_mesh(
+        self,
+        triangles: tuple[Triangle, ...],
+        settings: RenderSettings,
+    ) -> tuple[_Template, Material] | None:
+        if not triangles:
+            return None
+        material = triangles[0].material
+        if any(triangle.material != material for triangle in triangles):
+            return None
+        if material.texture is not None and any(not triangle.has_texture_coordinates() for triangle in triangles):
+            return None
+        return (_template_from_triangles(triangles, smooth_shading=settings.smooth_shading), material)
+
+    def _append_template_with_texture_policy(self, payload: array, template: _Template, material: Material) -> None:
+        texture_index = self.texture_index_for(material)
+        _append_template(payload, template, material, Vec3(0.0, 0.0, 0.0), Vec3(0.0, 0.0, 0.0), texture_index)
+
     def _append_triangles(self, payload: array, triangles: Iterable[Triangle], settings: RenderSettings) -> None:
         for triangle in triangles:
-            normal = triangle.normal()
             smooth = settings.smooth_shading and triangle.has_vertex_normals()
-            normal_a = triangle.normal_a if smooth else normal
-            normal_b = triangle.normal_b if smooth else normal
-            normal_c = triangle.normal_c if smooth else normal
+            if smooth:
+                assert triangle.normal_a is not None and triangle.normal_b is not None and triangle.normal_c is not None
+                normal_a = (triangle.normal_a.x, triangle.normal_a.y, triangle.normal_a.z)
+                normal_b = (triangle.normal_b.x, triangle.normal_b.y, triangle.normal_b.z)
+                normal_c = (triangle.normal_c.x, triangle.normal_c.y, triangle.normal_c.z)
+            else:
+                normal = _triangle_normal_components(triangle)
+                normal_a = normal_b = normal_c = normal
             texture_index = self.texture_index_for(triangle.material) if triangle.has_texture_coordinates() else -1
-            _append_vertex(payload, triangle.a, normal_a, triangle.material, triangle.uv_a, texture_index=texture_index)
-            _append_vertex(payload, triangle.b, normal_b, triangle.material, triangle.uv_b, texture_index=texture_index)
-            _append_vertex(payload, triangle.c, normal_c, triangle.material, triangle.uv_c, texture_index=texture_index)
+            _append_vertex_components(payload, triangle.a.x, triangle.a.y, triangle.a.z, *normal_a, triangle.material, triangle.uv_a, texture_index=texture_index)
+            _append_vertex_components(payload, triangle.b.x, triangle.b.y, triangle.b.z, *normal_b, triangle.material, triangle.uv_b, texture_index=texture_index)
+            _append_vertex_components(payload, triangle.c.x, triangle.c.y, triangle.c.z, *normal_c, triangle.material, triangle.uv_c, texture_index=texture_index)
 
     def _append_triangle_wireframe(self, payload: array, triangle: Triangle) -> None:
         self._append_line(payload, triangle.a, triangle.b, triangle.material)
@@ -1072,7 +1230,10 @@ class _PixelLiveRenderer:
         return self.menu.handle_pointer_event(event)
 
     def handle_menu_key(self, key: str) -> str | None:
-        return self.menu.handle_key_name(key)
+        action = self.menu.handle_key_name(key)
+        if action == "opened":
+            self.set_mouse_captured(False)
+        return action
 
     def key_matches(self, key: str, *names: str) -> bool:
         normalized = self._normalize_key(key)
@@ -1188,7 +1349,6 @@ class _PixelLiveRenderer:
             cache is not None
             and cache.width == frame.width
             and cache.height == frame.height
-            and now - self._menu_blur_cache_at < 0.12
         ):
             frame.blit(cache, 0, 0)
             return
@@ -1282,11 +1442,15 @@ class _GLFWModernGLLiveRenderer:
         if not glfw.init():
             raise RuntimeError("GLFW could not initialize an OpenGL window")
 
-        glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
-        glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
         glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
         glfw.window_hint(glfw.RESIZABLE, glfw.TRUE if resizable else glfw.FALSE)
-        self._window = glfw.create_window(max(1, int(width)), max(1, int(height)), str(title), None, None)
+        self._window = None
+        for major, minor in ((4, 3), (3, 3)):
+            glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, major)
+            glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, minor)
+            self._window = glfw.create_window(max(1, int(width)), max(1, int(height)), str(title), None, None)
+            if self._window:
+                break
         if not self._window:
             raise RuntimeError("GLFW could not create an OpenGL window")
 
@@ -1307,6 +1471,11 @@ class _GLFWModernGLLiveRenderer:
         self._overlay_buffer = self.ctx.buffer(reserve=6 * 4 * 4, dynamic=True)
         self._triangle_capacity = 4
         self._line_capacity = 4
+        self._resident_entries: dict[tuple[int, str], _ResidentObjectEntry] = {}
+        self._resident_layout_signature: tuple | None = None
+        self._resident_texture_key: tuple | None = None
+        self._resident_triangle_vertices = 0
+        self._resident_line_vertices = 0
         self._triangle_vao = self.ctx.vertex_array(
             self.scene_program,
             [(self._triangle_buffer, _VERTEX_FORMAT, *_VERTEX_ATTRIBUTES)],
@@ -1322,6 +1491,10 @@ class _GLFWModernGLLiveRenderer:
         self.builder = LiveSceneBatchBuilder()
         self.stats = LiveFrameStats(0.0, 0.0, 0, 0)
         self.mouse_captured = False
+        self._mouse_capture_requested = False
+        self._pointer_activated = False
+        self._window_focused = bool(glfw.get_window_attrib(self._window, glfw.FOCUSED))
+        self._window_iconified = bool(glfw.get_window_attrib(self._window, glfw.ICONIFIED))
         self.menu = LiveMenu()
         self.hud = LiveHUD()
         self.show_crosshair = True
@@ -1335,11 +1508,13 @@ class _GLFWModernGLLiveRenderer:
         self._scene_texture_key = None
         self._scene_texture_size = 0
         self._texture_rgba_cache: dict[tuple[int, int, int, int, int], bytes] = {}
+        self._surface_rgba_cache: dict[tuple, tuple[int, int, bytes]] = {}
         self._overlay_textures: dict[str, object] = {}
         self._overlay_sizes: dict[str, tuple[int, int]] = {}
+        self._overlay_signatures: dict[str, tuple[int, int, object]] = {}
         self._active_overlay_slots: set[str] = set()
         self._menu_surface_cache_key = None
-        self._menu_surface_cache: tuple[PixelBuffer, int, int] | None = None
+        self._menu_surface_cache: tuple[PixelBuffer, int, int, bytes] | None = None
         self._menu_was_visible = self.menu.visible
         self._install_callbacks()
 
@@ -1376,6 +1551,7 @@ class _GLFWModernGLLiveRenderer:
         events = tuple(self._map_window_event(event) for event in self._events)
         self._events.clear()
         if self._glfw.window_should_close(self._window):
+            self.release_mouse_capture()
             events = events + (WindowEvent("quit"),)
         if any(event.kind == "quit" for event in events):
             self._closed = True
@@ -1420,21 +1596,47 @@ class _GLFWModernGLLiveRenderer:
         return self.menu.handle_pointer_event(event)
 
     def handle_menu_key(self, key: str) -> str | None:
-        return self.menu.handle_key_name(key)
+        action = self.menu.handle_key_name(key)
+        if action == "opened":
+            self.set_mouse_captured(False)
+        return action
 
     def key_matches(self, key: str, *names: str) -> bool:
         normalized = self._normalize_key(key)
         return any(normalized == self._normalize_key(name) for name in names)
 
     def set_mouse_captured(self, captured: bool) -> None:
-        self.mouse_captured = bool(captured)
-        mode = self._glfw.CURSOR_DISABLED if self.mouse_captured else self._glfw.CURSOR_NORMAL
+        self._mouse_capture_requested = bool(captured)
+        self._sync_mouse_capture()
+
+    def release_mouse_capture(self) -> None:
+        self._mouse_capture_requested = False
+        self._apply_mouse_capture(False)
+
+    def _sync_mouse_capture(self) -> None:
+        self._apply_mouse_capture(self._can_capture_mouse())
+
+    def _can_capture_mouse(self) -> bool:
+        return (
+            self._mouse_capture_requested
+            and self._pointer_activated
+            and self._window_focused
+            and not self._window_iconified
+            and not self.menu.visible
+        )
+
+    def _apply_mouse_capture(self, captured: bool) -> None:
+        active = bool(captured)
+        if self.mouse_captured == active:
+            return
+        self.mouse_captured = active
+        mode = self._glfw.CURSOR_DISABLED if active else self._glfw.CURSOR_NORMAL
         self._glfw.set_input_mode(self._window, self._glfw.CURSOR, mode)
         self._last_mouse = None
 
     def render(self, scene: Scene, camera: Camera, settings: RenderSettings) -> LiveFrameStats:
         build_start = perf_counter()
-        triangle_bytes, line_bytes, triangle_vertices, line_vertices = self.builder.build(scene, settings)
+        triangle_vertices, line_vertices = self._update_resident_scene_buffers(scene, settings)
         build_seconds = perf_counter() - build_start
 
         draw_start = perf_counter()
@@ -1452,8 +1654,10 @@ class _GLFWModernGLLiveRenderer:
 
         self._apply_scene_uniforms(scene, camera, settings, width, height)
         self._upload_scene_textures(settings)
-        self._draw_scene_vertices(triangle_bytes, triangle_vertices, self._triangle_buffer, "_triangle_capacity", self._triangle_vao, self._moderngl.TRIANGLES)
-        self._draw_scene_vertices(line_bytes, line_vertices, self._line_buffer, "_line_capacity", self._line_vao, self._moderngl.LINES)
+        if triangle_vertices > 0:
+            self._triangle_vao.render(mode=self._moderngl.TRIANGLES, vertices=triangle_vertices)
+        if line_vertices > 0:
+            self._line_vao.render(mode=self._moderngl.LINES, vertices=line_vertices)
 
         self.ctx.disable(self._moderngl.DEPTH_TEST)
         self.ctx.enable(self._moderngl.BLEND)
@@ -1467,15 +1671,20 @@ class _GLFWModernGLLiveRenderer:
         if self.menu.visible != self._menu_was_visible:
             self._menu_was_visible = self.menu.visible
             self._invalidate_surface_caches()
+            if self.menu.visible:
+                self._apply_mouse_capture(False)
+            else:
+                self._sync_mouse_capture()
         if self.menu.visible:
             if self.menu.background_blur:
-                self._draw_overlay_rgba(
+                self._draw_overlay_solid(
                     "menu_dim",
                     0,
                     0,
                     width,
                     height,
-                    _solid_rgba((width, height), (0, 0, 0), 0.22)[2],
+                    (0, 0, 0),
+                    0.22,
                 )
             self._draw_menu(width, height)
         self._end_overlays()
@@ -1489,6 +1698,7 @@ class _GLFWModernGLLiveRenderer:
         if self._closed:
             return
         self._closed = True
+        self.release_mouse_capture()
         for texture in tuple(self._overlay_textures.values()):
             try:
                 texture.release()
@@ -1522,6 +1732,8 @@ class _GLFWModernGLLiveRenderer:
         self._glfw.set_window_size_callback(self._window, self._on_window_size)
         self._glfw.set_framebuffer_size_callback(self._window, self._on_framebuffer_size)
         self._glfw.set_window_close_callback(self._window, self._on_close)
+        self._glfw.set_window_focus_callback(self._window, self._on_window_focus)
+        self._glfw.set_window_iconify_callback(self._window, self._on_window_iconify)
         self._glfw.set_key_callback(self._window, self._on_key)
         self._glfw.set_cursor_pos_callback(self._window, self._on_cursor_pos)
         self._glfw.set_mouse_button_callback(self._window, self._on_mouse_button)
@@ -1536,7 +1748,24 @@ class _GLFWModernGLLiveRenderer:
         self._invalidate_surface_caches()
 
     def _on_close(self, _window) -> None:
+        self.release_mouse_capture()
         self._events.append(WindowEvent("quit"))
+
+    def _on_window_focus(self, _window, focused: int) -> None:
+        self._window_focused = bool(focused)
+        if not self._window_focused:
+            self._pointer_activated = False
+            self.release_mouse_capture()
+            return
+        self._sync_mouse_capture()
+
+    def _on_window_iconify(self, _window, iconified: int) -> None:
+        self._window_iconified = bool(iconified)
+        if self._window_iconified:
+            self._pointer_activated = False
+            self.release_mouse_capture()
+            return
+        self._sync_mouse_capture()
 
     def _on_key(self, _window, key: int, scancode: int, action: int, _mods: int) -> None:
         if action == self._glfw.PRESS or action == self._glfw.REPEAT:
@@ -1555,6 +1784,8 @@ class _GLFWModernGLLiveRenderer:
         x, y = self._glfw.get_cursor_pos(self._window)
         event_button = self._mouse_button_number(button)
         if action == self._glfw.PRESS:
+            self._pointer_activated = True
+            self._sync_mouse_capture()
             self._events.append(WindowEvent("button", pos=(int(x), int(y)), button=event_button))
         elif action == self._glfw.RELEASE:
             self._events.append(WindowEvent("button_up", pos=(int(x), int(y)), button=event_button))
@@ -1754,6 +1985,85 @@ class _GLFWModernGLLiveRenderer:
         self._texture_rgba_cache[key] = flipped
         return flipped
 
+    def _update_resident_scene_buffers(self, scene: Scene, settings: RenderSettings) -> tuple[int, int]:
+        textures = _live_textures_for_scene(scene, settings)
+        texture_key = tuple((id(texture), id(texture.pixels), texture.width, texture.height) for texture in textures)
+        texture_changed = texture_key != self._resident_texture_key
+        self.builder.begin_frame(textures)
+
+        entries: list[_ResidentObjectEntry] = []
+        next_entries: dict[tuple[int, str], _ResidentObjectEntry] = {}
+        dirty_keys: set[tuple[int, str]] = set()
+        for index, obj in enumerate(scene.objects):
+            key = (index, type(obj).__name__)
+            fingerprint = _live_object_fingerprint(obj, settings)
+            previous = self._resident_entries.get(key)
+            if previous is None or previous.fingerprint != fingerprint or texture_changed:
+                triangle_bytes, line_bytes, triangle_vertices, line_vertices = self.builder.build_object(obj, settings)
+                entry = _ResidentObjectEntry(
+                    key,
+                    fingerprint,
+                    triangle_bytes,
+                    line_bytes,
+                    triangle_vertices,
+                    line_vertices,
+                )
+                dirty_keys.add(key)
+            else:
+                entry = previous
+            entries.append(entry)
+            next_entries[key] = entry
+
+        triangle_first = 0
+        line_first = 0
+        for entry in entries:
+            entry.triangle_first = triangle_first
+            entry.line_first = line_first
+            triangle_first += entry.triangle_vertices
+            line_first += entry.line_vertices
+
+        layout_signature = tuple((entry.key, entry.triangle_vertices, entry.line_vertices) for entry in entries)
+        layout_changed = layout_signature != self._resident_layout_signature
+        if layout_changed:
+            dirty_keys = {entry.key for entry in entries}
+
+        triangle_bytes_required = triangle_first * _VERTEX_STRIDE_BYTES
+        line_bytes_required = line_first * _VERTEX_STRIDE_BYTES
+        triangle_buffer_changed = self._ensure_buffer_capacity(self._triangle_buffer, "_triangle_capacity", triangle_bytes_required)
+        line_buffer_changed = self._ensure_buffer_capacity(self._line_buffer, "_line_capacity", line_bytes_required)
+        if triangle_buffer_changed or line_buffer_changed:
+            dirty_keys = {entry.key for entry in entries}
+
+        for entry in entries:
+            if entry.key not in dirty_keys:
+                continue
+            if entry.triangle_vertices > 0:
+                self._triangle_buffer.write(entry.triangle_bytes, offset=entry.triangle_first * _VERTEX_STRIDE_BYTES)
+            if entry.line_vertices > 0:
+                self._line_buffer.write(entry.line_bytes, offset=entry.line_first * _VERTEX_STRIDE_BYTES)
+
+        stale_keys = set(self._resident_entries) - set(next_entries)
+        if stale_keys:
+            layout_changed = True
+
+        self._resident_entries = next_entries
+        self._resident_layout_signature = layout_signature
+        self._resident_texture_key = texture_key
+        self._resident_triangle_vertices = triangle_first
+        self._resident_line_vertices = line_first
+        return triangle_first, line_first
+
+    def _ensure_buffer_capacity(self, buffer, capacity_name: str, required: int) -> bool:
+        required = max(4, int(required))
+        capacity = getattr(self, capacity_name)
+        if required <= capacity:
+            return False
+        while capacity < required:
+            capacity *= 2
+        buffer.orphan(capacity)
+        setattr(self, capacity_name, capacity)
+        return True
+
     def _draw_scene_vertices(self, data: bytes, vertices: int, buffer, capacity_name: str, vao, mode: int) -> None:
         if not data or vertices <= 0:
             return
@@ -1780,11 +2090,12 @@ class _GLFWModernGLLiveRenderer:
                 pass
             self._overlay_textures.pop(slot, None)
             self._overlay_sizes.pop(slot, None)
+            self._overlay_signatures.pop(slot, None)
 
     def _draw_scene_bulletins(self, scene: Scene, camera: Camera, width: int, height: int) -> None:
         for index, bulletin in enumerate(scene.bulletins):
             if isinstance(bulletin, TextBulletin):
-                surface_width, surface_height, rgba = _bulletin_rgba(
+                surface_width, surface_height, rgba = self._cached_bulletin_rgba(
                     bulletin.text,
                     bulletin.color,
                     bulletin.background,
@@ -1796,7 +2107,7 @@ class _GLFWModernGLLiveRenderer:
                 projected = camera.project(bulletin.position, width, height)
                 if projected is None:
                     continue
-                surface_width, surface_height, rgba = _bulletin_rgba(
+                surface_width, surface_height, rgba = self._cached_bulletin_rgba(
                     bulletin.text,
                     bulletin.color,
                     bulletin.background,
@@ -1812,10 +2123,17 @@ class _GLFWModernGLLiveRenderer:
         del width, height
         for index, element in enumerate(self.hud.elements):
             if isinstance(element, HUDRect):
-                surface_width, surface_height, rgba = _solid_rgba(element.size, element.color, element.alpha)
-                self._draw_overlay_rgba(f"hud_{index}", element.position[0], element.position[1], surface_width, surface_height, rgba)
+                self._draw_overlay_solid(
+                    f"hud_{index}",
+                    element.position[0],
+                    element.position[1],
+                    max(1, int(element.size[0])),
+                    max(1, int(element.size[1])),
+                    element.color,
+                    element.alpha,
+                )
             elif isinstance(element, HUDText):
-                surface_width, surface_height, rgba = _hud_text_rgba(element)
+                surface_width, surface_height, rgba = self._cached_hud_text_rgba(element)
                 self._draw_overlay_rgba(f"hud_{index}", element.position[0], element.position[1], surface_width, surface_height, rgba)
             elif isinstance(element, HUDImage):
                 image = element.image if element.scale <= 1 else element.image.resized_nearest(element.image.width * element.scale, element.image.height * element.scale)
@@ -1830,7 +2148,7 @@ class _GLFWModernGLLiveRenderer:
                 self._draw_overlay_rgba(f"hud_{index}", element.position[0], element.position[1], surface_width, surface_height, rgba)
 
     def _draw_crosshair(self, width: int, height: int) -> None:
-        surface_width, surface_height, rgba = _crosshair_rgba(Color(235, 244, 255))
+        surface_width, surface_height, rgba = self._cached_crosshair_rgba(Color(235, 244, 255))
         self._draw_overlay_rgba(
             "crosshair",
             (width - surface_width) // 2,
@@ -1843,28 +2161,75 @@ class _GLFWModernGLLiveRenderer:
     def _draw_menu(self, width: int, height: int) -> None:
         key = self._menu_cache_key(width, height)
         if key == self._menu_surface_cache_key and self._menu_surface_cache is not None:
-            menu, left, top = self._menu_surface_cache
+            menu, left, top, rgba = self._menu_surface_cache
         else:
             menu, left, top = render_live_menu_surface(self.menu, width, height)
+            rgba = _pixelbuffer_rgba(menu, 1.0)[2]
             self._menu_surface_cache_key = key
-            self._menu_surface_cache = (menu, left, top)
-        surface_width, surface_height, rgba = _pixelbuffer_rgba(menu, 1.0)
-        self._draw_overlay_rgba("menu", left, top, surface_width, surface_height, rgba)
+            self._menu_surface_cache = (menu, left, top, rgba)
+        self._draw_overlay_rgba("menu", left, top, menu.width, menu.height, rgba, upload_key=key)
 
-    def _draw_overlay_rgba(self, slot: str, left: int, top: int, width: int, height: int, rgba: bytes) -> None:
+    def _draw_overlay_solid(
+        self,
+        slot: str,
+        left: int,
+        top: int,
+        width: int,
+        height: int,
+        color: Color | tuple[int, int, int],
+        alpha: float,
+    ) -> None:
+        solid = Color.from_value(color)
+        opacity = _alpha_byte(alpha)
+        rgba = bytes((solid.r, solid.g, solid.b, opacity))
+        self._draw_overlay_rgba(
+            slot,
+            left,
+            top,
+            1,
+            1,
+            rgba,
+            quad_width=max(1, int(width)),
+            quad_height=max(1, int(height)),
+            upload_key=(solid, opacity),
+        )
+
+    def _draw_overlay_rgba(
+        self,
+        slot: str,
+        left: int,
+        top: int,
+        width: int,
+        height: int,
+        rgba: bytes,
+        *,
+        quad_width: int | None = None,
+        quad_height: int | None = None,
+        upload_key: object | None = None,
+    ) -> None:
         if width <= 0 or height <= 0:
             return
-        texture = self._overlay_texture(slot, width, height, rgba)
+        texture = self._overlay_texture(slot, width, height, rgba, upload_key=upload_key)
         texture.use(location=0)
         frame_width, frame_height = self._last_frame_size
-        vertices = _overlay_quad_vertices(left, top, width, height, frame_width, frame_height)
+        vertices = _overlay_quad_vertices(
+            left,
+            top,
+            quad_width if quad_width is not None else width,
+            quad_height if quad_height is not None else height,
+            frame_width,
+            frame_height,
+        )
         self._overlay_buffer.write(array("f", vertices).tobytes())
         self._overlay_vao.render(mode=self._moderngl.TRIANGLES, vertices=6)
 
-    def _overlay_texture(self, slot: str, width: int, height: int, rgba: bytes):
+    def _overlay_texture(self, slot: str, width: int, height: int, rgba: bytes, *, upload_key: object | None = None):
         self._active_overlay_slots.add(slot)
-        payload = _flip_rgba_rows(rgba, width, height)
         texture = self._overlay_textures.get(slot)
+        signature = (width, height, upload_key if upload_key is not None else id(rgba))
+        if texture is not None and self._overlay_sizes.get(slot) == (width, height) and self._overlay_signatures.get(slot) == signature:
+            return texture
+        payload = _flip_rgba_rows(rgba, width, height)
         if texture is None or self._overlay_sizes.get(slot) != (width, height):
             if texture is not None:
                 texture.release()
@@ -1877,7 +2242,55 @@ class _GLFWModernGLLiveRenderer:
             self._overlay_sizes[slot] = (width, height)
         else:
             texture.write(payload, alignment=1)
+        self._overlay_signatures[slot] = signature
         return texture
+
+    def _cached_bulletin_rgba(
+        self,
+        text: str,
+        color: Color,
+        background: Color | None,
+        padding: int,
+        scale: int,
+    ) -> tuple[int, int, bytes]:
+        key = ("bulletin", text, color, background, padding, scale)
+        cached = self._surface_rgba_cache.get(key)
+        if cached is not None:
+            return cached
+        value = _bulletin_rgba(text, color, background, padding, scale)
+        self._remember_surface_rgba(key, value)
+        return value
+
+    def _cached_hud_text_rgba(self, element: HUDText) -> tuple[int, int, bytes]:
+        key = (
+            "hud_text",
+            element.text,
+            Color.from_value(element.color),
+            Color.from_value(element.background) if element.background is not None else None,
+            _alpha_byte(element.alpha),
+            element.padding,
+            element.scale,
+        )
+        cached = self._surface_rgba_cache.get(key)
+        if cached is not None:
+            return cached
+        value = _hud_text_rgba(element)
+        self._remember_surface_rgba(key, value)
+        return value
+
+    def _cached_crosshair_rgba(self, color: Color) -> tuple[int, int, bytes]:
+        key = ("crosshair", color)
+        cached = self._surface_rgba_cache.get(key)
+        if cached is not None:
+            return cached
+        value = _crosshair_rgba(color)
+        self._remember_surface_rgba(key, value)
+        return value
+
+    def _remember_surface_rgba(self, key: tuple, value: tuple[int, int, bytes]) -> None:
+        if len(self._surface_rgba_cache) > 128:
+            self._surface_rgba_cache.clear()
+        self._surface_rgba_cache[key] = value
 
     def _menu_cache_key(self, width: int, height: int):
         menu = self.menu
@@ -1977,6 +2390,173 @@ def _flip_rgba_rows(rgba: bytes, width: int, height: int) -> bytes:
     return b"".join(rgba[y * stride : (y + 1) * stride] for y in range(height - 1, -1, -1))
 
 
+def _live_textures_for_scene(scene: Scene, settings: RenderSettings) -> tuple[PixelBuffer, ...]:
+    if settings.wireframe:
+        return ()
+    textures: list[PixelBuffer] = []
+    seen: set[int] = set()
+    for obj in scene.objects:
+        for texture in _live_textures_for_object(obj, settings):
+            key = id(texture)
+            if key in seen:
+                continue
+            seen.add(key)
+            textures.append(texture)
+            if len(textures) >= _MAX_TEXTURES:
+                return tuple(textures)
+    return tuple(textures)
+
+
+def _live_textures_for_object(obj, settings: RenderSettings) -> tuple[PixelBuffer, ...]:
+    del settings
+    if isinstance(obj, (Sphere, Bowl, Capsule)):
+        return _material_texture_tuple(obj.material)
+    if isinstance(obj, Plane):
+        return _material_texture_tuple(obj.material)
+    if isinstance(obj, Triangle):
+        return _material_texture_tuple(obj.material) if obj.has_texture_coordinates() else ()
+    if isinstance(obj, TransformedMesh):
+        return _live_textures_for_mesh(obj.mesh)
+    if isinstance(obj, Mesh):
+        return _live_textures_for_mesh(obj)
+    return ()
+
+
+def _live_textures_for_mesh(mesh: Mesh) -> tuple[PixelBuffer, ...]:
+    textures: list[PixelBuffer] = []
+    seen: set[int] = set()
+    for triangle in mesh.triangles:
+        texture = triangle.material.texture if triangle.has_texture_coordinates() else None
+        if texture is None or id(texture) in seen:
+            continue
+        seen.add(id(texture))
+        textures.append(texture)
+        if len(textures) >= _MAX_TEXTURES:
+            break
+    return tuple(textures)
+
+
+def _material_texture_tuple(material: Material) -> tuple[PixelBuffer, ...]:
+    return (material.texture,) if material.texture is not None else ()
+
+
+def _live_object_fingerprint(obj, settings: RenderSettings) -> tuple:
+    geometry_settings = (
+        bool(settings.wireframe),
+        bool(settings.smooth_shading),
+        settings.sphere_segments,
+        settings.sphere_rings,
+    )
+    if isinstance(obj, Point3):
+        return ("point", obj.position.as_tuple(), _material_fingerprint(obj.material), geometry_settings)
+    if isinstance(obj, Line3):
+        return ("line", obj.start.as_tuple(), obj.end.as_tuple(), _material_fingerprint(obj.material), geometry_settings)
+    if isinstance(obj, Sphere):
+        return (
+            "sphere",
+            obj.center.as_tuple(),
+            obj.radius,
+            id(obj.perturbation),
+            obj.rotation.as_tuple(),
+            _material_fingerprint(obj.material),
+            geometry_settings,
+        )
+    if isinstance(obj, Bowl):
+        return (
+            "bowl",
+            obj.center.as_tuple(),
+            obj.radius,
+            obj.depth,
+            obj.thickness,
+            id(obj.perturbation),
+            _material_fingerprint(obj.material),
+            geometry_settings,
+        )
+    if isinstance(obj, Capsule):
+        return (
+            "capsule",
+            obj.center.as_tuple(),
+            obj.radius,
+            obj.height,
+            _material_fingerprint(obj.material),
+            geometry_settings,
+        )
+    if isinstance(obj, Box):
+        return ("box", obj.center.as_tuple(), obj.size.as_tuple(), _material_fingerprint(obj.material), geometry_settings)
+    if isinstance(obj, Plane):
+        return (
+            "plane",
+            obj.point.as_tuple(),
+            obj.normal.as_tuple(),
+            obj.size,
+            obj.thickness,
+            _material_fingerprint(obj.material),
+            geometry_settings,
+        )
+    if isinstance(obj, Triangle):
+        return ("triangle", _triangle_fingerprint(obj), geometry_settings)
+    if isinstance(obj, TransformedMesh):
+        return (
+            "transformed_mesh",
+            id(obj.mesh),
+            len(obj.mesh.triangles),
+            _triangle_fingerprint(obj.mesh.triangles[0]) if obj.mesh.triangles else None,
+            _triangle_fingerprint(obj.mesh.triangles[-1]) if obj.mesh.triangles else None,
+            obj.center.as_tuple(),
+            obj.rotation.as_tuple(),
+            geometry_settings,
+        )
+    if isinstance(obj, Mesh):
+        if len(obj.triangles) <= 16:
+            mesh_key = tuple(_triangle_fingerprint(triangle) for triangle in obj.triangles)
+        else:
+            mesh_key = (
+                id(obj),
+                len(obj.triangles),
+                _triangle_fingerprint(obj.triangles[0]) if obj.triangles else None,
+                _triangle_fingerprint(obj.triangles[-1]) if obj.triangles else None,
+            )
+        return (
+            "mesh",
+            mesh_key,
+            geometry_settings,
+        )
+    return ("object", type(obj).__name__, repr(obj), geometry_settings)
+
+
+def _triangle_fingerprint(triangle: Triangle) -> tuple:
+    return (
+        triangle.a.as_tuple(),
+        triangle.b.as_tuple(),
+        triangle.c.as_tuple(),
+        _material_fingerprint(triangle.material),
+        triangle.uv_a,
+        triangle.uv_b,
+        triangle.uv_c,
+        triangle.normal_a.as_tuple() if triangle.normal_a is not None else None,
+        triangle.normal_b.as_tuple() if triangle.normal_b is not None else None,
+        triangle.normal_c.as_tuple() if triangle.normal_c is not None else None,
+    )
+
+
+def _material_fingerprint(material: Material) -> tuple:
+    texture = material.texture
+    texture_key = None if texture is None else (id(texture), id(texture.pixels), texture.width, texture.height)
+    return (
+        material.color,
+        material.absorption,
+        material.diffuse,
+        material.emission,
+        texture_key,
+        material.roughness,
+        material.fuzziness,
+        material.specular,
+        material.shininess,
+        material.reflectivity,
+        material.light_transmission,
+    )
+
+
 def _blend_color(base: Color, overlay: Color | tuple[int, int, int], alpha: float) -> Color:
     top = Color.from_value(overlay)
     amount = max(0.0, min(1.0, float(alpha)))
@@ -2054,12 +2634,12 @@ def _blit_buffer(target: PixelBuffer, source: PixelBuffer, left: int, top: int, 
 def _template_from_triangles(triangles: Iterable[Triangle], *, smooth_shading: bool = True) -> _Template:
     vertices: list[tuple[float, float, float, float, float, float, float, float]] = []
     for triangle in triangles:
-        face_normal = triangle.normal()
-        if smooth_shading:
+        face_normal = _triangle_normal_components(triangle)
+        if smooth_shading and triangle.has_vertex_normals():
             normals = (
-                triangle.normal_a or face_normal,
-                triangle.normal_b or face_normal,
-                triangle.normal_c or face_normal,
+                (triangle.normal_a.x, triangle.normal_a.y, triangle.normal_a.z),
+                (triangle.normal_b.x, triangle.normal_b.y, triangle.normal_b.z),
+                (triangle.normal_c.x, triangle.normal_c.y, triangle.normal_c.z),
             )
         else:
             normals = (face_normal, face_normal, face_normal)
@@ -2069,8 +2649,26 @@ def _template_from_triangles(triangles: Iterable[Triangle], *, smooth_shading: b
             triangle.uv_c or (0.0, 0.0),
         )
         for point, normal, uv in zip((triangle.a, triangle.b, triangle.c), normals, uvs):
-            vertices.append((point.x, point.y, point.z, normal.x, normal.y, normal.z, uv[0], uv[1]))
+            vertices.append((point.x, point.y, point.z, normal[0], normal[1], normal[2], uv[0], uv[1]))
     return _Template(tuple(vertices))
+
+
+def _triangle_normal_components(triangle: Triangle) -> tuple[float, float, float]:
+    ax, ay, az = triangle.a.x, triangle.a.y, triangle.a.z
+    ux = triangle.b.x - ax
+    uy = triangle.b.y - ay
+    uz = triangle.b.z - az
+    vx = triangle.c.x - ax
+    vy = triangle.c.y - ay
+    vz = triangle.c.z - az
+    nx = uy * vz - uz * vy
+    ny = uz * vx - ux * vz
+    nz = ux * vy - uy * vx
+    length = sqrt(nx * nx + ny * ny + nz * nz)
+    if length <= 1e-12:
+        return (0.0, 0.0, 0.0)
+    inverse = 1.0 / length
+    return (nx * inverse, ny * inverse, nz * inverse)
 
 
 def _append_template(
@@ -2101,7 +2699,7 @@ def _append_template(
         if rotation_values is not None:
             px, py, pz = _rotate_components(px, py, pz, rotation_values)
             nx, ny, nz = _rotate_components(nx, ny, nz, rotation_values)
-        color = base_color if texture_index >= 0 else _material_color_floats(material, (u, v))
+        color = base_color if texture_index >= 0 or material.texture is None else _material_color_floats(material, (u, v))
         payload.extend(
             (
                 center_x + px,
@@ -2131,9 +2729,38 @@ def _append_vertex(
     force_emissive: bool = False,
     texture_index: int = -1,
 ) -> None:
+    _append_vertex_components(
+        payload,
+        position.x,
+        position.y,
+        position.z,
+        normal.x,
+        normal.y,
+        normal.z,
+        material,
+        uv,
+        force_emissive=force_emissive,
+        texture_index=texture_index,
+    )
+
+
+def _append_vertex_components(
+    payload: array,
+    position_x: float,
+    position_y: float,
+    position_z: float,
+    normal_x: float,
+    normal_y: float,
+    normal_z: float,
+    material: Material,
+    uv: tuple[float, float] | None,
+    *,
+    force_emissive: bool = False,
+    texture_index: int = -1,
+) -> None:
     if force_emissive:
         texture_index = -1
-    color = material.color.to_floats() if texture_index >= 0 and uv is not None else _material_color_floats(material, uv)
+    color = material.color.to_floats() if (texture_index >= 0 and uv is not None) or material.texture is None else _material_color_floats(material, uv)
     if force_emissive:
         emission = tuple(min(1.0, color[index] + material.emission.to_floats()[index]) for index in range(3))
         material_values = (emission[0], emission[1], emission[2], 0.0, 0.0, 1.0, 0.0)
@@ -2141,12 +2768,12 @@ def _append_vertex(
         material_values = _material_values(material)
     payload.extend(
         (
-            position.x,
-            position.y,
-            position.z,
-            normal.x,
-            normal.y,
-            normal.z,
+            position_x,
+            position_y,
+            position_z,
+            normal_x,
+            normal_y,
+            normal_z,
             color[0],
             color[1],
             color[2],

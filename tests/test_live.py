@@ -1,16 +1,45 @@
+import importlib.util
 from array import array
 
-from py_3d import HUDRect, HUDText, Material, PixelBuffer, RenderSettings, Scene, Sphere, Sun
+import pytest
+
+from py_3d import Box, HUDRect, HUDText, Material, Mesh, PixelBuffer, RenderSettings, Scene, Sphere, Sun, Triangle
 from py_3d.live import (
     LiveFlyCamera,
     LiveMenu,
     LiveMenuOption,
     LiveMenuTheme,
     LiveSceneBatchBuilder,
+    _GLFWModernGLLiveRenderer,
     _flip_rgba_rows,
+    _live_object_fingerprint,
     _overlay_quad_vertices,
     render_live_menu_surface,
 )
+
+
+class _FakeGLFW:
+    CURSOR = 1
+    CURSOR_DISABLED = 2
+    CURSOR_NORMAL = 3
+
+    def __init__(self):
+        self.modes = []
+
+    def set_input_mode(self, window, mode, value):
+        self.modes.append((window, mode, value))
+
+
+class _FakeGLBuffer:
+    def __init__(self):
+        self.writes = []
+        self.orphans = []
+
+    def orphan(self, size):
+        self.orphans.append(size)
+
+    def write(self, data, offset=0):
+        self.writes.append((len(data), offset))
 
 
 def test_live_scene_batch_builder_outputs_triangle_payload():
@@ -75,6 +104,134 @@ def test_live_scene_batch_builder_assigns_texture_slots():
     assert triangle_vertices > 0
     assert len(builder.active_textures) == 1
     assert payload[18] == 0.0
+
+
+def test_live_scene_batch_builder_reuses_box_templates():
+    material = Material(color=(180, 120, 70))
+    scene = Scene()
+    scene.add(Box((0, 0, 0), (1, 2, 3), material), Box((2, 0, 0), (1, 2, 3), material))
+    settings = RenderSettings(width=64, height=64, smooth_shading=True)
+    builder = LiveSceneBatchBuilder()
+
+    first, _line_bytes, first_vertices, _line_vertices = builder.build(scene, settings)
+    second, _line_bytes, second_vertices, _line_vertices = builder.build(scene, settings)
+
+    assert len(builder._box_templates) == 1
+    assert first == second
+    assert first_vertices == second_vertices == 72
+
+
+def test_live_scene_batch_builder_keeps_unmapped_box_textures_disabled():
+    texture = PixelBuffer.new(4, 4, (20, 40, 80))
+    scene = Scene()
+    scene.add(Box((0, 0, 0), (1, 1, 1), Material(color=(180, 120, 70), texture=texture)))
+    settings = RenderSettings(width=64, height=64)
+    builder = LiveSceneBatchBuilder()
+
+    triangle_bytes, _line_bytes, triangle_vertices, _line_vertices = builder.build(scene, settings)
+    payload = array("f")
+    payload.frombytes(triangle_bytes)
+
+    assert triangle_vertices == 36
+    assert builder.active_textures == []
+    assert payload[18] == -1.0
+
+
+def test_live_scene_batch_builder_caches_homogeneous_mesh_templates():
+    material = Material(color=(90, 150, 230))
+    mesh = Mesh(
+        (
+            Triangle((0, 0, 0), (1, 0, 0), (0, 1, 0), material),
+            Triangle((1, 0, 0), (1, 1, 0), (0, 1, 0), material),
+        )
+    )
+    scene = Scene()
+    scene.add(mesh)
+    settings = RenderSettings(width=64, height=64)
+    builder = LiveSceneBatchBuilder()
+
+    first, _line_bytes, first_vertices, _line_vertices = builder.build(scene, settings)
+    second, _line_bytes, second_vertices, _line_vertices = builder.build(scene, settings)
+
+    cached_ref, cached_template = builder._mesh_templates[(id(mesh), settings.smooth_shading)]
+    assert cached_ref() is mesh
+    assert cached_template is not None
+    assert first == second
+    assert first_vertices == second_vertices == 6
+
+
+def test_live_renderer_keeps_unchanged_object_ranges_resident():
+    renderer = object.__new__(_GLFWModernGLLiveRenderer)
+    renderer.builder = LiveSceneBatchBuilder()
+    renderer._resident_entries = {}
+    renderer._resident_layout_signature = None
+    renderer._resident_texture_key = None
+    renderer._resident_triangle_vertices = 0
+    renderer._resident_line_vertices = 0
+    renderer._triangle_buffer = _FakeGLBuffer()
+    renderer._line_buffer = _FakeGLBuffer()
+    renderer._triangle_capacity = 4
+    renderer._line_capacity = 4
+    scene = Scene()
+    scene.add(Box((0, 0, 0), (1, 1, 1), Material(color=(180, 120, 70))))
+    settings = RenderSettings(width=64, height=64)
+
+    triangle_vertices, line_vertices = renderer._update_resident_scene_buffers(scene, settings)
+    first_writes = list(renderer._triangle_buffer.writes)
+    renderer._triangle_buffer.writes.clear()
+    renderer._line_buffer.writes.clear()
+    second_vertices, second_lines = renderer._update_resident_scene_buffers(scene, settings)
+
+    assert triangle_vertices == second_vertices == 36
+    assert line_vertices == second_lines == 0
+    assert first_writes
+    assert renderer._triangle_buffer.writes == []
+    assert renderer._line_buffer.writes == []
+
+
+def test_live_renderer_rewrites_dirty_object_range_only():
+    renderer = object.__new__(_GLFWModernGLLiveRenderer)
+    renderer.builder = LiveSceneBatchBuilder()
+    renderer._resident_entries = {}
+    renderer._resident_layout_signature = None
+    renderer._resident_texture_key = None
+    renderer._resident_triangle_vertices = 0
+    renderer._resident_line_vertices = 0
+    renderer._triangle_buffer = _FakeGLBuffer()
+    renderer._line_buffer = _FakeGLBuffer()
+    renderer._triangle_capacity = 4096
+    renderer._line_capacity = 4096
+    settings = RenderSettings(width=64, height=64)
+    scene = Scene()
+    scene.add(
+        Box((0, 0, 0), (1, 1, 1), Material(color=(180, 120, 70))),
+        Box((2, 0, 0), (1, 1, 1), Material(color=(90, 150, 230))),
+    )
+    renderer._update_resident_scene_buffers(scene, settings)
+    renderer._triangle_buffer.writes.clear()
+    moved_scene = Scene()
+    moved_scene.add(
+        Box((0, 0, 0), (1, 1, 1), Material(color=(180, 120, 70))),
+        Box((3, 0, 0), (1, 1, 1), Material(color=(90, 150, 230))),
+    )
+
+    renderer._update_resident_scene_buffers(moved_scene, settings)
+
+    assert renderer._triangle_buffer.writes == [(36 * 19 * 4, 36 * 19 * 4)]
+
+
+def test_live_object_fingerprint_keeps_recreated_static_meshes_resident():
+    material = Material(color=(90, 150, 230))
+    first = Mesh((Triangle((0, 0, 0), (1, 0, 0), (0, 1, 0), material),))
+    second = Mesh((Triangle((0, 0, 0), (1, 0, 0), (0, 1, 0), material),))
+    settings = RenderSettings(width=64, height=64)
+
+    class StablePrimitive:
+        def __repr__(self):
+            return "StablePrimitive(value=1)"
+
+    assert _live_object_fingerprint(first, settings) == _live_object_fingerprint(second, settings)
+    assert _live_object_fingerprint(StablePrimitive(), settings) == _live_object_fingerprint(StablePrimitive(), settings)
 
 
 def test_overlay_quad_vertices_map_pixels_to_clip_space():
@@ -144,6 +301,65 @@ def test_live_menu_background_blur_is_optional():
     menu = LiveMenu(background_blur=True)
 
     assert menu.background_blur is True
+
+
+def test_live_menu_escape_opens_and_escape_again_chooses_cancel_action():
+    menu = LiveMenu(options=(LiveMenuOption("done", "Done"), LiveMenuOption("cancel", "Cancel")))
+
+    assert menu.handle_key_name("escape") == "opened"
+    assert menu.visible is True
+    assert menu.handle_key_name("escape") == "cancel"
+
+
+def test_mouse_capture_waits_for_pointer_activation_and_releases_on_menu():
+    renderer = object.__new__(_GLFWModernGLLiveRenderer)
+    renderer._glfw = _FakeGLFW()
+    renderer._window = object()
+    renderer.mouse_captured = False
+    renderer._mouse_capture_requested = False
+    renderer._pointer_activated = False
+    renderer._window_focused = True
+    renderer._window_iconified = False
+    renderer._last_mouse = (4, 5)
+    renderer.menu = LiveMenu()
+
+    renderer.set_mouse_captured(True)
+    assert renderer.mouse_captured is False
+
+    renderer._pointer_activated = True
+    renderer.set_mouse_captured(True)
+    assert renderer.mouse_captured is True
+
+    renderer.menu.open()
+    renderer._sync_mouse_capture()
+    assert renderer.mouse_captured is False
+
+
+def test_glfw_live_renderer_initializes_capture_state_in_hidden_window():
+    if importlib.util.find_spec("glfw") is None or importlib.util.find_spec("moderngl") is None:
+        pytest.skip("glfw/moderngl are not installed")
+
+    import glfw
+
+    if not glfw.init():
+        pytest.skip("GLFW could not initialize")
+    renderer = None
+    try:
+        glfw.window_hint(glfw.VISIBLE, glfw.FALSE)
+        try:
+            renderer = _GLFWModernGLLiveRenderer(32, 24, vsync=False)
+        except RuntimeError as exc:
+            pytest.skip(str(exc))
+
+        renderer.set_mouse_captured(True)
+
+        assert renderer._mouse_capture_requested is True
+        assert renderer._pointer_activated is False
+        assert renderer.mouse_captured is False
+    finally:
+        if renderer is not None:
+            renderer.close()
+        glfw.terminate()
 
 
 def test_live_menu_theme_and_paired_buttons_render():

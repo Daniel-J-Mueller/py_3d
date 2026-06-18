@@ -14,6 +14,7 @@ from py_3d import (
     Box,
     Camera,
     Color,
+    GPUVectorFluidWorld,
     HUDRect,
     HUDText,
     Line3,
@@ -189,35 +190,57 @@ class ClothSheet:
 
 
 class FanWaterSimulation:
-    def __init__(self, *, quality: str = "balanced") -> None:
+    def __init__(self, *, quality: str = "balanced", gpu_context=None) -> None:
         self.time = 0.0
         self.quality = quality
         self.wind_scale = 1.0
         self.blade_strength = 1.0
-        self.cloth = ClothSheet(columns=14 if quality != "fast" else 10, rows=10 if quality != "fast" else 7)
+        cloth_size = {
+            "fast": (10, 7),
+            "balanced": (12, 8),
+            "high": (14, 10),
+            "ultra": (16, 11),
+        }.get(quality, (12, 8))
+        self.cloth = ClothSheet(columns=cloth_size[0], rows=cloth_size[1])
         self.water_center = Vec3(1.25, 0.64, 0.0)
         self.water_radius = 0.58
-        self.fluid = VectorFluidWorld(
+        fluid_cls = GPUVectorFluidWorld if gpu_context is not None else VectorFluidWorld
+        fluid_args = (gpu_context,) if gpu_context is not None else ()
+        self.fluid = fluid_cls.liquid(
+            *fluid_args,
             bounds_min=(self.water_center.x - self.water_radius, 0.42, self.water_center.z - self.water_radius),
             bounds_max=(self.water_center.x + self.water_radius, 0.78, self.water_center.z + self.water_radius),
             gravity=(0.0, -1.6, 0.0),
-            rest_distance=0.14,
-            repel_strength=5.6,
-            self_attraction=1.9,
-            viscosity=0.22,
-            boundary_bounce=0.08,
+            rest_distance=0.045 if gpu_context is not None else 0.105,
+            repel_strength=5.8 if gpu_context is not None else 7.6,
+            self_attraction=1.7 if gpu_context is not None else 2.2,
+            viscosity=0.36 if gpu_context is not None else 0.28,
+            boundary_bounce=0.05,
+            close_damping=7.5,
+            attract_range_factor=2.35 if gpu_context is not None else 3.1,
         )
-        rings = (0.0, 0.2, 0.36, 0.5)
-        for ring_index, radius in enumerate(rings):
-            count = max(1, 6 * ring_index)
-            for index in range(count):
-                angle = tau * index / count + ring_index * 0.24
-                position = self.water_center + Vec3(cos(angle) * radius, 0.0, sin(angle) * radius)
-                self.fluid.add_particle(VectorFluidParticle(position, velocity=(-sin(angle) * 0.05, 0.0, cos(angle) * 0.05)))
+        self._seed_water_particles(gpu_context is not None)
+
+    def _seed_water_particles(self, gpu_enabled: bool) -> None:
+        count = (
+            {"fast": 1024, "balanced": 1536, "high": 3072, "ultra": 4096}.get(self.quality, 1536)
+            if gpu_enabled
+            else {"fast": 96, "balanced": 160, "high": 240, "ultra": 320}.get(self.quality, 160)
+        )
+        golden_angle = pi * (3.0 - 5.0 ** 0.5)
+        for index in range(count):
+            amount = (index + 0.5) / count
+            radius = self.water_radius * 0.88 * (amount ** 0.5)
+            angle = index * golden_angle
+            ripple = sin(angle * 1.7 + radius * 8.0)
+            y = -0.085 + 0.038 * ripple
+            position = self.water_center + Vec3(cos(angle) * radius, y, sin(angle) * radius)
+            tangent = Vec3(-sin(angle), 0.0, cos(angle))
+            self.fluid.add_particle(VectorFluidParticle(position, velocity=tangent * 0.035))
 
     def step(self, dt: float) -> None:
         self.time += dt
-        cloth_substeps = 6 if self.wind_scale > 1.6 else 4
+        cloth_substeps = 4 if self.wind_scale > 1.6 else 3
         self.cloth.step(
             dt,
             self.time,
@@ -226,8 +249,17 @@ class FanWaterSimulation:
             obstacle_center=Vec3(self.water_center.x, 0.78, self.water_center.z),
             obstacle_radius=0.78,
         )
-        self.fluid.step(dt, substeps=3, external_force=self._fan_blade_force)
-        self._constrain_water()
+        if getattr(self.fluid, "gpu_enabled", False):
+            self.fluid.force_mode = 1
+            self.fluid.force_center = self.water_center
+            self.fluid.cylinder_radius = self.water_radius
+            self.fluid.time = self.time
+            self.fluid.wind_strength = self.wind_scale
+            self.fluid.blade_strength = self.blade_strength
+            self.fluid.step(dt, substeps=1)
+        else:
+            self.fluid.step(dt, substeps=2, external_force=self._fan_blade_force)
+            self._constrain_water()
 
     def _fan_blade_force(self, particle: VectorFluidParticle, dt: float) -> Vec3:
         del dt
@@ -236,9 +268,12 @@ class FanWaterSimulation:
         distance = max(0.04, horizontal.length())
         tangent = Vec3(-horizontal.z, 0.0, horizontal.x).normalized(Vec3(0.0, 0.0, 1.0))
         blade_phase = sin(self.time * tau * 2.4 + distance * 8.0)
-        swirl = tangent * (1.25 / (1.0 + distance * 3.0))
-        lift = Vec3(0.0, 0.2 * blade_phase, 0.0)
-        return (swirl + lift) * self.blade_strength
+        surface = max(0.0, min(1.0, (particle.position.y - (self.water_center.y - 0.1)) / 0.22))
+        wind_wave = sin(self.time * tau * 1.7 + particle.position.z * 8.0)
+        wind_shear = Vec3(1.0, 0.04 * wind_wave, 0.16 * sin(self.time * 3.1 + particle.position.x * 4.5)) * (0.72 * self.wind_scale * surface)
+        swirl = tangent * (1.05 / (1.0 + distance * 3.0))
+        lift = Vec3(0.0, 0.16 * blade_phase * surface, 0.0)
+        return wind_shear + (swirl + lift) * self.blade_strength
 
     def _constrain_water(self) -> None:
         for particle in self.fluid.particles:
@@ -251,6 +286,8 @@ class FanWaterSimulation:
                 outward = particle.velocity.dot(normal)
                 if outward > 0.0:
                     particle.velocity = particle.velocity - normal * (outward * 1.2)
+            if particle.position.y < self.water_center.y - 0.18 and particle.velocity.y < 0.0:
+                particle.velocity = Vec3(particle.velocity.x * 0.98, particle.velocity.y * 0.25, particle.velocity.z * 0.98)
 
     def scene(self) -> Scene:
         scene = Scene()
@@ -300,37 +337,155 @@ def water_texture(width: int = 256, height: int = 256) -> PixelBuffer:
 
 
 def water_surface_mesh(world: VectorFluidWorld, center: Vec3, radius: float, time: float, *, quality: str) -> Mesh:
-    steps = {"fast": 9, "balanced": 13, "high": 17, "ultra": 21}.get(quality, 13)
-    material = Material(color=(210, 235, 255), texture=water_texture(), roughness=0.06, specular=0.72, shininess=88.0, reflectivity=0.32, light_transmission=0.35)
+    rings, segments = {"fast": (14, 48), "balanced": (20, 72), "high": (28, 96), "ultra": (36, 128)}.get(quality, (20, 72))
+    material = Material(color=(118, 202, 224), roughness=0.018, specular=0.86, shininess=116.0, reflectivity=0.46, light_transmission=0.58)
+    sampler = _ParticleSurfaceSampler(world, center, radius, time)
+    samples: list[tuple[float, float, float]] = [(0.0, 0.0, 0.0)]
+    sample_keys: list[tuple[int, int]] = [(0, 0)]
+    for ring in range(1, rings + 1):
+        amount = ring / rings
+        radial = radius * (amount ** 0.72)
+        edge = max(0.0, (amount - 0.86) / 0.14)
+        for segment in range(segments):
+            angle = tau * segment / segments
+            samples.append((cos(angle) * radial, sin(angle) * radial, edge))
+            sample_keys.append((ring, segment))
+    heights = sampler.heights_for(samples)
+    center_point = Vec3(center.x, heights[0], center.z)
     points: dict[tuple[int, int], Vec3] = {}
-    for row in range(steps + 1):
-        z = -radius + 2.0 * radius * row / steps
-        for column in range(steps + 1):
-            x = -radius + 2.0 * radius * column / steps
-            if x * x + z * z > radius * radius:
-                continue
-            height = center.y
-            for particle in world.particles:
-                dx = center.x + x - particle.position.x
-                dz = center.z + z - particle.position.z
-                influence = max(0.0, 1.0 - (dx * dx + dz * dz) / 0.08)
-                height += influence * (particle.position.y - center.y) * 0.28
-            height += sin(time * tau * 1.25 + x * 5.2 + z * 3.7) * 0.012
-            points[(column, row)] = Vec3(center.x + x, height, center.z + z)
+    for (ring, segment), (x, z, _edge), height in zip(sample_keys[1:], samples[1:], heights[1:]):
+        points[(ring, segment)] = Vec3(center.x + x, height, center.z + z)
+    normals = _water_surface_normals(points, center_point, rings, segments)
     triangles: list[Triangle] = []
-    for row in range(steps):
-        for column in range(steps):
-            keys = ((column, row), (column + 1, row), (column + 1, row + 1), (column, row + 1))
-            if not all(key in points for key in keys):
-                continue
-            a, b, c, d = (points[key] for key in keys)
-            u0 = column / steps
-            u1 = (column + 1) / steps
-            v0 = row / steps
-            v1 = (row + 1) / steps
-            triangles.append(Triangle(a, b, c, material, (u0, v0), (u1, v0), (u1, v1)))
-            triangles.append(Triangle(a, c, d, material, (u0, v0), (u1, v1), (u0, v1)))
+    for segment in range(segments):
+        next_segment = (segment + 1) % segments
+        u0 = segment / segments
+        u1 = (segment + 1) / segments
+        triangles.append(
+            Triangle(
+                center_point,
+                points[(1, next_segment)],
+                points[(1, segment)],
+                material,
+                (0.5, 0.5),
+                (u1, 0.04),
+                (u0, 0.04),
+                Vec3(0.0, 1.0, 0.0),
+                normals[(1, next_segment)],
+                normals[(1, segment)],
+            )
+        )
+    for ring in range(1, rings):
+        v0 = ring / rings
+        v1 = (ring + 1) / rings
+        for segment in range(segments):
+            next_segment = (segment + 1) % segments
+            a = points[(ring, segment)]
+            b = points[(ring, next_segment)]
+            c = points[(ring + 1, next_segment)]
+            d = points[(ring + 1, segment)]
+            u0 = segment / segments
+            u1 = (segment + 1) / segments
+            triangles.append(Triangle(a, b, c, material, (u0, v0), (u1, v0), (u1, v1), normals[(ring, segment)], normals[(ring, next_segment)], normals[(ring + 1, next_segment)]))
+            triangles.append(Triangle(a, c, d, material, (u0, v0), (u1, v1), (u0, v1), normals[(ring, segment)], normals[(ring + 1, next_segment)], normals[(ring + 1, segment)]))
     return Mesh(triangles)
+
+
+def _water_surface_normals(points: dict[tuple[int, int], Vec3], center_point: Vec3, rings: int, segments: int) -> dict[tuple[int, int], Vec3]:
+    normals: dict[tuple[int, int], Vec3] = {}
+    for ring in range(1, rings + 1):
+        for segment in range(segments):
+            current = points[(ring, segment)]
+            inner = center_point if ring == 1 else points[(ring - 1, segment)]
+            if ring == rings:
+                radial = current - inner
+            else:
+                radial = points[(ring + 1, segment)] - inner
+            angular = points[(ring, (segment + 1) % segments)] - points[(ring, (segment - 1) % segments)]
+            normal = angular.cross(radial).normalized(Vec3(0.0, 1.0, 0.0))
+            if normal.y < 0.0:
+                normal = -normal
+            normals[(ring, segment)] = normal
+    return normals
+
+
+class _ParticleSurfaceSampler:
+    def __init__(self, world: VectorFluidWorld, center: Vec3, radius: float, time: float) -> None:
+        self.center = center
+        self.radius = radius
+        self.time = time
+        self.kernel_radius = max(world.rest_distance * 4.6, radius * 0.11)
+        try:
+            import numpy
+
+            self.numpy = numpy
+            self.positions = numpy.array([(p.position.x, p.position.y, p.position.z) for p in world.particles], dtype=numpy.float32)
+            self.velocities = numpy.array([(p.velocity.x, p.velocity.y, p.velocity.z) for p in world.particles], dtype=numpy.float32)
+        except Exception:
+            self.numpy = None
+            self.positions = tuple(p.position for p in world.particles)
+            self.velocities = tuple(p.velocity for p in world.particles)
+
+    def heights_for(self, samples: list[tuple[float, float, float]]) -> list[float]:
+        if self.numpy is None or len(self.positions) == 0:
+            return [self.height_at(x, z) - edge * edge * 0.045 for x, z, edge in samples]
+        numpy = self.numpy
+        coords = numpy.array([(x, z) for x, z, _edge in samples], dtype=numpy.float32)
+        edges = numpy.array([edge for _x, _z, edge in samples], dtype=numpy.float32)
+        heights = numpy.full((len(samples),), self.center.y, dtype=numpy.float32)
+        particle_x = self.positions[:, 0]
+        particle_z = self.positions[:, 2]
+        displacement = (self.positions[:, 1] - self.center.y) + self.velocities[:, 1] * 0.018
+        kernel2 = self.kernel_radius * self.kernel_radius
+        chunk_size = 192
+        for start in range(0, len(samples), chunk_size):
+            stop = min(len(samples), start + chunk_size)
+            sample_x = self.center.x + coords[start:stop, 0]
+            sample_z = self.center.z + coords[start:stop, 1]
+            dx = particle_x[None, :] - sample_x[:, None]
+            dz = particle_z[None, :] - sample_z[:, None]
+            weight = numpy.maximum(0.0, 1.0 - (dx * dx + dz * dz) / kernel2)
+            weight = weight * weight
+            total = weight.sum(axis=1)
+            valid = total > 1e-6
+            if bool(valid.any()):
+                heights[start:stop][valid] += ((weight[valid] * displacement[None, :]).sum(axis=1) / total[valid]) * 0.62
+        radial = numpy.sqrt(coords[:, 0] * coords[:, 0] + coords[:, 1] * coords[:, 1]) / max(0.001, self.radius)
+        wind_ripple = numpy.sin(self.time * tau * 1.45 + coords[:, 0] * 6.4 + coords[:, 1] * 2.7) * 0.012
+        cross_ripple = numpy.sin(self.time * tau * 2.0 + coords[:, 0] * 9.0) * numpy.maximum(0.0, 1.0 - numpy.abs(coords[:, 1]) / max(0.001, self.radius)) * 0.007
+        heights += (wind_ripple + cross_ripple) * numpy.maximum(0.0, 1.0 - radial * 0.32)
+        heights -= edges * edges * 0.045
+        return [float(value) for value in heights]
+
+    def height_at(self, x: float, z: float) -> float:
+        base = self.center.y
+        if self.numpy is not None and len(self.positions) > 0:
+            dx = self.positions[:, 0] - (self.center.x + x)
+            dz = self.positions[:, 2] - (self.center.z + z)
+            distance2 = dx * dx + dz * dz
+            weight = self.numpy.maximum(0.0, 1.0 - distance2 / (self.kernel_radius * self.kernel_radius))
+            weight = weight * weight
+            total = float(weight.sum())
+            if total > 1e-6:
+                displacement = (self.positions[:, 1] - self.center.y) + self.velocities[:, 1] * 0.018
+                base += float((weight * displacement).sum() / total) * 0.62
+        else:
+            total = 0.0
+            displacement = 0.0
+            for index, position in enumerate(self.positions):
+                dx = self.center.x + x - position.x
+                dz = self.center.z + z - position.z
+                weight = max(0.0, 1.0 - (dx * dx + dz * dz) / (self.kernel_radius * self.kernel_radius)) ** 2
+                if weight <= 0.0:
+                    continue
+                total += weight
+                displacement += weight * ((position.y - self.center.y) + self.velocities[index].y * 0.018)
+            if total > 1e-6:
+                base += displacement / total * 0.62
+        radial = (x * x + z * z) ** 0.5 / max(0.001, self.radius)
+        wind_ripple = sin(self.time * tau * 1.45 + x * 6.4 + z * 2.7) * 0.012
+        cross_ripple = sin(self.time * tau * 2.0 + x * 9.0) * max(0.0, 1.0 - abs(z) / max(0.001, self.radius)) * 0.007
+        return base + (wind_ripple + cross_ripple) * max(0.0, 1.0 - radial * 0.32)
 
 
 def fan_primitives(center: Vec3, time: float, *, facing: str) -> tuple[Sphere | Line3 | Mesh, ...]:
@@ -396,7 +551,6 @@ class GLFanClothWaterViewer:
         from py_3d.live import LiveFlyCamera, LiveMenu, LiveMenuOption, ModernGLLiveRenderer
 
         self.args = args
-        self.simulation = FanWaterSimulation(quality=args.quality)
         self.settings = make_settings(args)
         self.sky = SkyPrefab(time_of_day=14.0, cycle_enabled=False, stars_enabled=True, clouds_enabled=True)
         base_camera = make_camera()
@@ -415,6 +569,9 @@ class GLFanClothWaterViewer:
             title="py_3d fan cloth water - live",
             vsync=getattr(args, "vsync", True),
         )
+        render_context = getattr(self.renderer, "ctx", None)
+        fluid_context = render_context if getattr(render_context, "version_code", 0) >= 430 else None
+        self.simulation = FanWaterSimulation(quality=args.quality, gpu_context=fluid_context)
         self.renderer.menu = LiveMenu(
             "py_3d fan cloth water",
             (
@@ -569,7 +726,9 @@ class GLFanClothWaterViewer:
         self.args.quality = self.quality_order[(index + 1) % len(self.quality_order)]
         old_wind = self.simulation.wind_scale
         old_blade = self.simulation.blade_strength
-        self.simulation = FanWaterSimulation(quality=self.args.quality)
+        render_context = getattr(self.renderer, "ctx", None)
+        fluid_context = render_context if getattr(render_context, "version_code", 0) >= 430 else None
+        self.simulation = FanWaterSimulation(quality=self.args.quality, gpu_context=fluid_context)
         self.simulation.wind_scale = old_wind
         self.simulation.blade_strength = old_blade
 
@@ -585,7 +744,9 @@ class GLFanClothWaterViewer:
     def _reset_simulation(self) -> None:
         old_wind = self.simulation.wind_scale
         old_blade = self.simulation.blade_strength
-        self.simulation = FanWaterSimulation(quality=self.args.quality)
+        render_context = getattr(self.renderer, "ctx", None)
+        fluid_context = render_context if getattr(render_context, "version_code", 0) >= 430 else None
+        self.simulation = FanWaterSimulation(quality=self.args.quality, gpu_context=fluid_context)
         self.simulation.wind_scale = old_wind
         self.simulation.blade_strength = old_blade
 
