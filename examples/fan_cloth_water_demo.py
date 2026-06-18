@@ -465,6 +465,8 @@ class GLFanClothWaterViewer:
             return "d"
         if key == pygame.K_SPACE:
             return "space"
+        if key in (pygame.K_LSHIFT, pygame.K_RSHIFT):
+            return "shift"
         if key in (pygame.K_LCTRL, pygame.K_RCTRL):
             return "ctrl"
         return None
@@ -551,20 +553,20 @@ class GLFanClothWaterViewer:
         previous_action = menu.selected_action() if menu.options else "done"
         options = (
             LiveMenuOption("done", "Done"),
-            LiveMenuOption("quality_next", "Quality preset", self.args.quality),
-            LiveMenuOption("wind_up", "More cloth wind", f"{self.simulation.wind_scale:0.2f}x"),
-            LiveMenuOption("wind_down", "Less cloth wind", f"{self.simulation.wind_scale:0.2f}x"),
-            LiveMenuOption("blade_up", "More water swirl", f"{self.simulation.blade_strength:0.2f}x"),
-            LiveMenuOption("blade_down", "Less water swirl", f"{self.simulation.blade_strength:0.2f}x"),
-            LiveMenuOption("reflections_up", "More reflections", str(self.settings.reflection_bounces)),
-            LiveMenuOption("reflections_down", "Fewer reflections", str(self.settings.reflection_bounces)),
-            LiveMenuOption("sky_cycle", "Day/night cycle", "on" if self.sky.cycle_enabled else "off"),
-            LiveMenuOption("sky_time_up", "Time later", f"{self.sky.time_of_day:04.1f}h"),
-            LiveMenuOption("sky_time_down", "Time earlier", f"{self.sky.time_of_day:04.1f}h"),
-            LiveMenuOption("sky_clouds", "Clouds", "on" if self.sky.clouds_enabled else "off"),
-            LiveMenuOption("sky_stars", "Stars", "on" if self.sky.stars_enabled else "off"),
-            LiveMenuOption("pause", "Pause/run physics", "paused" if self.paused else "running"),
-            LiveMenuOption("reset", "Reset simulation"),
+            LiveMenuOption("quality_next", "Quality", self.args.quality, "Graphics"),
+            LiveMenuOption("wind_up", "Wind +", f"{self.simulation.wind_scale:0.2f}x", "Physics"),
+            LiveMenuOption("wind_down", "Wind -", f"{self.simulation.wind_scale:0.2f}x", "Physics"),
+            LiveMenuOption("blade_up", "Swirl +", f"{self.simulation.blade_strength:0.2f}x", "Physics"),
+            LiveMenuOption("blade_down", "Swirl -", f"{self.simulation.blade_strength:0.2f}x", "Physics"),
+            LiveMenuOption("reflections_up", "Reflections +", str(self.settings.reflection_bounces), "Graphics"),
+            LiveMenuOption("reflections_down", "Reflections -", str(self.settings.reflection_bounces), "Graphics"),
+            LiveMenuOption("sky_cycle", "Cycle", "on" if self.sky.cycle_enabled else "off", "Sky"),
+            LiveMenuOption("sky_time_up", "Later", f"{self.sky.time_of_day:04.1f}h", "Sky"),
+            LiveMenuOption("sky_time_down", "Earlier", f"{self.sky.time_of_day:04.1f}h", "Sky"),
+            LiveMenuOption("sky_clouds", "Clouds", "on" if self.sky.clouds_enabled else "off", "Sky"),
+            LiveMenuOption("sky_stars", "Stars", "on" if self.sky.stars_enabled else "off", "Sky"),
+            LiveMenuOption("pause", "Pause", "paused" if self.paused else "running", "Physics"),
+            LiveMenuOption("reset", "Reset", "simulation", "Physics"),
             LiveMenuOption("quit", "Quit demo"),
         )
         menu.options = options

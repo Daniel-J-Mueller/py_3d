@@ -7,7 +7,7 @@ This module is intentionally optional. Importing it does not create a window;
 from __future__ import annotations
 
 from array import array
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import asin, atan2, cos, degrees, radians, sin, tan
 from time import perf_counter
 from typing import Iterable
@@ -251,6 +251,7 @@ _MAX_TEXTURES = 8
 _OVERLAY_VERTEX_FORMAT = "2f 2f"
 _OVERLAY_VERTEX_ATTRIBUTES = ("in_position", "in_texcoord")
 _MENU_BUTTON_ACTIONS = {"apply", "done", "cancel", "resume", "quit"}
+_MENU_GROUP_ORDER = ("Graphics", "Sky", "Physics", "Camera", "Demo", "Main")
 
 
 @dataclass(frozen=True)
@@ -342,7 +343,7 @@ class LiveFlyCamera:
             direction = direction + self.right
         if "a" in keys:
             direction = direction - self.right
-        if "space" in keys:
+        if "space" in keys or "shift" in keys:
             direction = direction + Vec3(0.0, 1.0, 0.0)
         if "ctrl" in keys:
             direction = direction - Vec3(0.0, 1.0, 0.0)
@@ -381,11 +382,12 @@ class LiveMenuOption:
     action: str
     label: str
     detail: str = ""
+    group: str = ""
 
 
 @dataclass
 class LiveMenu:
-    """Keyboard-driven menu state for live OpenGL demos."""
+    """Shared mouse-and-key menu state for live OpenGL demos."""
 
     title: str = "py_3d live menu"
     options: tuple[LiveMenuOption, ...] = (
@@ -395,6 +397,9 @@ class LiveMenu:
     selected_index: int = 0
     visible: bool = False
     hitboxes: tuple[tuple[int, int, int, int, int], ...] = ()
+    tab_hitboxes: tuple[tuple[int, int, int, int, str], ...] = ()
+    active_group: str | None = None
+    scroll_offsets: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.options:
@@ -407,15 +412,84 @@ class LiveMenu:
     def close(self) -> None:
         self.visible = False
         self.hitboxes = ()
+        self.tab_hitboxes = ()
 
     def toggle(self) -> None:
         self.visible = not self.visible
 
     def move(self, amount: int) -> None:
-        self.selected_index = (self.selected_index + amount) % len(self.options)
+        indexes = self.visible_option_indexes()
+        if not indexes:
+            self.selected_index = (self.selected_index + amount) % len(self.options)
+            return
+        if self.selected_index not in indexes:
+            self.selected_index = indexes[0]
+            return
+        local_index = indexes.index(self.selected_index)
+        self.selected_index = indexes[(local_index + amount) % len(indexes)]
+        self.active_group = self.group_for(self.options[self.selected_index])
 
     def selected_action(self) -> str:
         return self.options[self.selected_index].action
+
+    def group_for(self, option: LiveMenuOption) -> str:
+        if option.group:
+            return option.group
+        action = option.action
+        if action.startswith("sky_") or action.startswith("time_") or action.startswith("sun_"):
+            return "Sky"
+        if action.startswith(("quality", "poly", "reflection", "texture", "tone", "smooth")) or action == "toggle_render":
+            return "Graphics"
+        if action.startswith(("wind", "blade")) or action in {"pause", "reset"}:
+            return "Physics"
+        if "camera" in action:
+            return "Camera"
+        return "Demo"
+
+    def groups(self) -> tuple[str, ...]:
+        groups = {self.group_for(option) for option in self.options if option.action not in _MENU_BUTTON_ACTIONS}
+        return tuple(group for group in _MENU_GROUP_ORDER if group in groups) + tuple(sorted(groups - set(_MENU_GROUP_ORDER)))
+
+    def current_group(self) -> str:
+        groups = self.groups()
+        if not groups:
+            return "Main"
+        if self.active_group in groups:
+            return self.active_group
+        selected = self.options[self.selected_index]
+        selected_group = self.group_for(selected)
+        if selected.action not in _MENU_BUTTON_ACTIONS and selected_group in groups:
+            self.active_group = selected_group
+            return selected_group
+        self.active_group = groups[0]
+        return groups[0]
+
+    def set_group(self, group: str) -> None:
+        groups = self.groups()
+        if group not in groups:
+            return
+        self.active_group = group
+        indexes = self.visible_option_indexes()
+        if indexes and self.selected_index not in indexes:
+            self.selected_index = indexes[0]
+
+    def cycle_group(self, amount: int) -> None:
+        groups = self.groups()
+        if not groups:
+            return
+        current = self.current_group()
+        index = groups.index(current)
+        self.set_group(groups[(index + amount) % len(groups)])
+
+    def visible_option_indexes(self) -> list[int]:
+        group = self.current_group()
+        return [index for index, option in enumerate(self.options) if option.action not in _MENU_BUTTON_ACTIONS and self.group_for(option) == group]
+
+    def scroll(self, amount: int) -> None:
+        group = self.current_group()
+        current = self.scroll_offsets.get(group, 0)
+        max_offset = max(0, len(self.visible_option_indexes()) - 1)
+        self.scroll_offsets[group] = max(0, min(max_offset, current + amount))
 
     def has_action(self, action: str) -> bool:
         return any(option.action == action for option in self.options)
@@ -430,6 +504,9 @@ class LiveMenu:
     def set_hitboxes(self, hitboxes: Iterable[tuple[int, int, int, int, int]]) -> None:
         self.hitboxes = tuple(hitboxes)
 
+    def set_tab_hitboxes(self, hitboxes: Iterable[tuple[int, int, int, int, str]]) -> None:
+        self.tab_hitboxes = tuple(hitboxes)
+
     def index_at(self, position: tuple[int, int]) -> int | None:
         x, y = position
         for left, top, width, height, index in self.hitboxes:
@@ -437,22 +514,39 @@ class LiveMenu:
                 return index
         return None
 
+    def tab_at(self, position: tuple[int, int]) -> str | None:
+        x, y = position
+        for left, top, width, height, group in self.tab_hitboxes:
+            if left <= x <= left + width and top <= y <= top + height:
+                return group
+        return None
+
     def handle_mouse_event(self, event, pygame) -> str | None:
         if not self.visible:
             return None
         if event.type == pygame.MOUSEMOTION:
+            tab = self.tab_at(event.pos)
+            if tab is not None:
+                self.set_group(tab)
+                return "navigate"
             index = self.index_at(event.pos)
             if index is not None:
                 self.selected_index = index
+                self.active_group = self.group_for(self.options[index])
                 return "navigate"
             return "handled"
         if event.type == pygame.MOUSEWHEEL:
-            self.move(-event.y)
+            self.scroll(-event.y)
             return "navigate"
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            tab = self.tab_at(event.pos)
+            if tab is not None:
+                self.set_group(tab)
+                return "navigate"
             index = self.index_at(event.pos)
             if index is not None:
                 self.selected_index = index
+                self.active_group = self.group_for(self.options[index])
                 return self.selected_action()
             return "handled"
         return None
@@ -465,11 +559,23 @@ class LiveMenu:
             return None
         if key == pygame.K_ESCAPE:
             return self.cancel_action()
-        if key in (pygame.K_DOWN, pygame.K_s, pygame.K_TAB):
+        if key in (pygame.K_RIGHT, pygame.K_TAB):
+            self.cycle_group(1)
+            return "navigate"
+        if key == pygame.K_LEFT:
+            self.cycle_group(-1)
+            return "navigate"
+        if key in (pygame.K_DOWN, pygame.K_s):
             self.move(1)
             return "navigate"
         if key in (pygame.K_UP, pygame.K_w):
             self.move(-1)
+            return "navigate"
+        if key in (pygame.K_PAGEUP, pygame.K_q):
+            self.scroll(-1)
+            return "navigate"
+        if key in (pygame.K_PAGEDOWN, pygame.K_e):
+            self.scroll(1)
             return "navigate"
         if key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
             return self.selected_action()
@@ -786,58 +892,107 @@ class ModernGLLiveRenderer:
                 )
 
     def _draw_menu(self, width: int, height: int) -> None:
-        scale = 2
-        padding = 14
-        indexed_options = tuple((index, option) for index, option in enumerate(self.menu.options) if option.action not in _MENU_BUTTON_ACTIONS)
-        button_options = tuple((index, option) for index, option in enumerate(self.menu.options) if option.action in _MENU_BUTTON_ACTIONS)
-        lines = [self.menu.title.upper(), ""]
-        line_indices: list[int | None] = [None, None]
-        for index, option in indexed_options:
-            prefix = "> " if index == self.menu.selected_index else "  "
-            suffix = f" : {option.detail}" if option.detail else ""
-            lines.append(f"{prefix}{option.label}{suffix}")
-            line_indices.append(index)
-        lines.append("")
-        line_indices.append(None)
-        footer = ""
-        footer_spans: list[tuple[int, str, int]] = []
-        cursor = 0
-        for option_index, option in button_options:
-            label_text = option.label.upper()
-            label = f"[>{label_text}<]" if option_index == self.menu.selected_index else f"[{label_text}]"
-            if footer:
-                footer += "  "
-                cursor += draw.text_size("  ", scale=scale)[0]
-            footer_spans.append((cursor, label, option_index))
-            footer += label
-            cursor += draw.text_size(label, scale=scale)[0]
-        if footer:
-            lines.append(footer)
-            line_indices.append(None)
-        lines.append("CLICK OPTIONS OR USE ARROWS")
-        line_indices.append(None)
-        text = "\n".join(lines)
-        text_width, text_height = draw.text_size(text, scale=scale)
-        position = (
-            max(12, int((width - text_width - padding * 2) * 0.5)),
-            max(12, int((height - text_height - padding * 2) * 0.5)),
-        )
+        pygame = self.pygame
+        pygame.font.init()
+        panel_width = min(width - 36, max(600, int(width * 0.68)))
+        panel_height = min(height - 36, max(390, int(height * 0.72)))
+        panel_width = max(320, panel_width)
+        panel_height = max(260, panel_height)
+        panel_left = max(12, (width - panel_width) // 2)
+        panel_top = max(12, (height - panel_height) // 2)
+        surface = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
+        surface.fill((4, 8, 13, 226))
+
+        title_font = pygame.font.SysFont("segoeui", 24, bold=True)
+        tab_font = pygame.font.SysFont("segoeui", 15, bold=True)
+        label_font = pygame.font.SysFont("segoeui", 18, bold=True)
+        detail_font = pygame.font.SysFont("segoeui", 14)
+        small_font = pygame.font.SysFont("segoeui", 13)
+
+        pygame.draw.rect(surface, (34, 52, 64, 255), (0, 0, panel_width, panel_height), width=2, border_radius=8)
+        surface.blit(title_font.render(self.menu.title, True, (244, 248, 255)), (24, 18))
+
+        groups = self.menu.groups()
+        current_group = self.menu.current_group()
+        tab_hitboxes: list[tuple[int, int, int, int, str]] = []
+        tab_x = 24
+        tab_y = 58
+        for group in groups:
+            text = tab_font.render(group, True, (238, 246, 255) if group == current_group else (152, 176, 190))
+            tab_width = max(86, text.get_width() + 26)
+            tab_rect = (tab_x, tab_y, tab_width, 30)
+            fill = (48, 96, 116, 244) if group == current_group else (16, 28, 38, 230)
+            border = (134, 204, 232, 255) if group == current_group else (54, 78, 92, 255)
+            pygame.draw.rect(surface, fill, tab_rect, border_radius=5)
+            pygame.draw.rect(surface, border, tab_rect, width=1, border_radius=5)
+            surface.blit(text, (tab_x + (tab_width - text.get_width()) // 2, tab_y + 6))
+            tab_hitboxes.append((panel_left + tab_x, panel_top + tab_y, tab_width, 30, group))
+            tab_x += tab_width + 10
+
+        option_indexes = self.menu.visible_option_indexes()
+        option_area_top = 104
+        footer_height = 66
+        option_area_height = max(80, panel_height - option_area_top - footer_height - 16)
+        columns = 2 if panel_width >= 690 else 1
+        gap = 12
+        option_height = 54
+        option_width = (panel_width - 48 - gap * (columns - 1)) // columns
+        rows = max(1, option_area_height // (option_height + gap))
+        capacity = max(1, rows * columns)
+        max_scroll = max(0, len(option_indexes) - capacity)
+        offset = max(0, min(self.menu.scroll_offsets.get(current_group, 0), max_scroll))
+        self.menu.scroll_offsets[current_group] = offset
+        visible_indexes = option_indexes[offset : offset + capacity]
+
         hitboxes: list[tuple[int, int, int, int, int]] = []
-        line_step = (7 + 1) * scale
-        content_left = position[0] + padding
-        content_top = position[1] + padding
-        content_width = max(1, text_width)
-        for line_number, option_index in enumerate(line_indices):
-            if option_index is None:
-                continue
-            hitboxes.append((content_left, content_top + line_number * line_step - scale, content_width, line_step, option_index))
-        if footer:
-            footer_line = lines.index(footer)
-            footer_top = content_top + footer_line * line_step - scale
-            for span_left, label, option_index in footer_spans:
-                hitboxes.append((content_left + span_left, footer_top, draw.text_size(label, scale=scale)[0], line_step, option_index))
+        for local, option_index in enumerate(visible_indexes):
+            column = local % columns
+            row = local // columns
+            x = 24 + column * (option_width + gap)
+            y = option_area_top + row * (option_height + gap)
+            option = self.menu.options[option_index]
+            selected = option_index == self.menu.selected_index
+            fill = (42, 74, 92, 246) if selected else (13, 24, 34, 236)
+            border = (144, 218, 246, 255) if selected else (50, 76, 91, 255)
+            pygame.draw.rect(surface, fill, (x, y, option_width, option_height), border_radius=6)
+            pygame.draw.rect(surface, border, (x, y, option_width, option_height), width=2 if selected else 1, border_radius=6)
+            label = label_font.render(option.label, True, (242, 248, 255))
+            surface.blit(label, (x + 14, y + 8))
+            if option.detail:
+                detail = detail_font.render(option.detail, True, (172, 204, 218))
+                surface.blit(detail, (x + 14, y + 31))
+            hitboxes.append((panel_left + x, panel_top + y, option_width, option_height, option_index))
+
+        if max_scroll > 0:
+            marker = f"{offset + 1}-{min(len(option_indexes), offset + capacity)} / {len(option_indexes)}  mouse wheel scrolls"
+            marker_surface = small_font.render(marker, True, (152, 176, 190))
+            surface.blit(marker_surface, (24, panel_height - footer_height - 20))
+
+        footer_options = tuple((index, option) for index, option in enumerate(self.menu.options) if option.action in _MENU_BUTTON_ACTIONS)
+        footer_y = panel_height - 52
+        footer_x = 24
+        for option_index, option in footer_options:
+            label = option.label
+            text = tab_font.render(label, True, (242, 248, 255))
+            button_width = max(92, text.get_width() + 28)
+            if footer_x + button_width > panel_width - 24:
+                break
+            selected = option_index == self.menu.selected_index
+            fill = (58, 104, 122, 248) if selected else (24, 44, 56, 240)
+            border = (154, 224, 248, 255) if selected else (66, 96, 112, 255)
+            pygame.draw.rect(surface, fill, (footer_x, footer_y, button_width, 36), border_radius=5)
+            pygame.draw.rect(surface, border, (footer_x, footer_y, button_width, 36), width=2 if selected else 1, border_radius=5)
+            surface.blit(text, (footer_x + (button_width - text.get_width()) // 2, footer_y + 9))
+            hitboxes.append((panel_left + footer_x, panel_top + footer_y, button_width, 36, option_index))
+            footer_x += button_width + 10
+
+        hint = small_font.render("Left/right tabs, up/down buttons, Enter selects", True, (130, 154, 168))
+        surface.blit(hint, (panel_width - hint.get_width() - 24, 22))
+
         self.menu.set_hitboxes(hitboxes)
-        self._draw_bulletin_texture(text, position, Color(246, 248, 255), Color(4, 7, 12), padding, scale, width, height)
+        self.menu.set_tab_hitboxes(tab_hitboxes)
+        data = pygame.image.tostring(surface, "RGBA")
+        self._draw_overlay_texture(panel_left, panel_top, panel_width, panel_height, data, width, height)
 
     def _draw_crosshair(self, width: int, height: int) -> None:
         image_width, image_height, data = _crosshair_rgba(Color(235, 244, 255))

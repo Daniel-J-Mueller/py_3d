@@ -1,7 +1,7 @@
 from array import array
 
 from py_3d import HUDRect, HUDText, Material, PixelBuffer, RenderSettings, Scene, Sphere, Sun
-from py_3d.live import LiveFlyCamera, LiveSceneBatchBuilder
+from py_3d.live import LiveFlyCamera, LiveMenu, LiveMenuOption, LiveSceneBatchBuilder
 
 
 def test_live_scene_batch_builder_outputs_triangle_payload():
@@ -82,12 +82,12 @@ def test_live_fly_camera_uses_mouse_look_and_vertical_keys():
     assert view.target != view.position
 
 
-def test_live_fly_camera_shift_does_not_add_vertical_thrust():
+def test_live_fly_camera_shift_adds_vertical_thrust_for_noclip():
     camera = LiveFlyCamera.looking_at((0, 1, -4), (0, 1, 0), fov_degrees=70.0, speed=2.0)
 
     camera.move({"shift"}, 0.5)
 
-    assert camera.position.y == 1.0
+    assert camera.position.y > 1.0
 
 
 def test_hud_elements_are_public_overlay_types():
@@ -96,3 +96,21 @@ def test_hud_elements_are_public_overlay_types():
 
     assert rect.alpha == 0.5
     assert text.text == "HUD"
+
+
+def test_live_menu_groups_and_scrolls_options():
+    menu = LiveMenu(
+        options=(
+            LiveMenuOption("done", "Done"),
+            LiveMenuOption("quality_next", "Quality", "high", "Graphics"),
+            LiveMenuOption("sky_cycle", "Cycle", "off", "Sky"),
+            LiveMenuOption("reset", "Reset", "world", "Physics"),
+        )
+    )
+
+    assert menu.groups() == ("Graphics", "Sky", "Physics")
+    menu.set_group("Sky")
+    assert menu.visible_option_indexes() == [2]
+    menu.scroll(4)
+
+    assert menu.scroll_offsets["Sky"] == 0

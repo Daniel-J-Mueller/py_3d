@@ -372,13 +372,13 @@ class GLCapsuleWalkViewer:
         previous_action = menu.selected_action() if menu.options else "done"
         options = (
             LiveMenuOption("done", "Done"),
-            LiveMenuOption("next_camera", "Next camera", self.camera_mode),
-            LiveMenuOption("sky_cycle", "Day/night cycle", "on" if self.sky.cycle_enabled else "off"),
-            LiveMenuOption("sky_time_up", "Time later", f"{self.sky.time_of_day:04.1f}h"),
-            LiveMenuOption("sky_time_down", "Time earlier", f"{self.sky.time_of_day:04.1f}h"),
-            LiveMenuOption("sky_clouds", "Clouds", "on" if self.sky.clouds_enabled else "off"),
-            LiveMenuOption("sky_stars", "Stars", "on" if self.sky.stars_enabled else "off"),
-            LiveMenuOption("reset", "Reset capsule"),
+            LiveMenuOption("next_camera", "Camera", self.camera_mode, "Camera"),
+            LiveMenuOption("sky_cycle", "Cycle", "on" if self.sky.cycle_enabled else "off", "Sky"),
+            LiveMenuOption("sky_time_up", "Later", f"{self.sky.time_of_day:04.1f}h", "Sky"),
+            LiveMenuOption("sky_time_down", "Earlier", f"{self.sky.time_of_day:04.1f}h", "Sky"),
+            LiveMenuOption("sky_clouds", "Clouds", "on" if self.sky.clouds_enabled else "off", "Sky"),
+            LiveMenuOption("sky_stars", "Stars", "on" if self.sky.stars_enabled else "off", "Sky"),
+            LiveMenuOption("reset", "Reset", "capsule", "Physics"),
             LiveMenuOption("quit", "Quit demo"),
         )
         menu.options = options
@@ -453,7 +453,7 @@ class GLCapsuleWalkViewer:
         if key == pygame.K_SPACE:
             return "space"
         if key in (pygame.K_LSHIFT, pygame.K_RSHIFT):
-            return "sprint"
+            return "shift" if self.camera_mode == "global" else "sprint"
         if key in (pygame.K_LCTRL, pygame.K_RCTRL):
             return "crouch"
         if key == pygame.K_c:
