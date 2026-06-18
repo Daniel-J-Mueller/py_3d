@@ -14,7 +14,7 @@ from . import draw
 from .lights import Lamp, Sun
 from .math3d import Vec3, clamp
 from .overlays import FloatingTextBulletin, TextBulletin
-from .primitives import BlobSurface, Bowl, Box, Capsule, Line3, Mesh, Plane, Point3, Sphere, Triangle
+from .primitives import BlobSurface, Bowl, Box, Capsule, Line3, LineSet3, Mesh, Plane, Point3, Sphere, Triangle
 from .scene import Scene
 
 
@@ -148,6 +148,9 @@ class CPURenderer:
                 self._draw_point(buffer, depth, projector, settings, obj)
             elif isinstance(obj, Line3):
                 self._draw_line(buffer, depth, projector, settings, obj)
+            elif isinstance(obj, LineSet3):
+                for start, end in obj.segments:
+                    self._draw_line(buffer, depth, projector, settings, Line3(start, end, obj.material))
             else:
                 triangles = self._prepared_triangles_for(obj, settings)
                 for triangle in triangles:
@@ -169,7 +172,7 @@ class CPURenderer:
     def _shadow_triangles(self, scene: Scene, settings: RenderSettings) -> tuple[Triangle, ...]:
         triangles: list[Triangle] = []
         for obj in scene.objects:
-            if isinstance(obj, (Point3, Line3)):
+            if isinstance(obj, (Point3, Line3, LineSet3)):
                 continue
             triangles.extend(prepared.triangle for prepared in self._prepared_triangles_for(obj, settings))
         return tuple(triangles)
@@ -638,7 +641,7 @@ def _shadow_transmission(
         shadow_triangles = tuple(
             triangle
             for obj in scene.objects
-            if not isinstance(obj, (Point3, Line3))
+            if not isinstance(obj, (Point3, Line3, LineSet3))
             for triangle in _triangles_for(obj, settings)
         )
     transmission = 1.0
@@ -709,7 +712,10 @@ def _apply_ray_traced_reflection(
     reflection = (incoming - normal * (2.0 * incoming.dot(normal))).normalized(normal)
     traced = _trace_reflection_environment(reflection, bounces)
     base = color.to_floats()
-    amount = clamp(reflectivity * (0.38 + min(4, bounces) * 0.12), 0.0, 0.92)
+    view_alignment = clamp(abs(view_direction.normalized(Vec3(0.0, 0.0, -1.0)).dot(normal.normalized(Vec3(0.0, 1.0, 0.0)))), 0.0, 1.0)
+    f0 = clamp(0.025 + reflectivity * 0.24, 0.02, 0.72)
+    fresnel = f0 + (1.0 - f0) * (1.0 - view_alignment) ** 5.0
+    amount = clamp(reflectivity * (0.28 + min(5, bounces) * 0.10) + fresnel * 0.34, 0.0, 0.96)
     return Color.from_floats(
         base[0] * (1.0 - amount) + traced[0] * amount,
         base[1] * (1.0 - amount) + traced[1] * amount,
@@ -719,6 +725,7 @@ def _apply_ray_traced_reflection(
 
 def _trace_reflection_environment(direction: Vec3, bounces: int) -> tuple[float, float, float]:
     ray = direction.normalized(Vec3(0.0, 1.0, 0.0))
+    sun_direction = Vec3(-0.35, 0.72, -0.58).normalized()
     energy = 1.0
     total = [0.0, 0.0, 0.0]
     normalizer = 0.0
@@ -726,11 +733,33 @@ def _trace_reflection_environment(direction: Vec3, bounces: int) -> tuple[float,
         sky = max(0.0, ray.y)
         floor = max(0.0, -ray.y)
         horizon = max(0.0, 1.0 - abs(ray.y))
-        glint = max(0.0, ray.dot(Vec3(-0.35, 0.72, -0.58).normalized())) ** 28.0
+        sun_dot = max(0.0, ray.dot(sun_direction))
+        sun_core = sun_dot ** 180.0
+        sun_bloom = sun_dot ** 24.0
+        blue_sky = (
+            0.045 + sky * 0.25,
+            0.070 + sky * 0.38,
+            0.110 + sky * 0.62,
+        )
+        warm_ground = (
+            0.060 + floor * 0.18,
+            0.065 + floor * 0.15,
+            0.060 + floor * 0.11,
+        )
+        horizon_haze = (
+            horizon * 0.20,
+            horizon * 0.24,
+            horizon * 0.26,
+        )
+        sun = (
+            sun_core * 2.2 + sun_bloom * 0.46,
+            sun_core * 1.82 + sun_bloom * 0.38,
+            sun_core * 1.18 + sun_bloom * 0.24,
+        )
         sample = (
-            0.05 + sky * 0.34 + floor * 0.16 + horizon * 0.09 + glint * 0.85,
-            0.06 + sky * 0.42 + floor * 0.22 + horizon * 0.11 + glint * 0.78,
-            0.08 + sky * 0.56 + floor * 0.28 + horizon * 0.14 + glint * 0.62,
+            blue_sky[0] + warm_ground[0] + horizon_haze[0] + sun[0],
+            blue_sky[1] + warm_ground[1] + horizon_haze[1] + sun[1],
+            blue_sky[2] + warm_ground[2] + horizon_haze[2] + sun[2],
         )
         total[0] += sample[0] * energy
         total[1] += sample[1] * energy
@@ -742,7 +771,7 @@ def _trace_reflection_environment(direction: Vec3, bounces: int) -> tuple[float,
             ray = Vec3(ray.x * 0.82, -ray.y * 0.78 + 0.16, ray.z * 0.82).normalized(ray)
         else:
             ray = Vec3(ray.x * 0.76 - ray.z * 0.18, ray.y * 0.54 - 0.12, ray.z * 0.76 + ray.x * 0.18).normalized(ray)
-        energy *= 0.48
+        energy *= 0.52
     if normalizer <= 0.0:
         return (0.0, 0.0, 0.0)
     return (

@@ -19,7 +19,7 @@ from .overlays import FloatingTextBulletin, TextBulletin
 from .player import PlayerModel
 from .physics import KinematicBowl, PhysicsWorld, SphereBody, StaticBox, StaticPlane, World
 from .portal import PortalPair, PortalSurface, portal_camera_for, scene_with_portal_textures
-from .primitives import BlobSurface, Bowl, Box, Capsule, HangingConeLampPrimitive, LampPrimitive, Line3, Mesh, Plane, Point3, Sphere, TransformedMesh, Triangle
+from .primitives import BlobSurface, Bowl, Box, Capsule, HangingConeLampPrimitive, LampPrimitive, Line3, LineSet3, Mesh, ParticleFluidPuddle, ParticleFluidVolume, ParticleWaterSurface, Plane, Point3, Sphere, TransformedMesh, Triangle
 from .render import CPURenderer, RenderEngine, RenderSettings, Renderer
 from .scene import Scene
 from .sky import SkyPrefab
@@ -57,10 +57,14 @@ __all__ = [
     "LightSample",
     "LiveHUD",
     "Line3",
+    "LineSet3",
     "MESH_ASSET_FORMAT",
     "KinematicBowl",
     "Material",
     "Mesh",
+    "ParticleFluidPuddle",
+    "ParticleFluidVolume",
+    "ParticleWaterSurface",
     "PixelBuffer",
     "Plane",
     "PlaneCollider",

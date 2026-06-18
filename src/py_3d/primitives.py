@@ -33,6 +33,20 @@ class Line3:
         object.__setattr__(self, "end", as_vec3(self.end))
 
 
+@dataclass(frozen=True, init=False)
+class LineSet3:
+    segments: tuple[tuple[Vec3, Vec3], ...]
+    material: Material = Material()
+
+    def __init__(self, segments: Iterable[tuple[Vec3 | tuple[float, float, float], Vec3 | tuple[float, float, float]]], material: Material = Material()) -> None:
+        object.__setattr__(self, "segments", tuple((as_vec3(start), as_vec3(end)) for start, end in segments))
+        object.__setattr__(self, "material", material)
+
+    def to_triangles(self, **kwargs) -> tuple[Triangle, ...]:
+        del kwargs
+        return ()
+
+
 @dataclass(frozen=True)
 class Triangle:
     a: Vec3 | tuple[float, float, float]
@@ -59,7 +73,11 @@ class Triangle:
         for name in ("normal_a", "normal_b", "normal_c"):
             normal = getattr(self, name)
             if normal is not None:
-                object.__setattr__(self, name, as_vec3(normal).normalized())
+                vector = as_vec3(normal)
+                if isinstance(normal, Vec3) and abs(vector.length_squared() - 1.0) < 1e-5:
+                    object.__setattr__(self, name, vector)
+                else:
+                    object.__setattr__(self, name, vector.normalized())
 
     def center(self) -> Vec3:
         return (self.a + self.b + self.c) / 3.0
@@ -84,6 +102,105 @@ class Mesh:
     def to_triangles(self, **kwargs) -> tuple[Triangle, ...]:
         del kwargs
         return self.triangles
+
+
+@dataclass(frozen=True)
+class ParticleFluidVolume:
+    """A live-rendered particle-fluid volume.
+
+    Unlike ParticleWaterSurface, this draws the particle field itself. It is
+    intended for free/spilled fluid where a fixed surface footprint would lie.
+    """
+
+    world: object
+    particle_radius: float | None = None
+    min_y: float | None = None
+    material: Material = Material(color=(126, 216, 240), roughness=0.006, specular=1.0, shininess=180.0, reflectivity=0.62, light_transmission=0.74)
+
+    def __post_init__(self) -> None:
+        if self.particle_radius is not None:
+            object.__setattr__(self, "particle_radius", max(1e-4, float(self.particle_radius)))
+        if self.min_y is not None:
+            object.__setattr__(self, "min_y", float(self.min_y))
+
+    def to_triangles(self, **kwargs) -> tuple[Triangle, ...]:
+        del kwargs
+        return ()
+
+
+@dataclass(frozen=True)
+class ParticleFluidPuddle:
+    """A particle-density reconstructed free-fluid surface."""
+
+    world: object
+    bounds_min: Vec3 | tuple[float, float, float]
+    bounds_max: Vec3 | tuple[float, float, float]
+    floor_y: float = 0.0
+    material: Material = Material(color=(126, 216, 240), roughness=0.006, specular=1.0, shininess=192.0, reflectivity=0.72, light_transmission=0.72)
+    quality: str = "balanced"
+    time: float = 0.0
+    kernel_radius: float | None = None
+    density_threshold: float = 0.22
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "bounds_min", as_vec3(self.bounds_min))
+        object.__setattr__(self, "bounds_max", as_vec3(self.bounds_max))
+        if self.bounds_max.x <= self.bounds_min.x or self.bounds_max.z <= self.bounds_min.z:
+            raise ValueError("particle fluid puddle bounds must have positive x/z extent")
+        object.__setattr__(self, "floor_y", float(self.floor_y))
+        if self.kernel_radius is not None:
+            object.__setattr__(self, "kernel_radius", max(1e-4, float(self.kernel_radius)))
+        object.__setattr__(self, "density_threshold", max(0.0, float(self.density_threshold)))
+
+    def to_triangles(self, **kwargs) -> tuple[Triangle, ...]:
+        del kwargs
+        return ()
+
+
+@dataclass(frozen=True)
+class ParticleWaterSurface:
+    """A live-rendered particle-fluid surface.
+
+    The CPU renderer intentionally treats this as empty geometry. The OpenGL
+    live renderer binds the fluid particle buffer and reconstructs the surface
+    in a dedicated shader.
+    """
+
+    world: object
+    center: Vec3 | tuple[float, float, float]
+    radius: float
+    material: Material = Material(color=(126, 216, 240), roughness=0.006, specular=1.0, shininess=192.0, reflectivity=0.72, light_transmission=0.72)
+    quality: str = "balanced"
+    time: float = 0.0
+    particle_base_y: float | None = None
+    kernel_radius: float | None = None
+    vortex_center: Vec3 | tuple[float, float, float] | None = None
+    vortex_strength: float = 0.0
+    bubbles: tuple[tuple[float, float, float, float], ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "center", as_vec3(self.center))
+        if self.vortex_center is None:
+            object.__setattr__(self, "vortex_center", self.center)
+        else:
+            object.__setattr__(self, "vortex_center", as_vec3(self.vortex_center))
+        if self.radius <= 0.0:
+            raise ValueError("particle water surface radius must be positive")
+        if self.particle_base_y is not None:
+            object.__setattr__(self, "particle_base_y", float(self.particle_base_y))
+        if self.kernel_radius is not None:
+            object.__setattr__(self, "kernel_radius", max(1e-4, float(self.kernel_radius)))
+        object.__setattr__(self, "vortex_strength", max(0.0, float(self.vortex_strength)))
+        bubbles: list[tuple[float, float, float, float]] = []
+        for bubble in self.bubbles:
+            if len(bubble) != 4:
+                raise ValueError("particle water bubbles must be (x, z, radius, phase)")
+            bubbles.append((float(bubble[0]), float(bubble[1]), max(0.0, float(bubble[2])), max(0.0, min(1.0, float(bubble[3])))))
+        object.__setattr__(self, "bubbles", tuple(bubbles))
+
+    def to_triangles(self, **kwargs) -> tuple[Triangle, ...]:
+        del kwargs
+        return ()
 
 
 @dataclass(frozen=True)

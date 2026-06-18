@@ -1,5 +1,6 @@
 import importlib.util
 from array import array
+from types import SimpleNamespace
 
 import pytest
 
@@ -295,6 +296,48 @@ def test_live_menu_groups_and_scrolls_options():
     menu.scroll(4)
 
     assert menu.scroll_offsets["Sky"] == 0
+
+
+def test_live_menu_group_headers_require_click_before_switching():
+    menu = LiveMenu(
+        options=(
+            LiveMenuOption("done", "Done"),
+            LiveMenuOption("quality_next", "Quality", "high", "Graphics"),
+            LiveMenuOption("sky_cycle", "Cycle", "off", "Sky"),
+            LiveMenuOption("reset", "Reset", "world", "Physics"),
+        ),
+        visible=True,
+    )
+    render_live_menu_surface(menu, 800, 600)
+    sky_tab = next(hitbox for hitbox in menu.tab_hitboxes if hitbox[4] == "Sky")
+    pos = (sky_tab[0] + sky_tab[2] // 2, sky_tab[1] + sky_tab[3] // 2)
+
+    assert menu.current_group() == "Graphics"
+    assert menu.handle_pointer_event(SimpleNamespace(kind="motion", pos=pos)) == "handled"
+    assert menu.current_group() == "Graphics"
+
+    action = menu.handle_pointer_event(SimpleNamespace(kind="button", button=1, pos=pos))
+
+    assert action == "navigate"
+    assert menu.current_group() == "Sky"
+
+
+def test_live_menu_option_hover_does_not_reselect_rows():
+    menu = LiveMenu(
+        options=(
+            LiveMenuOption("done", "Done"),
+            LiveMenuOption("quality_next", "Quality", "high", "Graphics"),
+            LiveMenuOption("wind_up", "Wind +", "1.0x", "Physics"),
+        ),
+        visible=True,
+    )
+    render_live_menu_surface(menu, 800, 600)
+    quality_hitbox = next(hitbox for hitbox in menu.hitboxes if hitbox[4] == 1)
+    pos = (quality_hitbox[0] + quality_hitbox[2] // 2, quality_hitbox[1] + quality_hitbox[3] // 2)
+
+    assert menu.selected_action() == "done"
+    assert menu.handle_pointer_event(SimpleNamespace(kind="motion", pos=pos)) == "handled"
+    assert menu.selected_action() == "done"
 
 
 def test_live_menu_background_blur_is_optional():

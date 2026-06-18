@@ -9,6 +9,7 @@ from time import perf_counter, sleep
 from typing import Iterable
 from weakref import ref
 
+from .assets import load_framework_icon_rgba
 from .buffer import PixelBuffer
 from .camera import Camera
 from .color import Color
@@ -19,7 +20,7 @@ from .lights import Lamp, Sun
 from .materials import Material
 from .math3d import Vec3
 from .overlays import FloatingTextBulletin, TextBulletin
-from .primitives import Bowl, Box, Capsule, Line3, Mesh, Plane, Point3, Sphere, TransformedMesh, Triangle
+from .primitives import Bowl, Box, Capsule, Line3, LineSet3, Mesh, ParticleFluidPuddle, ParticleFluidVolume, ParticleWaterSurface, Plane, Point3, Sphere, TransformedMesh, Triangle
 from .render import RenderEngine, RenderSettings, _triangles_for
 from .scene import Scene
 from .window import PixelWindow, WindowEvent
@@ -109,12 +110,14 @@ vec3 reflectionProbe(vec3 direction) {
     float sky = max(0.0, ray.y);
     float floor_light = max(0.0, -ray.y);
     float horizon = max(0.0, 1.0 - abs(ray.y));
-    float glint = pow(max(0.0, dot(ray, normalize(vec3(-0.35, 0.72, -0.58)))), 28.0);
-    return vec3(
-        0.05 + sky * 0.34 + floor_light * 0.16 + horizon * 0.09 + glint * 0.85,
-        0.06 + sky * 0.42 + floor_light * 0.22 + horizon * 0.11 + glint * 0.78,
-        0.08 + sky * 0.56 + floor_light * 0.28 + horizon * 0.14 + glint * 0.62
-    );
+    float sun_dot = max(0.0, dot(ray, normalize(vec3(-0.35, 0.72, -0.58))));
+    float sun_core = pow(sun_dot, 180.0);
+    float sun_bloom = pow(sun_dot, 24.0);
+    vec3 sky_color = vec3(0.045, 0.070, 0.110) + vec3(0.25, 0.38, 0.62) * sky;
+    vec3 ground_color = vec3(0.060, 0.065, 0.060) + vec3(0.18, 0.15, 0.11) * floor_light;
+    vec3 haze = vec3(0.20, 0.24, 0.26) * horizon;
+    vec3 sun = vec3(2.20, 1.82, 1.18) * sun_core + vec3(0.46, 0.38, 0.24) * sun_bloom;
+    return sky_color + ground_color + haze + sun;
 }
 
 vec3 traceReflection(vec3 direction, int bounces) {
@@ -134,9 +137,13 @@ vec3 traceReflection(vec3 direction, int bounces) {
         } else {
             ray = normalize(vec3(ray.x * 0.76 - ray.z * 0.18, ray.y * 0.54 - 0.12, ray.z * 0.76 + ray.x * 0.18));
         }
-        energy *= 0.48;
+        energy *= 0.52;
     }
     return total / max(0.0001, normalizer);
+}
+
+float fresnelSchlick(float cos_theta, float f0) {
+    return f0 + (1.0 - f0) * pow(1.0 - clamp(cos_theta, 0.0, 1.0), 5.0);
 }
 
 void main() {
@@ -181,7 +188,8 @@ void main() {
         diffuse_light += light_color * strength;
         if (specular > 0.0 && strength > 0.0) {
             vec3 halfway = normalize(light_direction + view_direction);
-            specular_light += light_color * pow(max(0.0, dot(normal, halfway)), shininess) * strength;
+            float ndoth = max(0.0, dot(normal, halfway));
+            specular_light += light_color * (pow(ndoth, shininess) + pow(ndoth, shininess * 3.8) * 0.32) * strength;
         }
     }
 
@@ -196,8 +204,10 @@ void main() {
     if (u_reflection_bounces > 0 && reflectivity > 0.0) {
         vec3 reflection_direction = reflect(-view_direction, normal);
         vec3 reflection_color = traceReflection(reflection_direction, u_reflection_bounces);
-        float reflection_mix = clamp(reflectivity * (0.38 + min(float(u_reflection_bounces), 4.0) * 0.12), 0.0, 0.92);
+        float fresnel = fresnelSchlick(max(0.0, dot(view_direction, normal)), clamp(0.025 + reflectivity * 0.24, 0.02, 0.72));
+        float reflection_mix = clamp(reflectivity * (0.28 + min(float(u_reflection_bounces), 5.0) * 0.10) + fresnel * 0.34, 0.0, 0.96);
         color = mix(color, reflection_color, reflection_mix);
+        color += reflection_color * fresnel * reflectivity * 0.08;
     }
     if (u_tone_mapping) {
         color = color / (color + vec3(1.0));
@@ -209,6 +219,752 @@ void main() {
         color = pow(color, vec3(1.0 / gamma));
     }
     frag_color = vec4(color, 1.0);
+}
+"""
+
+
+PARTICLE_WATER_VERTEX_SHADER = """
+#version 430
+
+const int MAX_BUBBLES = 8;
+
+struct Particle {
+    vec4 position_mass;
+    vec4 velocity_pad;
+};
+
+layout(std430, binding = 2) readonly buffer WaterParticles {
+    Particle particles[];
+};
+
+in vec3 in_local;
+in vec2 in_uv;
+
+uniform vec3 u_camera_position;
+uniform vec3 u_camera_right;
+uniform vec3 u_camera_up;
+uniform vec3 u_camera_forward;
+uniform float u_focal;
+uniform float u_aspect;
+uniform float u_near;
+uniform float u_far;
+uniform vec3 u_center;
+uniform float u_radius;
+uniform float u_level;
+uniform float u_particle_base_y;
+uniform float u_kernel_radius;
+uniform float u_time;
+uniform int u_particle_count;
+uniform vec3 u_vortex_center;
+uniform float u_vortex_strength;
+uniform int u_bubble_count;
+uniform vec4 u_bubbles[MAX_BUBBLES];
+
+out vec3 v_world_position;
+out vec3 v_normal;
+out vec2 v_uv;
+out float v_edge;
+out float v_motion;
+out float v_density;
+out float v_foam;
+out float v_vortex;
+
+float particleOffset(vec2 local, out float motion_out, out float density_out) {
+    vec2 sample_xz = u_center.xz + local;
+    float kernel2 = max(0.000001, u_kernel_radius * u_kernel_radius);
+    float total = 0.0;
+    float displacement = 0.0;
+    float motion = 0.0;
+    for (int index = 0; index < u_particle_count; ++index) {
+        Particle particle = particles[index];
+        vec2 delta = particle.position_mass.xz - sample_xz;
+        float distance2 = dot(delta, delta);
+        if (distance2 > kernel2) {
+            continue;
+        }
+        float weight = max(0.0, 1.0 - distance2 / kernel2);
+        weight *= weight;
+        total += weight;
+        displacement += weight * ((particle.position_mass.y - u_particle_base_y) * 0.36 + particle.velocity_pad.y * 0.026);
+        motion += weight * length(particle.velocity_pad.xz);
+    }
+    if (total <= 0.000001) {
+        motion_out = 0.0;
+        density_out = 0.0;
+        return 0.0;
+    }
+    motion_out = motion / total;
+    density_out = total;
+    return displacement / total * 0.34;
+}
+
+float vortexOffset(vec2 world_xz, out float vortex_out) {
+    vec2 delta = world_xz - u_vortex_center.xz;
+    float distance = length(delta);
+    float core_radius = max(0.07, u_radius * 0.20);
+    float shoulder_radius = max(0.12, u_radius * 0.38);
+    float core = exp(-(distance * distance) / max(0.0001, core_radius * core_radius));
+    float shoulder = exp(-pow((distance - shoulder_radius) / max(0.0001, shoulder_radius * 0.55), 2.0));
+    float angle = atan(delta.y, delta.x);
+    float spiral = sin(angle * 4.0 + distance * 22.0 - u_time * 8.5) * exp(-distance / max(0.001, u_radius * 0.88));
+    vortex_out = clamp(core * u_vortex_strength, 0.0, 1.0);
+    return (-0.072 * core + 0.016 * shoulder + 0.010 * spiral) * u_vortex_strength;
+}
+
+float bubbleOffset(vec2 world_xz, out float foam_out) {
+    float height = 0.0;
+    float foam = 0.0;
+    for (int index = 0; index < MAX_BUBBLES; ++index) {
+        if (index >= u_bubble_count) {
+            break;
+        }
+        vec4 bubble = u_bubbles[index];
+        float radius = max(0.001, bubble.z);
+        float phase = clamp(bubble.w, 0.0, 1.0);
+        float distance = length(world_xz - bubble.xy);
+        float rising = 1.0 - smoothstep(0.001, 0.02, phase);
+        float dome = exp(-(distance * distance) / max(0.0001, radius * radius * 1.8));
+        height += dome * radius * 0.42 * rising;
+
+        float pop_energy = smoothstep(0.0, 0.14, phase) * (1.0 - smoothstep(0.72, 1.0, phase));
+        float ring_center = mix(radius * 0.72, radius * 3.9, phase);
+        float ring_width = mix(radius * 0.50, radius * 0.24, phase);
+        float ring = exp(-pow((distance - ring_center) / max(0.0001, ring_width), 2.0));
+        float pucker = exp(-(distance * distance) / max(0.0001, radius * radius * 0.95));
+        height += (ring * radius * 0.34 - pucker * radius * 0.18) * pop_energy;
+        foam = max(foam, ring * pop_energy);
+    }
+    foam_out = clamp(foam, 0.0, 1.0);
+    return height;
+}
+
+float surfaceHeightWithMetrics(vec2 local, out float motion_out, out float density_out, out float foam_out, out float vortex_out) {
+    float radial = length(local) / max(0.001, u_radius);
+    float edge = clamp((radial - 0.88) / 0.12, 0.0, 1.0);
+    vec2 world_xz = u_center.xz + local;
+    float bubble_foam = 0.0;
+    float vortex_amount = 0.0;
+    float wind_ripple = sin(u_time * 6.28318530718 * 1.45 + local.x * 6.4 + local.y * 2.7) * 0.010;
+    float cross_ripple = sin(u_time * 6.28318530718 * 2.0 + local.x * 9.0) * max(0.0, 1.0 - abs(local.y) / max(0.001, u_radius)) * 0.006;
+    float micro_ripple = sin(u_time * 17.0 + local.x * 27.0 + local.y * 19.0) * 0.0025;
+    float height = u_level + particleOffset(local, motion_out, density_out);
+    height += vortexOffset(world_xz, vortex_amount);
+    height += bubbleOffset(world_xz, bubble_foam);
+    height += (wind_ripple + cross_ripple + micro_ripple) * max(0.0, 1.0 - radial * 0.32);
+    float edge_flatten = edge * edge;
+    foam_out = bubble_foam;
+    vortex_out = vortex_amount;
+    return u_level + (height - u_level) * (1.0 - edge_flatten * 0.86) + edge_flatten * 0.003;
+}
+
+float surfaceHeight(vec2 local) {
+    float motion_out = 0.0;
+    float density_out = 0.0;
+    float foam_out = 0.0;
+    float vortex_out = 0.0;
+    return surfaceHeightWithMetrics(local, motion_out, density_out, foam_out, vortex_out);
+}
+
+void main() {
+    vec2 local = in_local.xy;
+    float motion = 0.0;
+    float density = 0.0;
+    float foam = 0.0;
+    float vortex = 0.0;
+    float height = surfaceHeightWithMetrics(local, motion, density, foam, vortex);
+
+    vec3 world = vec3(u_center.x + local.x, height, u_center.z + local.y);
+    vec3 relative = world - u_camera_position;
+    float camera_x = dot(relative, u_camera_right);
+    float camera_y = dot(relative, u_camera_up);
+    float camera_z = dot(relative, u_camera_forward);
+    float ndc_z = -1.0 + 2.0 * ((camera_z - u_near) / max(0.0001, u_far - u_near));
+
+    gl_Position = vec4(camera_x * u_focal / u_aspect, camera_y * u_focal, ndc_z * camera_z, camera_z);
+    v_world_position = world;
+    v_normal = vec3(0.0, 1.0, 0.0);
+    v_uv = in_uv;
+    v_edge = in_local.z;
+    v_motion = motion;
+    v_density = clamp(density * 0.22, 0.0, 1.0);
+    v_foam = foam;
+    v_vortex = vortex;
+}
+"""
+
+
+PARTICLE_WATER_FRAGMENT_SHADER = """
+#version 430
+
+const int MAX_LIGHTS = 8;
+
+in vec3 v_world_position;
+in vec3 v_normal;
+in vec2 v_uv;
+in float v_edge;
+in float v_motion;
+in float v_density;
+in float v_foam;
+in float v_vortex;
+
+uniform vec3 u_camera_position;
+uniform float u_ambient;
+uniform float u_gamma;
+uniform float u_light_wrap;
+uniform float u_bounce_light;
+uniform bool u_tone_mapping;
+uniform int u_reflection_bounces;
+uniform int u_light_count;
+uniform int u_light_kind[MAX_LIGHTS];
+uniform vec3 u_light_vector[MAX_LIGHTS];
+uniform vec3 u_light_color[MAX_LIGHTS];
+uniform float u_light_intensity[MAX_LIGHTS];
+uniform vec3 u_material_color;
+uniform vec4 u_material;
+uniform float u_alpha;
+
+out vec4 frag_color;
+
+vec3 reflectionProbe(vec3 direction) {
+    vec3 ray = normalize(direction);
+    float sky = max(0.0, ray.y);
+    float floor_light = max(0.0, -ray.y);
+    float horizon = max(0.0, 1.0 - abs(ray.y));
+    float sun_dot = max(0.0, dot(ray, normalize(vec3(-0.35, 0.72, -0.58))));
+    float sun_core = pow(sun_dot, 220.0);
+    float sun_bloom = pow(sun_dot, 28.0);
+    vec3 sky_color = vec3(0.040, 0.065, 0.115) + vec3(0.26, 0.40, 0.66) * sky;
+    vec3 ground_color = vec3(0.055, 0.065, 0.060) + vec3(0.16, 0.15, 0.12) * floor_light;
+    vec3 haze = vec3(0.18, 0.23, 0.27) * horizon;
+    vec3 sun = vec3(2.40, 1.95, 1.22) * sun_core + vec3(0.54, 0.43, 0.26) * sun_bloom;
+    return sky_color + ground_color + haze + sun;
+}
+
+vec3 traceReflection(vec3 direction, int bounces) {
+    vec3 ray = normalize(direction);
+    vec3 total = vec3(0.0);
+    float energy = 1.0;
+    float normalizer = 0.0;
+    int steps = max(1, bounces);
+    for (int index = 0; index < 6; ++index) {
+        if (index >= steps) {
+            break;
+        }
+        total += reflectionProbe(ray) * energy;
+        normalizer += energy;
+        ray = normalize(vec3(ray.x * 0.78 - ray.z * 0.13, abs(ray.y) * 0.58 + 0.05, ray.z * 0.78 + ray.x * 0.13));
+        energy *= 0.52;
+    }
+    return total / max(0.0001, normalizer);
+}
+
+void main() {
+    vec3 normal = normalize(cross(dFdx(v_world_position), dFdy(v_world_position)));
+    if (length(normal) < 0.001) {
+        normal = normalize(v_normal);
+    }
+    vec3 view_direction = normalize(u_camera_position - v_world_position);
+    if (dot(normal, view_direction) < 0.0) {
+        normal = -normal;
+    }
+
+    float diffuse = u_material.x;
+    float specular = u_material.y;
+    float shininess = max(1.0, u_material.z);
+    float reflectivity = clamp(u_material.w, 0.0, 1.0);
+    vec3 diffuse_light = vec3(0.0);
+    vec3 specular_light = vec3(0.0);
+    diffuse_light += vec3(0.22, 0.26, 0.34) * max(0.0, normal.y) * u_bounce_light;
+    diffuse_light += vec3(0.22, 0.15, 0.09) * max(0.0, -normal.y) * u_bounce_light;
+
+    for (int index = 0; index < MAX_LIGHTS; ++index) {
+        if (index >= u_light_count) {
+            break;
+        }
+        vec3 light_direction;
+        float strength;
+        if (u_light_kind[index] == 0) {
+            light_direction = normalize(u_light_vector[index]);
+            float facing = dot(normal, light_direction);
+            float response = u_light_wrap > 0.0 ? max(0.0, (facing + u_light_wrap) / (1.0 + u_light_wrap)) : max(0.0, facing);
+            strength = response * u_light_intensity[index];
+        } else {
+            vec3 offset = u_light_vector[index] - v_world_position;
+            float distance = max(0.0001, length(offset));
+            light_direction = offset / distance;
+            float attenuation = 1.0 / (1.0 + distance * distance);
+            float facing = dot(normal, light_direction);
+            float response = u_light_wrap > 0.0 ? max(0.0, (facing + u_light_wrap) / (1.0 + u_light_wrap)) : max(0.0, facing);
+            strength = response * u_light_intensity[index] * attenuation;
+        }
+        vec3 light_color = u_light_color[index];
+        diffuse_light += light_color * strength;
+        vec3 halfway = normalize(light_direction + view_direction);
+        specular_light += light_color * pow(max(0.0, dot(normal, halfway)), shininess) * strength;
+        specular_light += light_color * pow(max(0.0, dot(normal, halfway)), shininess * 2.8) * strength * (0.55 + v_motion * 0.18);
+    }
+
+    float fresnel = pow(1.0 - max(0.0, dot(view_direction, normal)), 5.0);
+    float vortex_caustic = v_vortex * pow(max(0.0, sin((v_uv.x * 62.0 - v_uv.y * 47.0 + v_motion * 1.2) * 6.28318530718)), 5.0) * 0.18;
+    float caustic = pow(max(0.0, sin((v_uv.x * 34.0 + v_uv.y * 21.0 + v_motion * 1.8) * 6.28318530718)), 8.0) * 0.12 + vortex_caustic;
+    vec3 absorption = mix(vec3(0.70, 0.95, 1.0), vec3(0.42, 0.84, 0.94), clamp(v_edge, 0.0, 1.0));
+    vec3 base_color = u_material_color * absorption + caustic;
+    vec3 color = base_color * (u_ambient + diffuse_light * diffuse) + specular_light * specular;
+    int water_bounces = max(2, u_reflection_bounces);
+    vec3 reflection_color = traceReflection(reflect(-view_direction, normal), water_bounces);
+    vec3 refraction_direction = refract(-view_direction, normal, 0.75);
+    if (length(refraction_direction) < 0.001) {
+        refraction_direction = normalize(-view_direction + normal * 0.35);
+    }
+    vec3 refraction_color = traceReflection(refraction_direction, water_bounces) * vec3(0.58, 0.88, 1.0);
+    float transmission = clamp(0.18 + (1.0 - fresnel) * 0.24 + v_density * 0.10, 0.0, 0.48);
+    color = mix(color, refraction_color, transmission);
+    color = mix(color, reflection_color, clamp(reflectivity * 0.54 + fresnel * 0.66, 0.0, 0.96));
+    color += reflection_color * pow(max(0.0, dot(reflect(-view_direction, normal), normalize(vec3(-0.35, 0.72, -0.58)))), 96.0) * (0.22 + reflectivity * 0.38);
+    color = mix(color, vec3(0.84, 0.96, 1.0), clamp(v_foam * 0.66, 0.0, 0.66));
+
+    if (u_tone_mapping) {
+        color = color / (color + vec3(1.0));
+    } else {
+        color = clamp(color, 0.0, 1.0);
+    }
+    float gamma = max(0.01, u_gamma);
+    if (abs(gamma - 1.0) > 0.0001) {
+        color = pow(color, vec3(1.0 / gamma));
+    }
+    float density_alpha = smoothstep(0.04, 0.28, v_density);
+    frag_color = vec4(color, clamp(u_alpha + fresnel * 0.20 + v_foam * 0.18, 0.32, 0.88) * density_alpha);
+}
+"""
+
+
+PARTICLE_FLUID_PUDDLE_VERTEX_SHADER = """
+#version 430
+
+struct Particle {
+    vec4 position_mass;
+    vec4 velocity_pad;
+};
+
+layout(std430, binding = 2) readonly buffer FluidParticles {
+    Particle particles[];
+};
+
+in vec2 in_xz;
+in vec2 in_uv;
+
+uniform vec3 u_camera_position;
+uniform vec3 u_camera_right;
+uniform vec3 u_camera_up;
+uniform vec3 u_camera_forward;
+uniform float u_focal;
+uniform float u_aspect;
+uniform float u_near;
+uniform float u_far;
+uniform float u_floor_y;
+uniform float u_kernel_radius;
+uniform float u_time;
+uniform int u_particle_count;
+
+out vec3 v_world_position;
+out vec2 v_uv;
+out float v_density;
+out float v_motion;
+out float v_edge;
+
+float puddleHeight(vec2 sample_xz, out float density_out, out float motion_out) {
+    float kernel2 = max(0.000001, u_kernel_radius * u_kernel_radius);
+    float density = 0.0;
+    float weighted_y = 0.0;
+    float motion = 0.0;
+    for (int index = 0; index < u_particle_count; ++index) {
+        Particle particle = particles[index];
+        float height_from_floor = particle.position_mass.y - u_floor_y;
+        float floor_proximity = 1.0 - smoothstep(0.045, 0.36, height_from_floor);
+        if (floor_proximity <= 0.001) {
+            continue;
+        }
+        vec2 delta = particle.position_mass.xz - sample_xz;
+        vec2 component_distance = abs(delta);
+        if (component_distance.x > u_kernel_radius || component_distance.y > u_kernel_radius) {
+            continue;
+        }
+        float distance2 = dot(delta, delta);
+        if (distance2 > kernel2) {
+            continue;
+        }
+        float weight = max(0.0, 1.0 - distance2 / kernel2);
+        weight = weight * weight * floor_proximity;
+        density += weight;
+        weighted_y += weight * particle.position_mass.y;
+        motion += weight * length(particle.velocity_pad.xz);
+    }
+    if (density <= 0.000001) {
+        density_out = 0.0;
+        motion_out = 0.0;
+        return u_floor_y + 0.006;
+    }
+    float mean_y = weighted_y / density;
+    density_out = density;
+    motion_out = motion / density;
+    float thickness = clamp(density * 0.010, 0.008, 0.070);
+    float lifted = clamp((mean_y - u_floor_y) * 0.12, 0.0, 0.055);
+    float ripple = 0.00045 * sin(u_time * 5.3 + sample_xz.x * 13.0 + sample_xz.y * 7.0) * smoothstep(0.55, 1.65, density);
+    return u_floor_y + thickness + lifted + ripple;
+}
+
+void main() {
+    float density = 0.0;
+    float motion = 0.0;
+    float height = puddleHeight(in_xz, density, motion);
+    vec3 world = vec3(in_xz.x, height, in_xz.y);
+    vec3 relative = world - u_camera_position;
+    float camera_x = dot(relative, u_camera_right);
+    float camera_y = dot(relative, u_camera_up);
+    float camera_z = dot(relative, u_camera_forward);
+    float ndc_z = -1.0 + 2.0 * ((camera_z - u_near) / max(0.0001, u_far - u_near));
+    gl_Position = vec4(camera_x * u_focal / u_aspect, camera_y * u_focal, ndc_z * camera_z, camera_z);
+    v_world_position = world;
+    v_uv = in_uv;
+    v_density = density;
+    v_motion = motion;
+    v_edge = min(min(in_uv.x, 1.0 - in_uv.x), min(in_uv.y, 1.0 - in_uv.y));
+}
+"""
+
+
+PARTICLE_FLUID_PUDDLE_FRAGMENT_SHADER = """
+#version 430
+
+const int MAX_LIGHTS = 8;
+
+in vec3 v_world_position;
+in vec2 v_uv;
+in float v_density;
+in float v_motion;
+in float v_edge;
+
+uniform vec3 u_camera_position;
+uniform float u_ambient;
+uniform float u_gamma;
+uniform float u_light_wrap;
+uniform float u_bounce_light;
+uniform bool u_tone_mapping;
+uniform int u_reflection_bounces;
+uniform int u_light_count;
+uniform int u_light_kind[MAX_LIGHTS];
+uniform vec3 u_light_vector[MAX_LIGHTS];
+uniform vec3 u_light_color[MAX_LIGHTS];
+uniform float u_light_intensity[MAX_LIGHTS];
+uniform vec3 u_material_color;
+uniform vec4 u_material;
+uniform float u_alpha;
+uniform float u_density_threshold;
+
+out vec4 frag_color;
+
+vec3 reflectionProbe(vec3 direction) {
+    vec3 ray = normalize(direction);
+    float sky = max(0.0, ray.y);
+    float floor_light = max(0.0, -ray.y);
+    float horizon = max(0.0, 1.0 - abs(ray.y));
+    float sun_dot = max(0.0, dot(ray, normalize(vec3(-0.35, 0.72, -0.58))));
+    float sun_core = pow(sun_dot, 210.0);
+    float sun_bloom = pow(sun_dot, 27.0);
+    vec3 sky_color = vec3(0.040, 0.065, 0.115) + vec3(0.25, 0.39, 0.65) * sky;
+    vec3 ground_color = vec3(0.055, 0.065, 0.060) + vec3(0.17, 0.16, 0.12) * floor_light;
+    vec3 haze = vec3(0.18, 0.23, 0.27) * horizon;
+    vec3 sun = vec3(2.34, 1.90, 1.20) * sun_core + vec3(0.52, 0.42, 0.25) * sun_bloom;
+    return sky_color + ground_color + haze + sun;
+}
+
+vec3 traceReflection(vec3 direction, int bounces) {
+    vec3 ray = normalize(direction);
+    vec3 total = vec3(0.0);
+    float energy = 1.0;
+    float normalizer = 0.0;
+    int steps = max(1, bounces);
+    for (int index = 0; index < 5; ++index) {
+        if (index >= steps) {
+            break;
+        }
+        total += reflectionProbe(ray) * energy;
+        normalizer += energy;
+        ray = normalize(vec3(ray.x * 0.78 - ray.z * 0.13, abs(ray.y) * 0.58 + 0.05, ray.z * 0.78 + ray.x * 0.13));
+        energy *= 0.52;
+    }
+    return total / max(0.0001, normalizer);
+}
+
+void main() {
+    float density_alpha = smoothstep(u_density_threshold, u_density_threshold * 2.9 + 0.001, v_density);
+    float boundary_alpha = smoothstep(0.000, 0.045, v_edge);
+    if (density_alpha * boundary_alpha <= 0.006) {
+        discard;
+    }
+    vec3 normal = vec3(0.0, 1.0, 0.0);
+    vec3 view_direction = normalize(u_camera_position - v_world_position);
+    if (dot(normal, view_direction) < 0.0) {
+        normal = -normal;
+    }
+
+    float diffuse = u_material.x;
+    float specular = u_material.y;
+    float shininess = max(1.0, u_material.z);
+    float reflectivity = clamp(u_material.w, 0.0, 1.0);
+    vec3 diffuse_light = vec3(u_ambient);
+    diffuse_light += vec3(0.22, 0.26, 0.34) * max(0.0, normal.y) * u_bounce_light;
+    diffuse_light += vec3(0.20, 0.15, 0.10) * max(0.0, -normal.y) * u_bounce_light;
+    vec3 specular_light = vec3(0.0);
+
+    for (int index = 0; index < MAX_LIGHTS; ++index) {
+        if (index >= u_light_count) {
+            break;
+        }
+        vec3 light_direction;
+        float strength;
+        if (u_light_kind[index] == 0) {
+            light_direction = normalize(u_light_vector[index]);
+            float facing = dot(normal, light_direction);
+            float response = u_light_wrap > 0.0 ? max(0.0, (facing + u_light_wrap) / (1.0 + u_light_wrap)) : max(0.0, facing);
+            strength = response * u_light_intensity[index];
+        } else {
+            vec3 offset = u_light_vector[index] - v_world_position;
+            float distance = max(0.0001, length(offset));
+            light_direction = offset / distance;
+            float attenuation = 1.0 / (1.0 + distance * distance);
+            float facing = dot(normal, light_direction);
+            float response = u_light_wrap > 0.0 ? max(0.0, (facing + u_light_wrap) / (1.0 + u_light_wrap)) : max(0.0, facing);
+            strength = response * u_light_intensity[index] * attenuation;
+        }
+        vec3 light_color = u_light_color[index];
+        diffuse_light += light_color * strength;
+        vec3 halfway = normalize(light_direction + view_direction);
+        specular_light += light_color * pow(max(0.0, dot(normal, halfway)), shininess) * strength;
+        specular_light += light_color * pow(max(0.0, dot(normal, halfway)), shininess * 2.8) * strength * (0.44 + v_motion * 0.14);
+    }
+
+    float fresnel = pow(1.0 - max(0.0, dot(view_direction, normal)), 5.0);
+    float caustic = smoothstep(u_density_threshold * 1.4, u_density_threshold * 4.0 + 0.001, v_density) * 0.018;
+    vec3 absorption = mix(vec3(0.70, 0.95, 1.0), vec3(0.42, 0.84, 0.94), clamp(v_density * 0.12, 0.0, 1.0));
+    vec3 color = (u_material_color * absorption + caustic) * diffuse_light * diffuse + specular_light * specular;
+    int bounces = max(2, u_reflection_bounces);
+    vec3 reflection_color = traceReflection(reflect(-view_direction, normal), bounces);
+    vec3 refraction_direction = refract(-view_direction, normal, 0.75);
+    if (length(refraction_direction) < 0.001) {
+        refraction_direction = normalize(-view_direction + normal * 0.35);
+    }
+    vec3 refraction_color = traceReflection(refraction_direction, bounces) * vec3(0.58, 0.88, 1.0);
+    color = mix(color, refraction_color, 0.18 + (1.0 - fresnel) * 0.20);
+    color = mix(color, reflection_color, clamp(reflectivity * 0.50 + fresnel * 0.62, 0.0, 0.95));
+
+    if (u_tone_mapping) {
+        color = color / (color + vec3(1.0));
+    } else {
+        color = clamp(color, 0.0, 1.0);
+    }
+    float gamma = max(0.01, u_gamma);
+    if (abs(gamma - 1.0) > 0.0001) {
+        color = pow(color, vec3(1.0 / gamma));
+    }
+    frag_color = vec4(color, clamp(u_alpha + fresnel * 0.18, 0.26, 0.84) * density_alpha * boundary_alpha);
+}
+"""
+
+
+PARTICLE_FLUID_VOLUME_VERTEX_SHADER = """
+#version 430
+
+struct Particle {
+    vec4 position_mass;
+    vec4 velocity_pad;
+};
+
+layout(std430, binding = 2) readonly buffer FluidParticles {
+    Particle particles[];
+};
+
+in vec2 in_corner;
+
+uniform vec3 u_camera_position;
+uniform vec3 u_camera_right;
+uniform vec3 u_camera_up;
+uniform vec3 u_camera_forward;
+uniform float u_focal;
+uniform float u_aspect;
+uniform float u_near;
+uniform float u_far;
+uniform float u_particle_radius;
+uniform float u_min_y;
+uniform int u_particle_count;
+
+out vec2 v_corner;
+out vec3 v_world_position;
+out vec3 v_particle_center;
+out vec3 v_velocity;
+out float v_active;
+
+void main() {
+    int index = gl_InstanceID;
+    Particle particle = particles[index];
+    vec3 center = particle.position_mass.xyz;
+    v_active = center.y >= u_min_y ? 1.0 : 0.0;
+    vec3 world = center + (u_camera_right * in_corner.x + u_camera_up * in_corner.y) * u_particle_radius;
+    vec3 relative = world - u_camera_position;
+    float camera_x = dot(relative, u_camera_right);
+    float camera_y = dot(relative, u_camera_up);
+    float camera_z = dot(relative, u_camera_forward);
+    float ndc_z = -1.0 + 2.0 * ((camera_z - u_near) / max(0.0001, u_far - u_near));
+    gl_Position = vec4(camera_x * u_focal / u_aspect, camera_y * u_focal, ndc_z * camera_z, camera_z);
+    v_corner = in_corner;
+    v_world_position = world;
+    v_particle_center = center;
+    v_velocity = particle.velocity_pad.xyz;
+}
+"""
+
+
+PARTICLE_FLUID_VOLUME_FRAGMENT_SHADER = """
+#version 430
+
+const int MAX_LIGHTS = 8;
+
+in vec2 v_corner;
+in vec3 v_world_position;
+in vec3 v_particle_center;
+in vec3 v_velocity;
+in float v_active;
+
+uniform vec3 u_camera_position;
+uniform vec3 u_camera_right;
+uniform vec3 u_camera_up;
+uniform vec3 u_camera_forward;
+uniform float u_ambient;
+uniform float u_gamma;
+uniform float u_light_wrap;
+uniform float u_bounce_light;
+uniform bool u_tone_mapping;
+uniform int u_reflection_bounces;
+uniform int u_light_count;
+uniform int u_light_kind[MAX_LIGHTS];
+uniform vec3 u_light_vector[MAX_LIGHTS];
+uniform vec3 u_light_color[MAX_LIGHTS];
+uniform float u_light_intensity[MAX_LIGHTS];
+uniform vec3 u_material_color;
+uniform vec4 u_material;
+uniform float u_alpha;
+
+out vec4 frag_color;
+
+vec3 reflectionProbe(vec3 direction) {
+    vec3 ray = normalize(direction);
+    float sky = max(0.0, ray.y);
+    float floor_light = max(0.0, -ray.y);
+    float horizon = max(0.0, 1.0 - abs(ray.y));
+    float sun_dot = max(0.0, dot(ray, normalize(vec3(-0.35, 0.72, -0.58))));
+    float sun_core = pow(sun_dot, 190.0);
+    float sun_bloom = pow(sun_dot, 26.0);
+    vec3 sky_color = vec3(0.040, 0.065, 0.115) + vec3(0.25, 0.39, 0.65) * sky;
+    vec3 ground_color = vec3(0.055, 0.065, 0.060) + vec3(0.18, 0.16, 0.12) * floor_light;
+    vec3 haze = vec3(0.19, 0.24, 0.28) * horizon;
+    vec3 sun = vec3(2.18, 1.78, 1.12) * sun_core + vec3(0.48, 0.39, 0.24) * sun_bloom;
+    return sky_color + ground_color + haze + sun;
+}
+
+vec3 traceReflection(vec3 direction, int bounces) {
+    vec3 ray = normalize(direction);
+    vec3 total = vec3(0.0);
+    float energy = 1.0;
+    float normalizer = 0.0;
+    int steps = max(1, bounces);
+    for (int index = 0; index < 5; ++index) {
+        if (index >= steps) {
+            break;
+        }
+        total += reflectionProbe(ray) * energy;
+        normalizer += energy;
+        ray = normalize(vec3(ray.x * 0.76 - ray.z * 0.12, abs(ray.y) * 0.60 + 0.04, ray.z * 0.76 + ray.x * 0.12));
+        energy *= 0.52;
+    }
+    return total / max(0.0001, normalizer);
+}
+
+void main() {
+    if (v_active < 0.5) {
+        discard;
+    }
+    float radius2 = dot(v_corner, v_corner);
+    if (radius2 > 1.0) {
+        discard;
+    }
+    float cap = sqrt(max(0.0, 1.0 - radius2));
+    vec3 normal = normalize(u_camera_right * v_corner.x + u_camera_up * v_corner.y + u_camera_forward * cap);
+    vec3 view_direction = normalize(u_camera_position - v_world_position);
+    if (dot(normal, view_direction) < 0.0) {
+        normal = -normal;
+    }
+
+    float diffuse = u_material.x;
+    float specular = u_material.y;
+    float shininess = max(1.0, u_material.z);
+    float reflectivity = clamp(u_material.w, 0.0, 1.0);
+    vec3 diffuse_light = vec3(u_ambient);
+    diffuse_light += vec3(0.20, 0.26, 0.34) * max(0.0, normal.y) * u_bounce_light;
+    diffuse_light += vec3(0.18, 0.14, 0.10) * max(0.0, -normal.y) * u_bounce_light;
+    vec3 specular_light = vec3(0.0);
+
+    for (int index = 0; index < MAX_LIGHTS; ++index) {
+        if (index >= u_light_count) {
+            break;
+        }
+        vec3 light_direction;
+        float strength;
+        if (u_light_kind[index] == 0) {
+            light_direction = normalize(u_light_vector[index]);
+            float facing = dot(normal, light_direction);
+            float response = u_light_wrap > 0.0 ? max(0.0, (facing + u_light_wrap) / (1.0 + u_light_wrap)) : max(0.0, facing);
+            strength = response * u_light_intensity[index];
+        } else {
+            vec3 offset = u_light_vector[index] - v_world_position;
+            float distance = max(0.0001, length(offset));
+            light_direction = offset / distance;
+            float attenuation = 1.0 / (1.0 + distance * distance);
+            float facing = dot(normal, light_direction);
+            float response = u_light_wrap > 0.0 ? max(0.0, (facing + u_light_wrap) / (1.0 + u_light_wrap)) : max(0.0, facing);
+            strength = response * u_light_intensity[index] * attenuation;
+        }
+        vec3 light_color = u_light_color[index];
+        diffuse_light += light_color * strength;
+        vec3 halfway = normalize(light_direction + view_direction);
+        specular_light += light_color * pow(max(0.0, dot(normal, halfway)), shininess) * strength;
+        specular_light += light_color * pow(max(0.0, dot(normal, halfway)), shininess * 2.6) * strength * 0.42;
+    }
+
+    float fresnel = pow(1.0 - max(0.0, dot(view_direction, normal)), 5.0);
+    vec3 absorption = mix(vec3(0.64, 0.92, 1.0), vec3(0.38, 0.80, 0.94), clamp(length(v_velocity) * 0.42, 0.0, 1.0));
+    vec3 base_color = u_material_color * absorption;
+    vec3 color = base_color * diffuse_light * diffuse + specular_light * specular;
+    int bounces = max(2, u_reflection_bounces);
+    vec3 reflection_color = traceReflection(reflect(-view_direction, normal), bounces);
+    vec3 refraction_direction = refract(-view_direction, normal, 0.75);
+    if (length(refraction_direction) < 0.001) {
+        refraction_direction = normalize(-view_direction + normal * 0.35);
+    }
+    vec3 refraction_color = traceReflection(refraction_direction, bounces) * vec3(0.58, 0.88, 1.0);
+    color = mix(color, refraction_color, 0.18 + (1.0 - fresnel) * 0.24);
+    color = mix(color, reflection_color, clamp(reflectivity * 0.42 + fresnel * 0.58, 0.0, 0.94));
+
+    if (u_tone_mapping) {
+        color = color / (color + vec3(1.0));
+    } else {
+        color = clamp(color, 0.0, 1.0);
+    }
+    float gamma = max(0.01, u_gamma);
+    if (abs(gamma - 1.0) > 0.0001) {
+        color = pow(color, vec3(1.0 / gamma));
+    }
+    float edge_alpha = 1.0 - smoothstep(0.22, 1.0, radius2);
+    frag_color = vec4(color, clamp(u_alpha + fresnel * 0.28, 0.20, 0.78) * edge_alpha);
 }
 """
 
@@ -249,6 +1005,10 @@ _VERTEX_ATTRIBUTES = ("in_position", "in_normal", "in_color", "in_emission", "in
 _MAX_TEXTURES = 8
 _OVERLAY_VERTEX_FORMAT = "2f 2f"
 _OVERLAY_VERTEX_ATTRIBUTES = ("in_position", "in_texcoord")
+_WATER_VERTEX_FORMAT = "3f 2f"
+_WATER_VERTEX_ATTRIBUTES = ("in_local", "in_uv")
+_FLUID_VOLUME_VERTEX_FORMAT = "2f"
+_FLUID_VOLUME_VERTEX_ATTRIBUTES = ("in_corner",)
 _MENU_BUTTON_ACTIONS = {"apply", "done", "cancel", "resume", "quit"}
 _MENU_GROUP_ORDER = ("Graphics", "Sky", "Physics", "Camera", "Demo", "Main")
 _VERTEX_STRIDE_BYTES = _FLOATS_PER_VERTEX * 4
@@ -545,13 +1305,10 @@ class LiveMenu:
         if event.kind == "motion":
             tab = self.tab_at(event.pos)
             if tab is not None:
-                self.set_group(tab)
-                return "navigate"
+                return "handled"
             index = self.index_at(event.pos)
             if index is not None:
-                self.selected_index = index
-                self.active_group = self.group_for(self.options[index])
-                return "navigate"
+                return "handled"
             return "handled"
         if event.kind == "wheel":
             self.scroll(-event.y)
@@ -863,8 +1620,17 @@ class LiveSceneBatchBuilder:
     def _append_object(self, triangle_data: array, line_data: array, obj, settings: RenderSettings) -> None:
         if isinstance(obj, Point3):
             return
+        if isinstance(obj, ParticleFluidPuddle):
+            return
+        if isinstance(obj, ParticleFluidVolume):
+            return
+        if isinstance(obj, ParticleWaterSurface):
+            return
         if isinstance(obj, Line3):
             self._append_line(line_data, obj.start, obj.end, obj.material)
+            return
+        if isinstance(obj, LineSet3):
+            self._append_line_set(line_data, obj)
             return
 
         if settings.wireframe:
@@ -1091,6 +1857,35 @@ class LiveSceneBatchBuilder:
         normal = Vec3(0.0, 1.0, 0.0)
         _append_vertex(payload, start, normal, material, None, force_emissive=True)
         _append_vertex(payload, end, normal, material, None, force_emissive=True)
+
+    def _append_line_set(self, payload: array, line_set: LineSet3) -> None:
+        material = line_set.material
+        color = material.color.to_floats()
+        emission = material.emission.to_floats()
+        material_values = (
+            min(1.0, color[0] + emission[0]),
+            min(1.0, color[1] + emission[1]),
+            min(1.0, color[2] + emission[2]),
+            0.0,
+            0.0,
+            1.0,
+            0.0,
+        )
+        tail = (
+            0.0,
+            1.0,
+            0.0,
+            color[0],
+            color[1],
+            color[2],
+            *material_values,
+            0.0,
+            0.0,
+            -1.0,
+        )
+        for start, end in line_set.segments:
+            payload.extend((start.x, start.y, start.z, *tail))
+            payload.extend((end.x, end.y, end.z, *tail))
 
     def texture_index_for(self, material: Material) -> int:
         texture = material.texture
@@ -1458,11 +2253,28 @@ class _GLFWModernGLLiveRenderer:
         glfw.swap_interval(1 if vsync else 0)
         self._glfw = glfw
         self._moderngl = moderngl
+        self._set_window_icon()
         self.ctx = moderngl.create_context()
         self.ctx.enable(moderngl.DEPTH_TEST)
         self.ctx.depth_func = "<"
         self.scene_program = self.ctx.program(vertex_shader=VERTEX_SHADER, fragment_shader=FRAGMENT_SHADER)
         self.overlay_program = self.ctx.program(vertex_shader=OVERLAY_VERTEX_SHADER, fragment_shader=OVERLAY_FRAGMENT_SHADER)
+        self.water_program = None
+        self.fluid_puddle_program = None
+        self.fluid_volume_program = None
+        if getattr(self.ctx, "version_code", 0) >= 430:
+            try:
+                self.water_program = self.ctx.program(vertex_shader=PARTICLE_WATER_VERTEX_SHADER, fragment_shader=PARTICLE_WATER_FRAGMENT_SHADER)
+            except Exception:
+                self.water_program = None
+            try:
+                self.fluid_puddle_program = self.ctx.program(vertex_shader=PARTICLE_FLUID_PUDDLE_VERTEX_SHADER, fragment_shader=PARTICLE_FLUID_PUDDLE_FRAGMENT_SHADER)
+            except Exception:
+                self.fluid_puddle_program = None
+            try:
+                self.fluid_volume_program = self.ctx.program(vertex_shader=PARTICLE_FLUID_VOLUME_VERTEX_SHADER, fragment_shader=PARTICLE_FLUID_VOLUME_FRAGMENT_SHADER)
+            except Exception:
+                self.fluid_volume_program = None
         self._set_uniform(self.scene_program, "u_textures", 0)
         self._set_uniform(self.overlay_program, "u_texture", 0)
 
@@ -1488,6 +2300,10 @@ class _GLFWModernGLLiveRenderer:
             self.overlay_program,
             [(self._overlay_buffer, _OVERLAY_VERTEX_FORMAT, *_OVERLAY_VERTEX_ATTRIBUTES)],
         )
+        self._water_surface_vaos: dict[tuple[str, float], tuple[object, object, int]] = {}
+        self._fluid_puddle_vaos: dict[tuple[str, tuple[float, float, float, float]], tuple[object, object, int]] = {}
+        self._fluid_volume_buffer = None
+        self._fluid_volume_vao = None
         self.builder = LiveSceneBatchBuilder()
         self.stats = LiveFrameStats(0.0, 0.0, 0, 0)
         self.mouse_captured = False
@@ -1524,6 +2340,16 @@ class _GLFWModernGLLiveRenderer:
 
     def set_title(self, title: str) -> None:
         self._glfw.set_window_title(self._window, str(title))
+
+    def _set_window_icon(self) -> None:
+        set_window_icon = getattr(self._glfw, "set_window_icon", None)
+        if set_window_icon is None:
+            return
+        try:
+            icon = load_framework_icon_rgba()
+            set_window_icon(self._window, 1, icon)
+        except Exception:
+            return
 
     def resize(self, width: int, height: int) -> None:
         self._glfw.set_window_size(self._window, max(1, int(width)), max(1, int(height)))
@@ -1658,6 +2484,9 @@ class _GLFWModernGLLiveRenderer:
             self._triangle_vao.render(mode=self._moderngl.TRIANGLES, vertices=triangle_vertices)
         if line_vertices > 0:
             self._line_vao.render(mode=self._moderngl.LINES, vertices=line_vertices)
+        self._draw_particle_water_surfaces(scene, camera, settings, width, height)
+        self._draw_particle_fluid_puddles(scene, camera, settings, width, height)
+        self._draw_particle_fluid_volumes(scene, camera, settings, width, height)
 
         self.ctx.disable(self._moderngl.DEPTH_TEST)
         self.ctx.enable(self._moderngl.BLEND)
@@ -1694,6 +2523,264 @@ class _GLFWModernGLLiveRenderer:
         self.stats = LiveFrameStats(build_seconds, draw_seconds, triangle_vertices, line_vertices)
         return self.stats
 
+    def _draw_particle_water_surfaces(self, scene: Scene, camera: Camera, settings: RenderSettings, width: int, height: int) -> None:
+        if self.water_program is None or settings.wireframe:
+            return
+        surfaces = [obj for obj in scene.objects if isinstance(obj, ParticleWaterSurface)]
+        if not surfaces:
+            return
+        self.ctx.enable(self._moderngl.DEPTH_TEST)
+        self.ctx.enable(self._moderngl.BLEND)
+        self.ctx.blend_func = self._moderngl.SRC_ALPHA, self._moderngl.ONE_MINUS_SRC_ALPHA
+        self.ctx.disable(self._moderngl.CULL_FACE)
+        depth_mask_supported = True
+        try:
+            self.ctx.depth_mask = False
+        except Exception:
+            depth_mask_supported = False
+        try:
+            for surface in surfaces:
+                binder = getattr(surface.world, "bind_particle_buffer", None)
+                if not callable(binder) or not binder(2):
+                    continue
+                buffer, vao, vertices = self._particle_water_surface_vao(surface)
+                del buffer
+                self._apply_particle_water_uniforms(surface, scene, camera, settings, width, height)
+                vao.render(mode=self._moderngl.TRIANGLES, vertices=vertices)
+        finally:
+            if depth_mask_supported:
+                try:
+                    self.ctx.depth_mask = True
+                except Exception:
+                    pass
+
+    def _particle_water_surface_vao(self, surface: ParticleWaterSurface):
+        if self.water_program is None:
+            raise RuntimeError("particle water shader is unavailable")
+        key = (surface.quality, round(surface.radius, 5))
+        cached = self._water_surface_vaos.get(key)
+        if cached is not None:
+            return cached
+        vertices = _particle_water_surface_vertices(surface.quality, surface.radius)
+        buffer = self.ctx.buffer(array("f", vertices).tobytes())
+        vao = self.ctx.vertex_array(
+            self.water_program,
+            [(buffer, _WATER_VERTEX_FORMAT, *_WATER_VERTEX_ATTRIBUTES)],
+        )
+        cached = (buffer, vao, len(vertices) // 5)
+        self._water_surface_vaos[key] = cached
+        return cached
+
+    def _apply_particle_water_uniforms(self, surface: ParticleWaterSurface, scene: Scene, camera: Camera, settings: RenderSettings, width: int, height: int) -> None:
+        assert self.water_program is not None
+        right, true_up, forward = camera.basis()
+        program = self.water_program
+        material = surface.material
+        color = Color.from_value(material.color).to_floats()
+        particle_count = len(getattr(surface.world, "particles", ()))
+        particle_base_y = surface.particle_base_y if surface.particle_base_y is not None else surface.center.y
+        rest_distance = float(getattr(surface.world, "rest_distance", surface.radius * 0.03))
+        kernel_radius = surface.kernel_radius if surface.kernel_radius is not None else max(rest_distance * 3.4, surface.radius * 0.095)
+        self._set_uniform(program, "u_camera_position", camera.position.as_tuple())
+        self._set_uniform(program, "u_camera_right", right.as_tuple())
+        self._set_uniform(program, "u_camera_up", true_up.as_tuple())
+        self._set_uniform(program, "u_camera_forward", forward.as_tuple())
+        self._set_uniform(program, "u_focal", 1.0 / tan(radians(camera.fov_degrees) / 2.0))
+        self._set_uniform(program, "u_aspect", width / max(1, height))
+        self._set_uniform(program, "u_near", camera.near)
+        self._set_uniform(program, "u_far", camera.far)
+        self._set_uniform(program, "u_center", surface.center.as_tuple())
+        self._set_uniform(program, "u_radius", float(surface.radius))
+        self._set_uniform(program, "u_level", float(surface.center.y))
+        self._set_uniform(program, "u_particle_base_y", float(particle_base_y))
+        self._set_uniform(program, "u_kernel_radius", float(kernel_radius))
+        self._set_uniform(program, "u_time", float(surface.time))
+        self._set_uniform(program, "u_particle_count", int(particle_count))
+        vortex_center = surface.vortex_center if surface.vortex_center is not None else surface.center
+        self._set_uniform(program, "u_vortex_center", vortex_center.as_tuple())
+        self._set_uniform(program, "u_vortex_strength", float(surface.vortex_strength))
+        bubbles = tuple(surface.bubbles[:8])
+        bubble_payload: list[float] = []
+        for index in range(8):
+            if index < len(bubbles):
+                bubble_payload.extend(bubbles[index])
+            else:
+                bubble_payload.extend((0.0, 0.0, 0.0, 0.0))
+        self._set_uniform(program, "u_bubble_count", len(bubbles))
+        self._set_uniform(program, "u_bubbles", tuple(bubble_payload))
+        self._set_uniform(program, "u_ambient", settings.ambient)
+        self._set_uniform(program, "u_gamma", settings.gamma)
+        self._set_uniform(program, "u_light_wrap", settings.light_wrap)
+        self._set_uniform(program, "u_bounce_light", settings.bounce_light)
+        self._set_uniform(program, "u_tone_mapping", bool(settings.tone_mapping))
+        self._set_uniform(program, "u_reflection_bounces", max(2, int(settings.reflection_bounces)))
+        self._set_uniform(program, "u_material_color", color)
+        self._set_uniform(program, "u_material", (material.diffuse, material.specular, material.shininess, material.reflectivity))
+        self._set_uniform(program, "u_alpha", max(0.25, min(0.82, 0.38 + material.light_transmission * 0.34)))
+        self._apply_light_uniforms(scene, program)
+
+    def _draw_particle_fluid_puddles(self, scene: Scene, camera: Camera, settings: RenderSettings, width: int, height: int) -> None:
+        if self.fluid_puddle_program is None or settings.wireframe:
+            return
+        puddles = [obj for obj in scene.objects if isinstance(obj, ParticleFluidPuddle)]
+        if not puddles:
+            return
+        self.ctx.enable(self._moderngl.DEPTH_TEST)
+        self.ctx.enable(self._moderngl.BLEND)
+        self.ctx.blend_func = self._moderngl.SRC_ALPHA, self._moderngl.ONE_MINUS_SRC_ALPHA
+        self.ctx.disable(self._moderngl.CULL_FACE)
+        depth_mask_supported = True
+        try:
+            self.ctx.depth_mask = False
+        except Exception:
+            depth_mask_supported = False
+        try:
+            for puddle in puddles:
+                binder = getattr(puddle.world, "bind_particle_buffer", None)
+                if not callable(binder) or not binder(2):
+                    continue
+                _buffer, vao, vertices = self._particle_fluid_puddle_vao(puddle)
+                self._apply_particle_fluid_puddle_uniforms(puddle, scene, camera, settings, width, height)
+                vao.render(mode=self._moderngl.TRIANGLES, vertices=vertices)
+        finally:
+            if depth_mask_supported:
+                try:
+                    self.ctx.depth_mask = True
+                except Exception:
+                    pass
+
+    def _particle_fluid_puddle_vao(self, puddle: ParticleFluidPuddle):
+        if self.fluid_puddle_program is None:
+            raise RuntimeError("particle fluid puddle shader is unavailable")
+        bounds_key = (
+            round(puddle.bounds_min.x, 4),
+            round(puddle.bounds_min.z, 4),
+            round(puddle.bounds_max.x, 4),
+            round(puddle.bounds_max.z, 4),
+        )
+        key = (puddle.quality, bounds_key)
+        cached = self._fluid_puddle_vaos.get(key)
+        if cached is not None:
+            return cached
+        vertices = _particle_fluid_puddle_vertices(puddle.quality, puddle.bounds_min, puddle.bounds_max)
+        buffer = self.ctx.buffer(array("f", vertices).tobytes())
+        vao = self.ctx.vertex_array(
+            self.fluid_puddle_program,
+            [(buffer, "2f 2f", "in_xz", "in_uv")],
+        )
+        cached = (buffer, vao, len(vertices) // 4)
+        self._fluid_puddle_vaos[key] = cached
+        return cached
+
+    def _apply_particle_fluid_puddle_uniforms(self, puddle: ParticleFluidPuddle, scene: Scene, camera: Camera, settings: RenderSettings, width: int, height: int) -> None:
+        assert self.fluid_puddle_program is not None
+        right, true_up, forward = camera.basis()
+        program = self.fluid_puddle_program
+        material = puddle.material
+        color = Color.from_value(material.color).to_floats()
+        rest_distance = float(getattr(puddle.world, "rest_distance", 0.05))
+        kernel_radius = puddle.kernel_radius if puddle.kernel_radius is not None else max(rest_distance * 2.9, 0.085)
+        self._set_uniform(program, "u_camera_position", camera.position.as_tuple())
+        self._set_uniform(program, "u_camera_right", right.as_tuple())
+        self._set_uniform(program, "u_camera_up", true_up.as_tuple())
+        self._set_uniform(program, "u_camera_forward", forward.as_tuple())
+        self._set_uniform(program, "u_focal", 1.0 / tan(radians(camera.fov_degrees) / 2.0))
+        self._set_uniform(program, "u_aspect", width / max(1, height))
+        self._set_uniform(program, "u_near", camera.near)
+        self._set_uniform(program, "u_far", camera.far)
+        self._set_uniform(program, "u_floor_y", float(puddle.floor_y))
+        self._set_uniform(program, "u_kernel_radius", float(kernel_radius))
+        self._set_uniform(program, "u_time", float(puddle.time))
+        self._set_uniform(program, "u_particle_count", len(getattr(puddle.world, "particles", ())))
+        self._set_uniform(program, "u_ambient", settings.ambient)
+        self._set_uniform(program, "u_gamma", settings.gamma)
+        self._set_uniform(program, "u_light_wrap", settings.light_wrap)
+        self._set_uniform(program, "u_bounce_light", settings.bounce_light)
+        self._set_uniform(program, "u_tone_mapping", bool(settings.tone_mapping))
+        self._set_uniform(program, "u_reflection_bounces", max(2, int(settings.reflection_bounces)))
+        self._set_uniform(program, "u_material_color", color)
+        self._set_uniform(program, "u_material", (material.diffuse, material.specular, material.shininess, material.reflectivity))
+        self._set_uniform(program, "u_alpha", max(0.24, min(0.82, 0.34 + material.light_transmission * 0.30)))
+        self._set_uniform(program, "u_density_threshold", float(puddle.density_threshold))
+        self._apply_light_uniforms(scene, program)
+
+    def _draw_particle_fluid_volumes(self, scene: Scene, camera: Camera, settings: RenderSettings, width: int, height: int) -> None:
+        if self.fluid_volume_program is None or settings.wireframe:
+            return
+        volumes = [obj for obj in scene.objects if isinstance(obj, ParticleFluidVolume)]
+        if not volumes:
+            return
+        self.ctx.enable(self._moderngl.DEPTH_TEST)
+        self.ctx.enable(self._moderngl.BLEND)
+        self.ctx.blend_func = self._moderngl.SRC_ALPHA, self._moderngl.ONE_MINUS_SRC_ALPHA
+        self.ctx.disable(self._moderngl.CULL_FACE)
+        depth_mask_supported = True
+        try:
+            self.ctx.depth_mask = False
+        except Exception:
+            depth_mask_supported = False
+        try:
+            vao = self._particle_fluid_volume_vao()
+            for volume in volumes:
+                particle_count = len(getattr(volume.world, "particles", ()))
+                if particle_count <= 0:
+                    continue
+                binder = getattr(volume.world, "bind_particle_buffer", None)
+                if not callable(binder) or not binder(2):
+                    continue
+                self._apply_particle_fluid_volume_uniforms(volume, scene, camera, settings, width, height)
+                vao.render(mode=self._moderngl.TRIANGLES, vertices=6, instances=particle_count)
+        finally:
+            if depth_mask_supported:
+                try:
+                    self.ctx.depth_mask = True
+                except Exception:
+                    pass
+
+    def _particle_fluid_volume_vao(self):
+        if self.fluid_volume_program is None:
+            raise RuntimeError("particle fluid volume shader is unavailable")
+        if self._fluid_volume_vao is not None:
+            return self._fluid_volume_vao
+        vertices = array("f", (-1.0, -1.0, 1.0, -1.0, 1.0, 1.0, -1.0, -1.0, 1.0, 1.0, -1.0, 1.0))
+        self._fluid_volume_buffer = self.ctx.buffer(vertices.tobytes())
+        self._fluid_volume_vao = self.ctx.vertex_array(
+            self.fluid_volume_program,
+            [(self._fluid_volume_buffer, _FLUID_VOLUME_VERTEX_FORMAT, *_FLUID_VOLUME_VERTEX_ATTRIBUTES)],
+        )
+        return self._fluid_volume_vao
+
+    def _apply_particle_fluid_volume_uniforms(self, volume: ParticleFluidVolume, scene: Scene, camera: Camera, settings: RenderSettings, width: int, height: int) -> None:
+        assert self.fluid_volume_program is not None
+        right, true_up, forward = camera.basis()
+        program = self.fluid_volume_program
+        material = volume.material
+        color = Color.from_value(material.color).to_floats()
+        rest_distance = float(getattr(volume.world, "rest_distance", 0.05))
+        particle_radius = volume.particle_radius if volume.particle_radius is not None else rest_distance * 0.62
+        min_y = volume.min_y if volume.min_y is not None else -1.0e9
+        self._set_uniform(program, "u_camera_position", camera.position.as_tuple())
+        self._set_uniform(program, "u_camera_right", right.as_tuple())
+        self._set_uniform(program, "u_camera_up", true_up.as_tuple())
+        self._set_uniform(program, "u_camera_forward", forward.as_tuple())
+        self._set_uniform(program, "u_focal", 1.0 / tan(radians(camera.fov_degrees) / 2.0))
+        self._set_uniform(program, "u_aspect", width / max(1, height))
+        self._set_uniform(program, "u_near", camera.near)
+        self._set_uniform(program, "u_far", camera.far)
+        self._set_uniform(program, "u_particle_radius", float(particle_radius))
+        self._set_uniform(program, "u_min_y", float(min_y))
+        self._set_uniform(program, "u_particle_count", len(getattr(volume.world, "particles", ())))
+        self._set_uniform(program, "u_ambient", settings.ambient)
+        self._set_uniform(program, "u_gamma", settings.gamma)
+        self._set_uniform(program, "u_light_wrap", settings.light_wrap)
+        self._set_uniform(program, "u_bounce_light", settings.bounce_light)
+        self._set_uniform(program, "u_tone_mapping", bool(settings.tone_mapping))
+        self._set_uniform(program, "u_reflection_bounces", max(2, int(settings.reflection_bounces)))
+        self._set_uniform(program, "u_material_color", color)
+        self._set_uniform(program, "u_material", (material.diffuse, material.specular, material.shininess, material.reflectivity))
+        self._set_uniform(program, "u_alpha", max(0.18, min(0.74, 0.22 + material.light_transmission * 0.34)))
+        self._apply_light_uniforms(scene, program)
+
     def close(self) -> None:
         if self._closed:
             return
@@ -1709,6 +2796,29 @@ class _GLFWModernGLLiveRenderer:
                 self._scene_texture.release()
             except Exception:
                 pass
+        for buffer, vao, _vertices in tuple(self._water_surface_vaos.values()):
+            for resource in (vao, buffer):
+                try:
+                    resource.release()
+                except Exception:
+                    pass
+        self._water_surface_vaos.clear()
+        for buffer, vao, _vertices in tuple(self._fluid_puddle_vaos.values()):
+            for resource in (vao, buffer):
+                try:
+                    resource.release()
+                except Exception:
+                    pass
+        self._fluid_puddle_vaos.clear()
+        for resource in (self._fluid_volume_vao, self._fluid_volume_buffer):
+            if resource is None:
+                continue
+            try:
+                resource.release()
+            except Exception:
+                pass
+        self._fluid_volume_vao = None
+        self._fluid_volume_buffer = None
         for resource in (
             self._triangle_vao,
             self._line_vao,
@@ -1718,7 +2828,12 @@ class _GLFWModernGLLiveRenderer:
             self._overlay_buffer,
             self.scene_program,
             self.overlay_program,
+            self.water_program,
+            self.fluid_puddle_program,
+            self.fluid_volume_program,
         ):
+            if resource is None:
+                continue
             try:
                 resource.release()
             except Exception:
@@ -1900,9 +3015,11 @@ class _GLFWModernGLLiveRenderer:
         self._set_uniform(self.scene_program, "u_tone_mapping", bool(settings.tone_mapping))
         self._set_uniform(self.scene_program, "u_two_sided_lighting", bool(settings.two_sided_lighting))
         self._set_uniform(self.scene_program, "u_reflection_bounces", int(settings.reflection_bounces))
-        self._apply_light_uniforms(scene)
+        self._apply_light_uniforms(scene, self.scene_program)
 
-    def _apply_light_uniforms(self, scene: Scene) -> None:
+    def _apply_light_uniforms(self, scene: Scene, program=None) -> None:
+        if program is None:
+            program = self.scene_program
         lights = []
         for light in scene.lights:
             if isinstance(light, Sun):
@@ -1916,7 +3033,7 @@ class _GLFWModernGLLiveRenderer:
             if len(lights) >= 8:
                 break
 
-        self._set_uniform(self.scene_program, "u_light_count", len(lights))
+        self._set_uniform(program, "u_light_count", len(lights))
         kinds: list[int] = []
         vectors: list[tuple[float, float, float]] = []
         colors: list[tuple[float, float, float]] = []
@@ -1932,14 +3049,14 @@ class _GLFWModernGLLiveRenderer:
             vectors.append(vector_tuple)
             colors.append(color_tuple)
             intensities.append(float(intensity))
-            self._set_uniform(self.scene_program, f"u_light_kind[{index}]", int(kind))
-            self._set_uniform(self.scene_program, f"u_light_vector[{index}]", vector_tuple)
-            self._set_uniform(self.scene_program, f"u_light_color[{index}]", color_tuple)
-            self._set_uniform(self.scene_program, f"u_light_intensity[{index}]", float(intensity))
-        self._set_uniform(self.scene_program, "u_light_kind", tuple(kinds))
-        self._set_uniform(self.scene_program, "u_light_vector", tuple(vectors))
-        self._set_uniform(self.scene_program, "u_light_color", tuple(colors))
-        self._set_uniform(self.scene_program, "u_light_intensity", tuple(intensities))
+            self._set_uniform(program, f"u_light_kind[{index}]", int(kind))
+            self._set_uniform(program, f"u_light_vector[{index}]", vector_tuple)
+            self._set_uniform(program, f"u_light_color[{index}]", color_tuple)
+            self._set_uniform(program, f"u_light_intensity[{index}]", float(intensity))
+        self._set_uniform(program, "u_light_kind", tuple(kinds))
+        self._set_uniform(program, "u_light_vector", tuple(vectors))
+        self._set_uniform(program, "u_light_color", tuple(colors))
+        self._set_uniform(program, "u_light_intensity", tuple(intensities))
 
     def _upload_scene_textures(self, settings: RenderSettings) -> None:
         textures = tuple(self.builder.active_textures[:_MAX_TEXTURES])
@@ -2390,6 +3507,77 @@ def _flip_rgba_rows(rgba: bytes, width: int, height: int) -> bytes:
     return b"".join(rgba[y * stride : (y + 1) * stride] for y in range(height - 1, -1, -1))
 
 
+def _particle_water_surface_vertices(quality: str, radius: float) -> tuple[float, ...]:
+    rings, segments = {"fast": (12, 44), "balanced": (17, 60), "high": (24, 84), "ultra": (32, 112)}.get(quality, (17, 60))
+    points: dict[tuple[int, int], tuple[float, float, float, float, float]] = {}
+    center = (0.0, 0.0, 0.0, 0.5, 0.5)
+    for ring in range(1, rings + 1):
+        amount = ring / rings
+        radial = radius * (amount ** 0.72)
+        edge = max(0.0, (amount - 0.88) / 0.12)
+        for segment in range(segments):
+            angle = 2.0 * 3.141592653589793 * segment / segments
+            x = cos(angle) * radial
+            z = sin(angle) * radial
+            points[(ring, segment)] = (x, z, edge, 0.5 + x / max(0.001, radius * 2.0), 0.5 + z / max(0.001, radius * 2.0))
+
+    vertices: list[float] = []
+
+    def append(vertex: tuple[float, float, float, float, float]) -> None:
+        vertices.extend(vertex)
+
+    for segment in range(segments):
+        next_segment = (segment + 1) % segments
+        append(center)
+        append(points[(1, next_segment)])
+        append(points[(1, segment)])
+    for ring in range(1, rings):
+        for segment in range(segments):
+            next_segment = (segment + 1) % segments
+            a = points[(ring, segment)]
+            b = points[(ring, next_segment)]
+            c = points[(ring + 1, next_segment)]
+            d = points[(ring + 1, segment)]
+            append(a)
+            append(b)
+            append(c)
+            append(a)
+            append(c)
+            append(d)
+    return tuple(vertices)
+
+
+def _particle_fluid_puddle_vertices(quality: str, bounds_min: Vec3, bounds_max: Vec3) -> tuple[float, ...]:
+    columns, rows = {"fast": (44, 28), "balanced": (64, 40), "high": (88, 56), "ultra": (116, 72)}.get(quality, (64, 40))
+    points: dict[tuple[int, int], tuple[float, float, float, float]] = {}
+    for row in range(rows + 1):
+        v = row / rows
+        z = bounds_min.z + (bounds_max.z - bounds_min.z) * v
+        for column in range(columns + 1):
+            u = column / columns
+            x = bounds_min.x + (bounds_max.x - bounds_min.x) * u
+            points[(column, row)] = (x, z, u, v)
+
+    vertices: list[float] = []
+
+    def append(vertex: tuple[float, float, float, float]) -> None:
+        vertices.extend(vertex)
+
+    for row in range(rows):
+        for column in range(columns):
+            a = points[(column, row)]
+            b = points[(column + 1, row)]
+            c = points[(column + 1, row + 1)]
+            d = points[(column, row + 1)]
+            append(a)
+            append(b)
+            append(c)
+            append(a)
+            append(c)
+            append(d)
+    return tuple(vertices)
+
+
 def _live_textures_for_scene(scene: Scene, settings: RenderSettings) -> tuple[PixelBuffer, ...]:
     if settings.wireframe:
         return ()
@@ -2449,8 +3637,44 @@ def _live_object_fingerprint(obj, settings: RenderSettings) -> tuple:
     )
     if isinstance(obj, Point3):
         return ("point", obj.position.as_tuple(), _material_fingerprint(obj.material), geometry_settings)
+    if isinstance(obj, ParticleFluidPuddle):
+        return (
+            "particle_fluid_puddle",
+            id(obj.world),
+            obj.bounds_min.as_tuple(),
+            obj.bounds_max.as_tuple(),
+            obj.floor_y,
+            obj.quality,
+            obj.kernel_radius,
+            obj.density_threshold,
+            _material_fingerprint(obj.material),
+            geometry_settings,
+        )
+    if isinstance(obj, ParticleFluidVolume):
+        return (
+            "particle_fluid_volume",
+            id(obj.world),
+            obj.particle_radius,
+            obj.min_y,
+            _material_fingerprint(obj.material),
+            geometry_settings,
+        )
+    if isinstance(obj, ParticleWaterSurface):
+        return (
+            "particle_water_surface",
+            id(obj.world),
+            obj.center.as_tuple(),
+            obj.radius,
+            obj.quality,
+            obj.particle_base_y,
+            obj.kernel_radius,
+            _material_fingerprint(obj.material),
+            geometry_settings,
+        )
     if isinstance(obj, Line3):
         return ("line", obj.start.as_tuple(), obj.end.as_tuple(), _material_fingerprint(obj.material), geometry_settings)
+    if isinstance(obj, LineSet3):
+        return ("line_set", tuple((start.as_tuple(), end.as_tuple()) for start, end in obj.segments), _material_fingerprint(obj.material), geometry_settings)
     if isinstance(obj, Sphere):
         return (
             "sphere",

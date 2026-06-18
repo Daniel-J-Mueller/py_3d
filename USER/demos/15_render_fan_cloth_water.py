@@ -16,7 +16,7 @@ def main() -> None:
             "examples/fan_cloth_water_demo.py",
             "--live",
             "--quality",
-            "balanced",
+            "ultra",
         ],
         cwd=ROOT,
     )

@@ -5,10 +5,12 @@ from __future__ import annotations
 import ctypes
 from ctypes import wintypes
 from dataclasses import dataclass, field
+from pathlib import Path
 from time import perf_counter, sleep
 from typing import Callable
 import sys
 
+from .assets import framework_favicon_path
 from .buffer import PixelBuffer
 
 KeyCallback = Callable[[str], None]
@@ -37,6 +39,7 @@ class PixelWindow:
     title: str = "py_3d"
     fit_window: bool = True
     fullscreen: bool = False
+    icon_path: str | Path | None = None
     _events: list[WindowEvent] = field(default_factory=list, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -49,12 +52,15 @@ class PixelWindow:
         self._last_mouse: tuple[int, int] | None = None
         self._last_frame: PixelBuffer | None = None
         self._title = str(self.title)
+        self._icon_path = Path(self.icon_path) if self.icon_path is not None else framework_favicon_path()
+        self._icons: list[object] = []
         self._class_name = f"py_3d_Window_{id(self):x}"
         self._wndproc = self._win.WNDPROC(self._handle_message)
         self._register_class()
         self._hwnd = self._create_window()
         if not self._hwnd:
             raise ctypes.WinError()
+        self._apply_window_icons()
         self._win.user32.ShowWindow(self._hwnd, self._win.SW_SHOW)
         self._win.user32.UpdateWindow(self._hwnd)
 
@@ -139,17 +145,42 @@ class PixelWindow:
             return
         self._closed = True
         self._win.user32.DestroyWindow(self._hwnd)
+        for icon in self._icons:
+            self._win.user32.DestroyIcon(icon)
+        self._icons.clear()
 
     def _register_class(self) -> None:
         wc = self._win.WNDCLASSW()
         wc.lpfnWndProc = ctypes.cast(self._wndproc, ctypes.c_void_p)
         wc.hInstance = self._win.hinstance
         wc.lpszClassName = self._class_name
+        wc.hIcon = self._load_icon(32)
         wc.hCursor = self._win.user32.LoadCursorW(None, self._win.IDC_ARROW)
         wc.hbrBackground = self._win.COLOR_WINDOW + 1
         atom = self._win.user32.RegisterClassW(ctypes.byref(wc))
         if not atom:
             raise ctypes.WinError()
+
+    def _apply_window_icons(self) -> None:
+        for icon_kind, size in ((self._win.ICON_SMALL, 16), (self._win.ICON_BIG, 32)):
+            icon = self._load_icon(size)
+            if icon:
+                self._win.user32.SendMessageW(self._hwnd, self._win.WM_SETICON, icon_kind, icon)
+
+    def _load_icon(self, size: int):
+        if not self._icon_path.exists():
+            return None
+        icon = self._win.user32.LoadImageW(
+            None,
+            str(self._icon_path),
+            self._win.IMAGE_ICON,
+            int(size),
+            int(size),
+            self._win.LR_LOADFROMFILE,
+        )
+        if icon:
+            self._icons.append(icon)
+        return icon
 
     def _create_window(self):
         if self.fullscreen:
@@ -406,6 +437,11 @@ class _Win32Bindings:
         self.user32.DefWindowProcW.restype = ctypes.c_ssize_t
         self.user32.PeekMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT, wintypes.UINT]
         self.user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+        self.user32.LoadImageW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT, ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        self.user32.LoadImageW.restype = wintypes.HANDLE
+        self.user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        self.user32.SendMessageW.restype = ctypes.c_ssize_t
+        self.user32.DestroyIcon.argtypes = [wintypes.HICON]
         self.gdi32.StretchDIBits.argtypes = [
             wintypes.HDC,
             ctypes.c_int,
@@ -427,11 +463,16 @@ class _Win32Bindings:
     PM_REMOVE = 0x0001
     IDC_ARROW = 32512
     COLOR_WINDOW = 5
+    IMAGE_ICON = 1
+    LR_LOADFROMFILE = 0x00000010
+    ICON_SMALL = 0
+    ICON_BIG = 1
     WS_OVERLAPPEDWINDOW = 0x00CF0000
     WS_VISIBLE = 0x10000000
     WS_POPUP = 0x80000000
     WM_CLOSE = 0x0010
     WM_DESTROY = 0x0002
+    WM_SETICON = 0x0080
     WM_PAINT = 0x000F
     WM_SIZE = 0x0005
     WM_KEYDOWN = 0x0100

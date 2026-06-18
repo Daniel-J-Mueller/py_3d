@@ -30,7 +30,7 @@ class Experience:
 
 @dataclass(frozen=True)
 class MenuSettings:
-    quality: str = "balanced"
+    quality: str = "ultra"
     safe_mode: bool = False
     background_blur: bool = False
 
@@ -530,7 +530,7 @@ def main() -> None:
     parser.add_argument("--run", type=int, help="Run a menu item by number without opening the interactive menu.")
     parser.add_argument("--render-preview", type=int, help="Render a preview still for a menu item by number.")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--quality", choices=("safe", "balanced", "high", "ultra"), default="balanced")
+    parser.add_argument("--quality", choices=("safe", "balanced", "high", "ultra"), default="ultra")
     args = parser.parse_args()
 
     settings = MenuSettings(quality="balanced" if args.quality == "safe" else args.quality, safe_mode=args.quality == "safe")

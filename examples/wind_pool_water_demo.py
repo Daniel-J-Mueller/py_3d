@@ -19,6 +19,7 @@ from py_3d import (
     Lamp,
     Line3,
     Material,
+    ParticleWaterSurface,
     RenderEngine,
     RenderSettings,
     Scene,
@@ -41,23 +42,35 @@ class WindPoolWaterSimulation:
         self.quality = quality
         self.wind_strength = 1.0
         self.center = Vec3(0.25, 0.48, 0.0)
-        self.radius = 1.12
+        self.radius = 1.29
+        self.spill_radius = 2.45
+        self.vessel_intact = True
         fluid_cls = GPUVectorFluidWorld if gpu_context is not None else VectorFluidWorld
         fluid_args = (gpu_context,) if gpu_context is not None else ()
         self.fluid = fluid_cls.liquid(
             *fluid_args,
             bounds_min=(self.center.x - self.radius, 0.22, self.center.z - self.radius),
             bounds_max=(self.center.x + self.radius, 0.72, self.center.z + self.radius),
-            gravity=(0.0, -2.4, 0.0),
-            rest_distance=0.055 if gpu_context is not None else 0.13,
-            repel_strength=5.8 if gpu_context is not None else 7.2,
-            self_attraction=1.8 if gpu_context is not None else 2.4,
-            viscosity=0.36 if gpu_context is not None else 0.32,
+            gravity=(0.0, -2.7, 0.0),
+            rest_distance=0.065 if gpu_context is not None else 0.148,
+            repel_strength=8.6 if gpu_context is not None else 9.8,
+            self_attraction=0.58 if gpu_context is not None else 0.9,
+            viscosity=0.5 if gpu_context is not None else 0.4,
             boundary_bounce=0.04,
-            close_damping=8.0,
-            attract_range_factor=2.4 if gpu_context is not None else 3.1,
+            close_damping=11.0,
+            attract_range_factor=1.65 if gpu_context is not None else 2.0,
         )
+        if getattr(self.fluid, "gpu_enabled", False):
+            self.fluid.sync_python_particles = False
+            self.fluid.readback_particles = False
         self._seed_water_particles(gpu_context is not None)
+
+    def _configure_fluid_bounds(self) -> None:
+        radius = self.radius if self.vessel_intact else self.spill_radius
+        floor_y = 0.22 if self.vessel_intact else 0.08
+        ceiling_y = 0.74 if self.vessel_intact else 1.25
+        self.fluid.bounds_min = Vec3(self.center.x - radius, floor_y, self.center.z - radius)
+        self.fluid.bounds_max = Vec3(self.center.x + radius, ceiling_y, self.center.z + radius)
 
     def _seed_water_particles(self, gpu_enabled: bool) -> None:
         count = (
@@ -68,34 +81,37 @@ class WindPoolWaterSimulation:
         golden_angle = 3.141592653589793 * (3.0 - 5.0 ** 0.5)
         for index in range(count):
             amount = (index + 0.5) / count
-            radius = self.radius * 0.84 * (amount ** 0.5)
+            radius = self.radius * 0.96 * (amount ** 0.5)
             angle = index * golden_angle
-            wave = 0.03 * sin(angle * 1.3 + radius * 4.0)
-            self.fluid.add_particle(VectorFluidParticle(self.center + Vec3(cos(angle) * radius, -0.05 + wave, sin(angle) * radius)))
+            wave = 0.012 * sin(angle * 1.3 + radius * 4.0)
+            self.fluid.add_particle(VectorFluidParticle(self.center + Vec3(cos(angle) * radius, -0.035 + wave, sin(angle) * radius)))
 
     def step(self, dt: float) -> None:
         self.time += dt
+        self._configure_fluid_bounds()
         if getattr(self.fluid, "gpu_enabled", False):
             self.fluid.force_mode = 2
             self.fluid.force_center = self.center
-            self.fluid.cylinder_radius = self.radius
+            self.fluid.cylinder_radius = self.radius if self.vessel_intact else 0.0
             self.fluid.time = self.time
             self.fluid.wind_strength = self.wind_strength
             self.fluid.blade_strength = 0.0
             self.fluid.step(dt, substeps=1)
         else:
             self.fluid.step(dt, substeps=2, external_force=self._wind_force)
-            self._constrain_pool()
+            if self.vessel_intact:
+                self._constrain_pool()
 
-    def _wind_force(self, particle: VectorFluidParticle, dt: float) -> Vec3:
+    def _wind_force(self, particle: VectorFluidParticle, dt: float) -> tuple[float, float, float]:
         del dt
-        local = particle.position - self.center
+        local_x = particle.position.x - self.center.x
+        local_z = particle.position.z - self.center.z
         surface = max(0.0, min(1.0, (particle.position.y - (self.center.y - 0.12)) / 0.22))
-        lane = max(0.0, 1.0 - (local.z / max(0.001, self.radius)) ** 2)
-        gust = 0.76 + 0.24 * sin(self.time * tau * 1.35 + local.z * 4.4)
-        cross = 0.22 * sin(self.time * 3.6 + local.x * 4.8)
-        lift = 0.08 * sin(self.time * tau * 2.2 + local.x * 7.0 + local.z * 2.0)
-        return Vec3(1.55 * self.wind_strength * lane * gust * surface, lift * surface, cross * surface)
+        lane = max(0.0, 1.0 - (local_z / max(0.001, self.radius)) ** 2)
+        gust = 0.76 + 0.24 * sin(self.time * tau * 1.35 + local_z * 4.4)
+        cross = 0.22 * sin(self.time * 3.6 + local_x * 4.8)
+        lift = 0.08 * sin(self.time * tau * 2.2 + local_x * 7.0 + local_z * 2.0)
+        return (1.55 * self.wind_strength * lane * gust * surface, lift * surface, cross * surface)
 
     def _constrain_pool(self) -> None:
         for particle in self.fluid.particles:
@@ -115,8 +131,22 @@ class WindPoolWaterSimulation:
         scene = Scene()
         stone = Material(color=(72, 78, 76), roughness=0.68, fuzziness=0.08, specular=0.04)
         scene.add(Box((0.0, -0.04, 0.0), (5.6, 0.08, 3.5), stone))
-        scene.add(Bowl((self.center.x, 0.72, self.center.z), 1.35, Material(color=(84, 90, 88), roughness=0.6, specular=0.08), depth=0.56, thickness=0.07))
-        scene.add(water_surface_mesh(self.fluid, self.center, self.radius, self.time, quality=self.quality))
+        if self.vessel_intact:
+            scene.add(Bowl((self.center.x, 0.72, self.center.z), 1.35, Material(color=(84, 90, 88), roughness=0.6, specular=0.08), depth=0.56, thickness=0.07))
+        surface_radius = self.radius if self.vessel_intact else self.spill_radius
+        if getattr(self.fluid, "gpu_enabled", False):
+            scene.add(
+                ParticleWaterSurface(
+                    self.fluid,
+                    self.center,
+                    surface_radius,
+                    quality=self.quality,
+                    time=self.time,
+                    particle_base_y=self.center.y - 0.035,
+                )
+            )
+        else:
+            scene.add(water_surface_mesh(self.fluid, self.center, surface_radius, self.time, quality=self.quality))
         scene.add(*fan_primitives(Vec3(-2.15, 0.72, 0.0), self.time, facing="x"))
         scene.add(*wind_stream_lines(self.center, self.time, self.wind_strength))
         scene.add_light(Sun(direction=(-0.3, -0.84, -0.46), color=(255, 244, 224), intensity=0.82))
@@ -150,9 +180,14 @@ def make_settings(args: argparse.Namespace) -> RenderSettings:
         background=Color(7, 10, 13),
         ambient=args.ambient,
         gamma=args.gamma,
+        light_wrap=getattr(args, "light_wrap", 0.08),
+        bounce_light=getattr(args, "bounce_light", 0.16),
         smooth_shading=True,
         tone_mapping=True,
+        ray_traced_shadows=bool(getattr(args, "ray_traced_shadows", True)),
         reflection_bounces=args.reflection_bounces,
+        shadow_samples=getattr(args, "shadow_samples", 3),
+        shadow_softness=getattr(args, "shadow_softness", 0.22),
         sphere_segments=args.sphere_segments,
         sphere_rings=args.sphere_rings,
         texture_size=args.texture_size,
@@ -184,6 +219,7 @@ class GLWindPoolWaterViewer:
                 LiveMenuOption("wind_down", "Less wind"),
                 LiveMenuOption("reflections_up", "More reflections"),
                 LiveMenuOption("reflections_down", "Fewer reflections"),
+                LiveMenuOption("break_vessel", "Break/repair bowl"),
                 LiveMenuOption("pause", "Pause/run water"),
                 LiveMenuOption("reset", "Reset pool"),
                 LiveMenuOption("quit", "Quit demo"),
@@ -193,6 +229,8 @@ class GLWindPoolWaterViewer:
         self._refresh_menu_options()
         self.renderer.set_mouse_captured(True)
         self._last_title_update = 0
+        self._cached_scene: Scene | None = None
+        self._scene_cache_dirty = True
 
     def run(self) -> None:
         clock = self.renderer.frame_clock()
@@ -219,13 +257,20 @@ class GLWindPoolWaterViewer:
                     elif self.renderer.is_key_up_event(event):
                         self.on_key_up(self.renderer.event_key(event))
 
-                self.camera_controller.move(self.keys, dt)
-                self.sky.step(dt)
-                if not self.paused:
-                    self.simulation.step(dt)
+                menu_visible = self.renderer.menu.visible
+                if not menu_visible:
+                    self.camera_controller.move(self.keys, dt)
+                    self.sky.step(dt)
+                    if not self.paused:
+                        self.simulation.step(dt)
                 self._update_hud()
-                scene = self.simulation.scene()
-                self._apply_sky(scene)
+                if menu_visible and self._cached_scene is not None and not self._scene_cache_dirty:
+                    scene = self._cached_scene
+                else:
+                    scene = self.simulation.scene()
+                    self._apply_sky(scene)
+                    self._cached_scene = scene
+                    self._scene_cache_dirty = False
                 stats = self.renderer.render(scene, self.camera_controller.smoothed_camera(dt), self.sky.settings_for(self.settings))
                 self._update_title(stats)
                 dt = max(1.0 / 240.0, min(0.05, clock.tick(self.args.fps) / 1000.0))
@@ -294,10 +339,13 @@ class GLWindPoolWaterViewer:
             self.settings = replace(self.settings, reflection_bounces=max(0, min(5, self.settings.reflection_bounces + 1)))
         elif action == "reflections_down":
             self.settings = replace(self.settings, reflection_bounces=max(0, min(5, self.settings.reflection_bounces - 1)))
+        elif action == "break_vessel":
+            self.simulation.vessel_intact = not self.simulation.vessel_intact
         elif action == "pause":
             self.paused = not self.paused
         elif action == "reset":
             self._reset_simulation()
+        self._scene_cache_dirty = True
         self._refresh_menu_options()
         return True
 
@@ -311,10 +359,12 @@ class GLWindPoolWaterViewer:
 
     def _reset_simulation(self) -> None:
         old_wind = self.simulation.wind_strength
+        old_vessel = self.simulation.vessel_intact
         render_context = getattr(self.renderer, "ctx", None)
         fluid_context = render_context if getattr(render_context, "version_code", 0) >= 430 else None
         self.simulation = WindPoolWaterSimulation(quality=self.args.quality, gpu_context=fluid_context)
         self.simulation.wind_strength = old_wind
+        self.simulation.vessel_intact = old_vessel
 
     def _apply_sky(self, scene: Scene) -> Scene:
         scene.lights = [light for light in scene.lights if not isinstance(light, Sun)]
@@ -333,6 +383,7 @@ class GLWindPoolWaterViewer:
             LiveMenuOption("wind_down", "Wind -", f"{self.simulation.wind_strength:0.2f}x", "Physics"),
             LiveMenuOption("reflections_up", "Reflections +", str(self.settings.reflection_bounces), "Graphics"),
             LiveMenuOption("reflections_down", "Reflections -", str(self.settings.reflection_bounces), "Graphics"),
+            LiveMenuOption("break_vessel", "Bowl", "intact" if self.simulation.vessel_intact else "broken", "Physics"),
             LiveMenuOption("pause", "Pause", "paused" if self.paused else "running", "Physics"),
             LiveMenuOption("reset", "Reset", "pool", "Physics"),
             LiveMenuOption("quit", "Quit demo"),
@@ -386,7 +437,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--wind-strength", type=float, default=1.0)
     parser.add_argument("--ambient", type=float, default=0.05)
     parser.add_argument("--gamma", type=float, default=1.12)
-    parser.add_argument("--reflection-bounces", type=int, default=2)
+    parser.add_argument("--light-wrap", type=float, default=0.08)
+    parser.add_argument("--bounce-light", type=float, default=0.16)
+    parser.add_argument("--ray-traced-shadows", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--shadow-samples", type=int, default=3)
+    parser.add_argument("--shadow-softness", type=float, default=0.22)
+    parser.add_argument("--reflection-bounces", type=int, default=3)
     parser.add_argument("--texture-size", type=int, default=256)
     parser.add_argument("--sphere-segments", type=int, default=16)
     parser.add_argument("--sphere-rings", type=int, default=8)
