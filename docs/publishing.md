@@ -6,7 +6,7 @@ The PyPI distribution name in `pyproject.toml` is `py3dengine`. Users install
 that distribution name with `pip`, then import the Python package as `py_3d`.
 The names do not need to match.
 
-Use this Trusted Publisher configuration on PyPI:
+Trusted Publishing is configured on PyPI with:
 
 | PyPI field | Value |
 | --- | --- |
@@ -14,15 +14,13 @@ Use this Trusted Publisher configuration on PyPI:
 | Owner | `Daniel-J-Mueller` |
 | Repository name | `py_3d` |
 | Workflow name | `publish.yml` |
-| Environment name | any |
+| Environment name | any / blank |
 
-First release flow:
+Release flow:
 
-1. Create or claim the PyPI project `py3dengine`.
-2. Add a PyPI Trusted Publisher for GitHub Actions with the values above.
-3. Commit `.github/workflows/publish.yml`.
-4. Push the repository to GitHub.
-5. Create and push a release tag:
+1. Update `version` in `pyproject.toml`.
+2. Commit and push the release changes.
+3. Create and push a matching release tag:
 
    ```powershell
    git tag v0.0.1
@@ -35,13 +33,13 @@ The workflow builds with:
 python -m build
 ```
 
-It publishes with:
+It publishes to PyPI with:
 
 ```text
 pypa/gh-action-pypi-publish@release/v1
 ```
 
-After publishing, users install the package with:
+Users install the package with:
 
 ```powershell
 python -m pip install py3dengine
@@ -51,4 +49,42 @@ and import it with:
 
 ```python
 import py_3d
+```
+
+## Optional py_gpu package
+
+The optional GPU bridge package lives in the separate sibling repository
+`py_gpu` and publishes as `py_gpu`.
+
+Trusted Publisher values:
+
+| PyPI field | Value |
+| --- | --- |
+| PyPI Project Name | `py_gpu` |
+| Owner | `Daniel-J-Mueller` |
+| Repository name | `py_gpu` |
+| Workflow name | `publish.yml` |
+| Environment name | any / blank |
+
+Release flow:
+
+1. Update `version` in the `py_gpu` repository's `pyproject.toml`.
+2. Commit and push the release changes.
+3. Create and push a release tag:
+
+   ```powershell
+   git tag v0.0.1
+   git push origin v0.0.1
+   ```
+
+The workflow builds with:
+
+```powershell
+python -m build
+```
+
+Users install the optional bridge with:
+
+```powershell
+python -m pip install py_gpu
 ```

@@ -356,7 +356,7 @@ class ShowcaseMenu:
         left = 32
         top = 106
         card_width = min(470, max(340, int(width * 0.42)))
-        card_height = 104
+        card_height = 122
         for index, experience in enumerate(EXPERIENCES):
             y = top + index * (card_height + 14)
             selected = index == self.selected
@@ -366,8 +366,8 @@ class ShowcaseMenu:
             self.pygame.draw.rect(self.screen, fill, rect, border_radius=6)
             self.pygame.draw.rect(self.screen, border, rect, width=2, border_radius=6)
             self._text(experience.title, (left + 16, y + 12), self.font, (242, 247, 255), max_width=card_width - 32)
-            self._text(experience.description, (left + 16, y + 42), self.small, (178, 196, 208), max_width=card_width - 32)
-            self._text(experience.controls, (left + 16, y + 76), self.small, (138, 160, 176), max_width=card_width - 32)
+            self._text(experience.description, (left + 16, y + 42), self.small, (178, 196, 208), max_width=card_width - 32, max_lines=2)
+            self._text(experience.controls, (left + 16, y + 94), self.small, (138, 160, 176), max_width=card_width - 32, max_lines=1)
 
     def _draw_preview_panel(self, width: int, height: int) -> None:
         left = min(540, int(width * 0.48))
@@ -460,12 +460,21 @@ class ShowcaseMenu:
     def _experience_rects(self) -> tuple[tuple[int, tuple[int, int, int, int]], ...]:
         width, _height = self.screen.get_size()
         card_width = min(470, max(340, int(width * 0.42)))
-        return tuple((index, (32, 106 + index * 118, card_width, 104)) for index in range(len(EXPERIENCES)))
+        return tuple((index, (32, 106 + index * 136, card_width, 122)) for index in range(len(EXPERIENCES)))
 
-    def _text(self, text: str, position: tuple[int, int], font, color: tuple[int, int, int], *, max_width: int | None = None) -> None:
+    def _text(
+        self,
+        text: str,
+        position: tuple[int, int],
+        font,
+        color: tuple[int, int, int],
+        *,
+        max_width: int | None = None,
+        max_lines: int = 3,
+    ) -> None:
         x, y = position
         lines = self._wrap(text, font, max_width) if max_width else [text]
-        for line in lines[:3]:
+        for line in lines[:max_lines]:
             surface = font.render(line, True, color)
             self.screen.blit(surface, (x, y))
             y += surface.get_height() + 3

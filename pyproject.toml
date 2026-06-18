@@ -28,6 +28,7 @@ Issues = "https://github.com/Daniel-J-Mueller/py_3d/issues"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+gpu = ["py_gpu>=0.0.1"]
 video = ["imageio-ffmpeg>=0.5"]
 
 [tool.setuptools.packages.find]

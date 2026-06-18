@@ -582,6 +582,110 @@ class LiveMenu:
         return "handled"
 
 
+def render_live_menu_surface(menu: LiveMenu, pygame, width: int, height: int):
+    """Return a pygame surface for a live menu plus its screen position."""
+
+    pygame.font.init()
+    panel_width = min(width - 36, max(600, int(width * 0.68)))
+    panel_height = min(height - 36, max(390, int(height * 0.72)))
+    panel_width = max(320, panel_width)
+    panel_height = max(260, panel_height)
+    panel_left = max(12, (width - panel_width) // 2)
+    panel_top = max(12, (height - panel_height) // 2)
+    surface = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
+    surface.fill((4, 8, 13, 226))
+
+    title_font = pygame.font.SysFont("segoeui", 24, bold=True)
+    tab_font = pygame.font.SysFont("segoeui", 15, bold=True)
+    label_font = pygame.font.SysFont("segoeui", 18, bold=True)
+    detail_font = pygame.font.SysFont("segoeui", 14)
+    small_font = pygame.font.SysFont("segoeui", 13)
+
+    pygame.draw.rect(surface, (34, 52, 64, 255), (0, 0, panel_width, panel_height), width=2, border_radius=8)
+    surface.blit(title_font.render(menu.title, True, (244, 248, 255)), (24, 18))
+
+    groups = menu.groups()
+    current_group = menu.current_group()
+    tab_hitboxes: list[tuple[int, int, int, int, str]] = []
+    tab_x = 24
+    tab_y = 58
+    for group in groups:
+        text = tab_font.render(group, True, (238, 246, 255) if group == current_group else (152, 176, 190))
+        tab_width = max(86, text.get_width() + 26)
+        tab_rect = (tab_x, tab_y, tab_width, 30)
+        fill = (48, 96, 116, 244) if group == current_group else (16, 28, 38, 230)
+        border = (134, 204, 232, 255) if group == current_group else (54, 78, 92, 255)
+        pygame.draw.rect(surface, fill, tab_rect, border_radius=5)
+        pygame.draw.rect(surface, border, tab_rect, width=1, border_radius=5)
+        surface.blit(text, (tab_x + (tab_width - text.get_width()) // 2, tab_y + 6))
+        tab_hitboxes.append((panel_left + tab_x, panel_top + tab_y, tab_width, 30, group))
+        tab_x += tab_width + 10
+
+    option_indexes = menu.visible_option_indexes()
+    option_area_top = 104
+    footer_height = 66
+    option_area_height = max(80, panel_height - option_area_top - footer_height - 16)
+    columns = 2 if panel_width >= 690 else 1
+    gap = 12
+    option_height = 54
+    option_width = (panel_width - 48 - gap * (columns - 1)) // columns
+    rows = max(1, option_area_height // (option_height + gap))
+    capacity = max(1, rows * columns)
+    max_scroll = max(0, len(option_indexes) - capacity)
+    offset = max(0, min(menu.scroll_offsets.get(current_group, 0), max_scroll))
+    menu.scroll_offsets[current_group] = offset
+    visible_indexes = option_indexes[offset : offset + capacity]
+
+    hitboxes: list[tuple[int, int, int, int, int]] = []
+    for local, option_index in enumerate(visible_indexes):
+        column = local % columns
+        row = local // columns
+        x = 24 + column * (option_width + gap)
+        y = option_area_top + row * (option_height + gap)
+        option = menu.options[option_index]
+        selected = option_index == menu.selected_index
+        fill = (42, 74, 92, 246) if selected else (13, 24, 34, 236)
+        border = (144, 218, 246, 255) if selected else (50, 76, 91, 255)
+        pygame.draw.rect(surface, fill, (x, y, option_width, option_height), border_radius=6)
+        pygame.draw.rect(surface, border, (x, y, option_width, option_height), width=2 if selected else 1, border_radius=6)
+        label = label_font.render(option.label, True, (242, 248, 255))
+        surface.blit(label, (x + 14, y + 8))
+        if option.detail:
+            detail = detail_font.render(option.detail, True, (172, 204, 218))
+            surface.blit(detail, (x + 14, y + 31))
+        hitboxes.append((panel_left + x, panel_top + y, option_width, option_height, option_index))
+
+    if max_scroll > 0:
+        marker = f"{offset + 1}-{min(len(option_indexes), offset + capacity)} / {len(option_indexes)}  mouse wheel scrolls"
+        marker_surface = small_font.render(marker, True, (152, 176, 190))
+        surface.blit(marker_surface, (24, panel_height - footer_height - 20))
+
+    footer_options = tuple((index, option) for index, option in enumerate(menu.options) if option.action in _MENU_BUTTON_ACTIONS)
+    footer_y = panel_height - 52
+    footer_x = 24
+    for option_index, option in footer_options:
+        label = option.label
+        text = tab_font.render(label, True, (242, 248, 255))
+        button_width = max(92, text.get_width() + 28)
+        if footer_x + button_width > panel_width - 24:
+            break
+        selected = option_index == menu.selected_index
+        fill = (58, 104, 122, 248) if selected else (24, 44, 56, 240)
+        border = (154, 224, 248, 255) if selected else (66, 96, 112, 255)
+        pygame.draw.rect(surface, fill, (footer_x, footer_y, button_width, 36), border_radius=5)
+        pygame.draw.rect(surface, border, (footer_x, footer_y, button_width, 36), width=2 if selected else 1, border_radius=5)
+        surface.blit(text, (footer_x + (button_width - text.get_width()) // 2, footer_y + 9))
+        hitboxes.append((panel_left + footer_x, panel_top + footer_y, button_width, 36, option_index))
+        footer_x += button_width + 10
+
+    hint = small_font.render("Left/right tabs, up/down buttons, Enter selects", True, (130, 154, 168))
+    surface.blit(hint, (panel_width - hint.get_width() - 24, 22))
+
+    menu.set_hitboxes(hitboxes)
+    menu.set_tab_hitboxes(tab_hitboxes)
+    return surface, panel_left, panel_top
+
+
 @dataclass(frozen=True)
 class _Template:
     vertices: tuple[tuple[float, float, float, float, float, float, float, float], ...]
@@ -893,104 +997,8 @@ class ModernGLLiveRenderer:
 
     def _draw_menu(self, width: int, height: int) -> None:
         pygame = self.pygame
-        pygame.font.init()
-        panel_width = min(width - 36, max(600, int(width * 0.68)))
-        panel_height = min(height - 36, max(390, int(height * 0.72)))
-        panel_width = max(320, panel_width)
-        panel_height = max(260, panel_height)
-        panel_left = max(12, (width - panel_width) // 2)
-        panel_top = max(12, (height - panel_height) // 2)
-        surface = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
-        surface.fill((4, 8, 13, 226))
-
-        title_font = pygame.font.SysFont("segoeui", 24, bold=True)
-        tab_font = pygame.font.SysFont("segoeui", 15, bold=True)
-        label_font = pygame.font.SysFont("segoeui", 18, bold=True)
-        detail_font = pygame.font.SysFont("segoeui", 14)
-        small_font = pygame.font.SysFont("segoeui", 13)
-
-        pygame.draw.rect(surface, (34, 52, 64, 255), (0, 0, panel_width, panel_height), width=2, border_radius=8)
-        surface.blit(title_font.render(self.menu.title, True, (244, 248, 255)), (24, 18))
-
-        groups = self.menu.groups()
-        current_group = self.menu.current_group()
-        tab_hitboxes: list[tuple[int, int, int, int, str]] = []
-        tab_x = 24
-        tab_y = 58
-        for group in groups:
-            text = tab_font.render(group, True, (238, 246, 255) if group == current_group else (152, 176, 190))
-            tab_width = max(86, text.get_width() + 26)
-            tab_rect = (tab_x, tab_y, tab_width, 30)
-            fill = (48, 96, 116, 244) if group == current_group else (16, 28, 38, 230)
-            border = (134, 204, 232, 255) if group == current_group else (54, 78, 92, 255)
-            pygame.draw.rect(surface, fill, tab_rect, border_radius=5)
-            pygame.draw.rect(surface, border, tab_rect, width=1, border_radius=5)
-            surface.blit(text, (tab_x + (tab_width - text.get_width()) // 2, tab_y + 6))
-            tab_hitboxes.append((panel_left + tab_x, panel_top + tab_y, tab_width, 30, group))
-            tab_x += tab_width + 10
-
-        option_indexes = self.menu.visible_option_indexes()
-        option_area_top = 104
-        footer_height = 66
-        option_area_height = max(80, panel_height - option_area_top - footer_height - 16)
-        columns = 2 if panel_width >= 690 else 1
-        gap = 12
-        option_height = 54
-        option_width = (panel_width - 48 - gap * (columns - 1)) // columns
-        rows = max(1, option_area_height // (option_height + gap))
-        capacity = max(1, rows * columns)
-        max_scroll = max(0, len(option_indexes) - capacity)
-        offset = max(0, min(self.menu.scroll_offsets.get(current_group, 0), max_scroll))
-        self.menu.scroll_offsets[current_group] = offset
-        visible_indexes = option_indexes[offset : offset + capacity]
-
-        hitboxes: list[tuple[int, int, int, int, int]] = []
-        for local, option_index in enumerate(visible_indexes):
-            column = local % columns
-            row = local // columns
-            x = 24 + column * (option_width + gap)
-            y = option_area_top + row * (option_height + gap)
-            option = self.menu.options[option_index]
-            selected = option_index == self.menu.selected_index
-            fill = (42, 74, 92, 246) if selected else (13, 24, 34, 236)
-            border = (144, 218, 246, 255) if selected else (50, 76, 91, 255)
-            pygame.draw.rect(surface, fill, (x, y, option_width, option_height), border_radius=6)
-            pygame.draw.rect(surface, border, (x, y, option_width, option_height), width=2 if selected else 1, border_radius=6)
-            label = label_font.render(option.label, True, (242, 248, 255))
-            surface.blit(label, (x + 14, y + 8))
-            if option.detail:
-                detail = detail_font.render(option.detail, True, (172, 204, 218))
-                surface.blit(detail, (x + 14, y + 31))
-            hitboxes.append((panel_left + x, panel_top + y, option_width, option_height, option_index))
-
-        if max_scroll > 0:
-            marker = f"{offset + 1}-{min(len(option_indexes), offset + capacity)} / {len(option_indexes)}  mouse wheel scrolls"
-            marker_surface = small_font.render(marker, True, (152, 176, 190))
-            surface.blit(marker_surface, (24, panel_height - footer_height - 20))
-
-        footer_options = tuple((index, option) for index, option in enumerate(self.menu.options) if option.action in _MENU_BUTTON_ACTIONS)
-        footer_y = panel_height - 52
-        footer_x = 24
-        for option_index, option in footer_options:
-            label = option.label
-            text = tab_font.render(label, True, (242, 248, 255))
-            button_width = max(92, text.get_width() + 28)
-            if footer_x + button_width > panel_width - 24:
-                break
-            selected = option_index == self.menu.selected_index
-            fill = (58, 104, 122, 248) if selected else (24, 44, 56, 240)
-            border = (154, 224, 248, 255) if selected else (66, 96, 112, 255)
-            pygame.draw.rect(surface, fill, (footer_x, footer_y, button_width, 36), border_radius=5)
-            pygame.draw.rect(surface, border, (footer_x, footer_y, button_width, 36), width=2 if selected else 1, border_radius=5)
-            surface.blit(text, (footer_x + (button_width - text.get_width()) // 2, footer_y + 9))
-            hitboxes.append((panel_left + footer_x, panel_top + footer_y, button_width, 36, option_index))
-            footer_x += button_width + 10
-
-        hint = small_font.render("Left/right tabs, up/down buttons, Enter selects", True, (130, 154, 168))
-        surface.blit(hint, (panel_width - hint.get_width() - 24, 22))
-
-        self.menu.set_hitboxes(hitboxes)
-        self.menu.set_tab_hitboxes(tab_hitboxes)
+        surface, panel_left, panel_top = render_live_menu_surface(self.menu, pygame, width, height)
+        panel_width, panel_height = surface.get_size()
         data = pygame.image.tostring(surface, "RGBA")
         self._draw_overlay_texture(panel_left, panel_top, panel_width, panel_height, data, width, height)
 
