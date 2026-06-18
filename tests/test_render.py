@@ -71,6 +71,30 @@ def test_high_poly_sphere_and_other_primitives_render():
     assert sum(pixel != Color(0, 0, 0) for pixel in buffer.pixels) > 100
 
 
+def test_sphere_triangles_include_vertex_normals_for_smooth_shading():
+    triangles = Sphere((0, 0, 0), 1.0).to_triangles(segments=12, rings=6)
+
+    assert all(triangle.has_vertex_normals() for triangle in triangles)
+
+
+def test_smooth_shading_changes_lit_sphere_pixels():
+    scene = Scene()
+    scene.add(Sphere((0, 0, 0), 0.85, Material(color=(120, 180, 230))))
+    scene.add_light(Lamp(position=(0.8, 1.6, -2.2), color=(255, 245, 230), intensity=4.0))
+    camera = Camera(position=(0.0, 0.0, -4.0), target=(0, 0, 0))
+    renderer = RenderEngine(CPURenderer(cache_static_geometry=False))
+
+    flat = renderer.render(scene, camera, RenderSettings(width=72, height=72, ambient=0.03, sphere_segments=14, sphere_rings=7))
+    smooth = renderer.render(
+        scene,
+        camera,
+        RenderSettings(width=72, height=72, ambient=0.03, smooth_shading=True, sphere_segments=14, sphere_rings=7),
+    )
+
+    assert flat.pixels != smooth.pixels
+    assert sum(pixel != Color(0, 0, 0) for pixel in smooth.pixels) > 100
+
+
 def test_bowl_primitive_renders_through_engine():
     scene = Scene()
     scene.add(Bowl((0, 0, 0), 1.0, Material(color=(150, 90, 210)), depth=0.9))

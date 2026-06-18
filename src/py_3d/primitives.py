@@ -40,6 +40,9 @@ class Triangle:
     uv_a: tuple[float, float] | None = None
     uv_b: tuple[float, float] | None = None
     uv_c: tuple[float, float] | None = None
+    normal_a: Vec3 | tuple[float, float, float] | None = None
+    normal_b: Vec3 | tuple[float, float, float] | None = None
+    normal_c: Vec3 | tuple[float, float, float] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "a", as_vec3(self.a))
@@ -51,6 +54,10 @@ class Triangle:
                 if len(uv) != 2:
                     raise ValueError("triangle UV coordinates must have two components")
                 object.__setattr__(self, name, (float(uv[0]), float(uv[1])))
+        for name in ("normal_a", "normal_b", "normal_c"):
+            normal = getattr(self, name)
+            if normal is not None:
+                object.__setattr__(self, name, as_vec3(normal).normalized())
 
     def center(self) -> Vec3:
         return (self.a + self.b + self.c) / 3.0
@@ -60,6 +67,9 @@ class Triangle:
 
     def has_texture_coordinates(self) -> bool:
         return self.uv_a is not None and self.uv_b is not None and self.uv_c is not None
+
+    def has_vertex_normals(self) -> bool:
+        return self.normal_a is not None and self.normal_b is not None and self.normal_c is not None
 
 
 @dataclass(frozen=True)
@@ -134,9 +144,11 @@ class Sphere:
             raise ValueError("sphere rings must be at least 2")
 
         vertices: list[list[Vec3]] = []
+        normals: list[list[Vec3]] = []
         for ring in range(rings + 1):
             phi = pi * ring / rings
             row = []
+            normal_row = []
             for segment in range(segments):
                 theta = 2.0 * pi * segment / segments
                 normal = Vec3(
@@ -146,7 +158,9 @@ class Sphere:
                 )
                 radius = self._radius_at(normal)
                 row.append(self.center + normal * radius)
+                normal_row.append(normal)
             vertices.append(row)
+            normals.append(normal_row)
 
         triangles: list[Triangle] = []
         for ring in range(rings):
@@ -160,6 +174,10 @@ class Sphere:
                 top_right = vertices[ring][next_segment]
                 bottom_left = vertices[ring + 1][segment]
                 bottom_right = vertices[ring + 1][next_segment]
+                normal_top_left = normals[ring][segment]
+                normal_top_right = normals[ring][next_segment]
+                normal_bottom_left = normals[ring + 1][segment]
+                normal_bottom_right = normals[ring + 1][next_segment]
                 if ring != 0:
                     triangles.append(
                         Triangle(
@@ -170,6 +188,9 @@ class Sphere:
                             (u, v),
                             (u, next_v),
                             (next_u, v),
+                            normal_top_left,
+                            normal_bottom_left,
+                            normal_top_right,
                         )
                     )
                 if ring != rings - 1:
@@ -182,6 +203,9 @@ class Sphere:
                             (next_u, v),
                             (u, next_v),
                             (next_u, next_v),
+                            normal_top_right,
+                            normal_bottom_left,
+                            normal_bottom_right,
                         )
                     )
         return tuple(triangles)
@@ -222,10 +246,12 @@ class Bowl:
 
         end_phi = pi / 2.0 + self.depth * pi / 2.0
         vertices: list[list[Vec3]] = []
+        normals: list[list[Vec3]] = []
         for ring in range(rings + 1):
             amount = ring / rings
             phi = pi / 2.0 + (end_phi - pi / 2.0) * amount
             row = []
+            normal_row = []
             for segment in range(segments):
                 theta = 2.0 * pi * segment / segments
                 normal = Vec3(
@@ -234,7 +260,9 @@ class Bowl:
                     sin(phi) * sin(theta),
                 )
                 row.append(self.center + normal * self.radius)
+                normal_row.append(normal)
             vertices.append(row)
+            normals.append(normal_row)
 
         triangles: list[Triangle] = []
         for ring in range(rings):
@@ -248,6 +276,10 @@ class Bowl:
                 top_right = vertices[ring][next_segment]
                 bottom_left = vertices[ring + 1][segment]
                 bottom_right = vertices[ring + 1][next_segment]
+                normal_top_left = normals[ring][segment]
+                normal_top_right = normals[ring][next_segment]
+                normal_bottom_left = normals[ring + 1][segment]
+                normal_bottom_right = normals[ring + 1][next_segment]
                 triangles.append(
                     Triangle(
                         top_left,
@@ -257,6 +289,9 @@ class Bowl:
                         (u, v),
                         (u, next_v),
                         (next_u, v),
+                        normal_top_left,
+                        normal_bottom_left,
+                        normal_top_right,
                     )
                 )
                 if ring != rings - 1 or self.depth < 1.0:
@@ -269,6 +304,9 @@ class Bowl:
                             (next_u, v),
                             (u, next_v),
                             (next_u, next_v),
+                            normal_top_right,
+                            normal_bottom_left,
+                            normal_bottom_right,
                         )
                     )
 
@@ -290,6 +328,9 @@ class Bowl:
                         (next_u, bottom_v),
                         (u, bottom_v),
                         (0.5, bottom_v),
+                        Vec3(0.0, -1.0, 0.0),
+                        Vec3(0.0, -1.0, 0.0),
+                        Vec3(0.0, -1.0, 0.0),
                     )
                 )
         return tuple(triangles)

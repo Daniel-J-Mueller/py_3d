@@ -16,9 +16,13 @@ def detect_gpu_backends() -> tuple[str, ...]:
     """Return optional Python GPU packages visible in this environment."""
 
     candidates = (
+        ("py_gpu", "py_gpu bridge"),
         ("moderngl", "OpenGL"),
         ("wgpu", "WebGPU"),
         ("OpenGL", "PyOpenGL"),
+        ("cupy", "CuPy"),
+        ("numba", "Numba"),
+        ("torch", "PyTorch"),
     )
     return tuple(label for module_name, label in candidates if find_spec(module_name) is not None)
 

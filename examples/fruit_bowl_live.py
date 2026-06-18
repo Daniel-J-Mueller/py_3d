@@ -15,6 +15,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--window-width", type=int, default=960)
     parser.add_argument("--window-height", type=int, default=540)
     parser.add_argument("--fit-window", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--light-mode",
+        choices=("multiple", "blinking", "multicolor", "color-shift-blink"),
+        default="multiple",
+    )
+    parser.add_argument("--smooth-shading", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--sphere-segments", type=int, default=14)
     parser.add_argument("--sphere-rings", type=int, default=7)
     return parser.parse_args()

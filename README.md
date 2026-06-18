@@ -33,6 +33,12 @@ in `renderings-tests/` so visual changes are easy to inspect.
 | --- | --- | --- |
 | ![physics floor bounce](renderings-tests/physics_floor_bounce.png) | ![physics wall bank](renderings-tests/physics_wall_bank.png) | ![bumpy ball physics](renderings-tests/bumpy_ball_physics.png) |
 
+| Bumpy ball smooth render |
+| --- |
+| ![bumpy ball smooth render](renderings-tests/bumpy_ball_smooth.png) |
+
+[View the bumpy ball MP4](renderings-tests/bumpy_ball_physics.mp4)
+
 | Collision override |
 | --- |
 | ![collision boundary override](renderings-tests/collision_boundary_override.png) |
@@ -44,6 +50,19 @@ in `renderings-tests/` so visual changes are easy to inspect.
 <video src="renderings-tests/fruit_bowl.mp4" controls width="640"></video>
 
 [View the fruit bowl MP4](renderings-tests/fruit_bowl.mp4)
+
+| Multiple lights | Blinking lights |
+| --- | --- |
+| ![fruit bowl multiple lights](renderings-tests/fruit_bowl_multiple_lights.png) | ![fruit bowl blinking lights](renderings-tests/fruit_bowl_blinking_lights.png) |
+
+| Multicolored lights | Color-shift blinking lights |
+| --- | --- |
+| ![fruit bowl multicolored lights](renderings-tests/fruit_bowl_multicolored_lights.png) | ![fruit bowl color shift blinking lights](renderings-tests/fruit_bowl_color_shift_blink.png) |
+
+[Multiple lights MP4](renderings-tests/fruit_bowl_multiple_lights.mp4) |
+[Blinking lights MP4](renderings-tests/fruit_bowl_blinking_lights.mp4) |
+[Multicolored lights MP4](renderings-tests/fruit_bowl_multicolored_lights.mp4) |
+[Color-shift blinking lights MP4](renderings-tests/fruit_bowl_color_shift_blink.mp4)
 
 ## Project Goals
 
@@ -224,6 +243,8 @@ The first renderer should prioritize correctness and clarity:
 - Back-face culling where useful.
 - Basic shaded triangles and primitive rasterization.
 - Optional wireframe and debug-depth modes.
+- Optional smoothed vertex lighting for generated primitives while collision
+  boundaries remain explicit and unchanged.
 
 Performance matters, but early optimization should not make the architecture
 opaque. When speed work is needed, prefer isolated accelerated paths behind a
@@ -233,6 +254,11 @@ The package already exposes a `Renderer` protocol and `RenderEngine` wrapper.
 The built-in `CPURenderer` is the correctness target. Future GPU renderers
 should implement the same renderer interface and be validated against the CPU
 backend using shared scenes and image/depth expectations.
+
+`RenderSettings(smooth_shading=True)` enables vertex-normal interpolation for
+generated primitives such as `Sphere` and `Bowl`. This is a visual-only render
+choice: collision still uses the active collider, which may be synced from the
+render geometry or overridden independently.
 
 Rendering is not limited to real-time windows. Offline rendering is a first
 class path: callers can render a `Scene` into a `PixelBuffer`, write it to disk,
@@ -363,10 +389,10 @@ pipeline.
 
 ### GPU Rendering Direction
 
-There is not a bundled GPU renderer yet. The intended path is to keep
-`Scene`, `Camera`, `Material`, `Light`, and `RenderSettings` stable, then add an
-optional renderer that implements the existing `Renderer` protocol. Good first
-GPU targets are:
+Accelerated renderer-core work now lives in the sibling `py_gpu` repository.
+The intended path is to keep `Scene`, `Camera`, `Material`, `Light`, and
+`RenderSettings` stable in this package, then let optional renderers implement
+the existing `Renderer` protocol. Good first GPU targets are:
 
 - Upload generated triangles and material data to a backend-managed mesh buffer.
 - Keep CPU `PixelBuffer` output available for screenshots, tests, and video.
@@ -375,12 +401,12 @@ GPU targets are:
 - Start with a practical backend such as OpenGL, WebGPU, or a native extension
   only after profiling shows the current CPU rasterizer is the bottleneck.
 
-The first scaffold is `GPURenderer`. Today it detects optional Python GPU
-packages and can fall back to the CPU renderer; strict mode raises a clear
-runtime error instead of pretending GPU rasterization is implemented.
-`build_gpu_scene_batch(scene, settings)` flattens renderable geometry into
-positions, colors, and triangle indices so a future backend has a concrete
-upload contract.
+The first in-package scaffold is `GPURenderer`. Today it detects optional
+Python GPU packages and can fall back to the CPU renderer; strict mode raises a
+clear runtime error instead of pretending GPU rasterization is implemented.
+`build_gpu_scene_batch(scene, settings)` remains as a compatibility helper, but
+new backend contracts should be added to `py_gpu` first and bridged back through
+adapters.
 
 ## Development
 
@@ -441,6 +467,13 @@ It renders a TV-textured high-poly sphere with `SurfacePerturbation` noise while
 using the current sphere collision model for motion. It writes
 `renderings-tests/bumpy_ball_physics.png`.
 
+Render the smoothed visual version or a video:
+
+```bash
+python examples/bumpy_ball_demo.py --smooth-shading --output renderings-tests/bumpy_ball_smooth.png
+python examples/render_bumpy_ball_video.py --video renderings-tests/bumpy_ball_physics.mp4 --frames 96 --fps 24
+```
+
 Generate the collision-boundary override sample:
 
 ```bash
@@ -455,10 +488,14 @@ Generate the kinematic fruit bowl sample:
 
 ```bash
 python examples/fruit_bowl_demo.py
+python examples/fruit_bowl_demo.py --light-mode blinking --output renderings-tests/fruit_bowl_blinking_lights.png
+python examples/fruit_bowl_demo.py --light-mode multicolor --output renderings-tests/fruit_bowl_multicolored_lights.png
+python examples/fruit_bowl_demo.py --light-mode color-shift-blink --output renderings-tests/fruit_bowl_color_shift_blink.png
 ```
 
-It drives a `KinematicBowl` up and down while several dynamic fruit spheres
-bounce inside it and collide with each other. The orange and lemon use visual
+It drives a `KinematicBowl` with repeatable sharp toss pulses while several
+dynamic fruit bodies bounce inside it and collide with each other. The orange
+and lemon use visual
 surface perturbation, the watermelon stays smooth, and the banana is a curved
 render mesh with a compound collision boundary generated from the same curved
 centerline. Fruit bodies use mass, inertia, friction, squishiness, and damping
@@ -481,6 +518,7 @@ Render a real video file:
 ```bash
 python examples/render_fruit_bowl_video.py --video renderings-tests/fruit_bowl.mp4 --frames 96 --fps 24
 python examples/render_fruit_bowl_video.py --video renderings-tests/fruit_bowl.mov --frames 96 --fps 24
+python examples/render_fruit_bowl_video.py --light-mode color-shift-blink --video renderings-tests/fruit_bowl_color_shift_blink.mp4 --frames 48 --fps 24
 ```
 
 This requires the FFmpeg command-line executable. `pip install ffmpeg` installs
@@ -544,6 +582,18 @@ centers and normals, computes camera projection constants once per frame, and
 uses direct depth/pixel writes in the triangle hot path. The live viewer also
 uses Tk's native integer image scaling when the render size fits the window by
 an exact whole-number scale.
+
+Run the GPU entry-point benchmark:
+
+```bash
+python examples/gpu_render_benchmark.py --frames 30 --width 320 --height 180
+```
+
+`py_3d` keeps a small `GPURenderer` compatibility scaffold, but accelerated
+renderer-core work now belongs in the sibling `py_gpu` package. That package
+owns reusable batch contracts, backend selection, optional NumPy acceleration,
+and future WebGPU/OpenGL experiments. `py_gpu.adapters.py3d.Py3DRasterRenderer`
+is the first bridge back into `py_3d` scenes.
 
 ## Testing Expectations
 

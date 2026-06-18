@@ -27,6 +27,7 @@ class RenderSettings:
     ambient: float = 0.08
     cull_backfaces: bool = False
     wireframe: bool = False
+    smooth_shading: bool = False
     sphere_segments: int = 16
     sphere_rings: int = 8
 
@@ -229,6 +230,7 @@ class CPURenderer:
         light_channels = _light_channels(scene, center, normal)
         color = triangle.material.shade(light_channels, ambient=settings.ambient)
         use_texture = triangle.material.texture is not None and triangle.has_texture_coordinates()
+        use_smooth_shading = settings.smooth_shading and triangle.has_vertex_normals()
         min_x = max(0, floor(min(a.x, b.x, c.x)))
         max_x = min(buffer.width - 1, ceil(max(a.x, b.x, c.x)))
         min_y = max(0, floor(min(a.y, b.y, c.y)))
@@ -259,14 +261,25 @@ class CPURenderer:
                 index = row_index + x
                 if z < depth_values[index]:
                     depth_values[index] = z
+                    active_light_channels = light_channels
+                    if use_smooth_shading:
+                        world_point = triangle.a * w0 + triangle.b * w1 + triangle.c * w2
+                        pixel_normal = _interpolate_normal(triangle, w0, w1, w2, normal)
+                        pixel_facing = pixel_normal.dot((camera.position - world_point).normalized(view_direction))
+                        if pixel_facing < 0.0:
+                            pixel_normal = -pixel_normal
+                        active_light_channels = _light_channels(scene, world_point, pixel_normal)
                     if use_texture:
                         uv = _interpolate_uv(triangle, w0, w1, w2)
                         texture_color = triangle.material.color_at(uv)
                         shaded = triangle.material.shade(
-                            light_channels,
+                            active_light_channels,
                             ambient=settings.ambient,
                             base_color=texture_color,
                         )
+                        pixels[index] = _apply_surface_attributes(shaded, triangle.material, x, y, z)
+                    elif use_smooth_shading:
+                        shaded = triangle.material.shade(active_light_channels, ambient=settings.ambient)
                         pixels[index] = _apply_surface_attributes(shaded, triangle.material, x, y, z)
                     else:
                         pixels[index] = _apply_surface_attributes(color, triangle.material, x, y, z)
@@ -355,6 +368,13 @@ def _interpolate_uv(triangle: Triangle, w0: float, w1: float, w2: float) -> tupl
         uv_a[0] * w0 + uv_b[0] * w1 + uv_c[0] * w2,
         uv_a[1] * w0 + uv_b[1] * w1 + uv_c[1] * w2,
     )
+
+
+def _interpolate_normal(triangle: Triangle, w0: float, w1: float, w2: float, fallback: Vec3) -> Vec3:
+    normal_a = triangle.normal_a or fallback
+    normal_b = triangle.normal_b or fallback
+    normal_c = triangle.normal_c or fallback
+    return (normal_a * w0 + normal_b * w1 + normal_c * w2).normalized(fallback)
 
 
 def _apply_surface_attributes(color: Color, material, x: int, y: int, depth: float) -> Color:

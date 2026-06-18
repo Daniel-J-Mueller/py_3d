@@ -30,6 +30,9 @@ behavior while the engine grows.
 - Keep CPU and GPU compatibility in mind early. The pure-Python CPU renderer is
   the behavioral reference; GPU renderers should match its public interface and
   be tested against equivalent scenes.
+- Keep reusable accelerated renderer-core work in the sibling `py_gpu` package
+  when possible. `py_3d` should keep scene, material, light, physics, and demo
+  behavior clean, then bridge to `py_gpu` through optional adapters.
 - Avoid mandatory heavy dependencies unless the project has a clear need and
   tests that justify them.
 - Do not add a framework-scale abstraction just because one might be useful
