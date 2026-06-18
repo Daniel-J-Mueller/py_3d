@@ -29,9 +29,9 @@ in `renderings-tests/` so visual changes are easy to inspect.
 | --- | --- | --- |
 | ![texture test](renderings-tests/texture_tv_test.png) | ![textured sphere and polygons](renderings-tests/textured_sphere_polygons.png) | ![physics ramp wall](renderings-tests/physics_ramp_wall.png) |
 
-| Floor bounce | Wall bank |
-| --- | --- |
-| ![physics floor bounce](renderings-tests/physics_floor_bounce.png) | ![physics wall bank](renderings-tests/physics_wall_bank.png) |
+| Floor bounce | Wall bank | Bumpy ball |
+| --- | --- | --- |
+| ![physics floor bounce](renderings-tests/physics_floor_bounce.png) | ![physics wall bank](renderings-tests/physics_wall_bank.png) | ![bumpy ball physics](renderings-tests/bumpy_ball_physics.png) |
 
 ## Project Goals
 
@@ -186,6 +186,12 @@ For example, `Material.roughness` changes the rendered surface, while
 `SphereBody.friction` or `StaticPlane.restitution` changes motion and contact
 response.
 
+Generated geometry can also be perturbed. `SurfacePerturbation` uses
+deterministic fractal value noise to move generated vertices along their local
+surface normal, so a high-poly sphere can become visually bumpy while keeping
+its UV mapping. Current physics still treats that object as a sphere unless a
+future collision primitive explicitly uses the perturbed mesh.
+
 ### Lights
 
 Lights should be data-first and explicit:
@@ -261,6 +267,7 @@ py_3d/
   lights.py        # Lamp, Sun, and lighting utilities
   materials.py     # Material definitions
   math3d.py        # Vectors, matrices, transforms, numeric helpers
+  noise.py         # Deterministic procedural noise and surface perturbation
   overlays.py      # Text bulletins and future overlay primitives
   physics.py       # Bodies, world stepping, constraints over time
   primitives.py    # Drawable and collidable primitive data types
@@ -276,7 +283,7 @@ split them when a file starts mixing unrelated responsibilities.
 
 Current implemented modules are `buffer`, `camera`, `color`, `draw`,
 `importers`, `lights`, `materials`, `math3d`, `overlays`, `physics`,
-`primitives`, `render`, `scene`, and `textures`.
+`noise`, `primitives`, `render`, `scene`, and `textures`.
 
 ## Performance Direction
 
@@ -343,6 +350,16 @@ the same image onto a polygon panel using planar projection, and includes rough
 and fuzzy polygon materials. It writes
 `renderings-tests/textured_sphere_polygons.png`.
 
+Generate the bumpy ball physics sample:
+
+```bash
+python examples/bumpy_ball_demo.py
+```
+
+It renders a TV-textured high-poly sphere with `SurfacePerturbation` noise while
+using the current sphere collision model for motion. It writes
+`renderings-tests/bumpy_ball_physics.png`.
+
 Run the live navigation example:
 
 ```bash
@@ -377,7 +394,8 @@ python examples/physics_gallery.py
 ```
 
 It writes `physics_ramp_wall.png`, `physics_floor_bounce.png`, and
-`physics_wall_bank.png` to `renderings-tests/`.
+`physics_wall_bank.png` to `renderings-tests/`, plus
+`physics_bumpy_ball.png` for a visual-noise rolling ball.
 
 Run the CPU renderer benchmark:
 
@@ -455,6 +473,9 @@ sources.
 - Expand procedural surface attributes such as roughness, fuzziness, grain,
   normal-like perturbation, and material presets while keeping them independent
   from physics attributes.
+- Add collision modes that can optionally account for perturbed geometry or
+  sampled height fields. Keep simple sphere/box/plane collision fast and
+  available as the default.
 
 ## Design Principle
 

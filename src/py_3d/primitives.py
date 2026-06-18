@@ -8,6 +8,7 @@ from typing import Iterable
 
 from .materials import Material
 from .math3d import Vec3, as_vec3
+from .noise import SurfacePerturbation
 
 
 @dataclass(frozen=True)
@@ -118,6 +119,7 @@ class Sphere:
     center: Vec3 | tuple[float, float, float]
     radius: float
     material: Material = Material()
+    perturbation: SurfacePerturbation | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "center", as_vec3(self.center))
@@ -137,14 +139,13 @@ class Sphere:
             row = []
             for segment in range(segments):
                 theta = 2.0 * pi * segment / segments
-                row.append(
-                    self.center
-                    + Vec3(
-                        self.radius * sin(phi) * cos(theta),
-                        self.radius * cos(phi),
-                        self.radius * sin(phi) * sin(theta),
-                    )
+                normal = Vec3(
+                    sin(phi) * cos(theta),
+                    cos(phi),
+                    sin(phi) * sin(theta),
                 )
+                radius = self._radius_at(normal)
+                row.append(self.center + normal * radius)
             vertices.append(row)
 
         triangles: list[Triangle] = []
@@ -184,6 +185,11 @@ class Sphere:
                         )
                     )
         return tuple(triangles)
+
+    def _radius_at(self, normal: Vec3) -> float:
+        if self.perturbation is None:
+            return self.radius
+        return max(0.001, self.radius + self.perturbation.displacement(normal))
 
 
 @dataclass(frozen=True)

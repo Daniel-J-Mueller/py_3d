@@ -1,4 +1,4 @@
-from py_3d import Material, Sphere, Triangle, planar_project_triangles
+from py_3d import Material, Sphere, SurfacePerturbation, Triangle, ValueNoise3D, planar_project_triangles
 
 
 def test_sphere_generates_texture_coordinates():
@@ -35,3 +35,27 @@ def test_material_surface_attributes_are_visual_not_physics():
     assert material.fuzziness == 0.0
     assert not hasattr(material, "friction")
     assert not hasattr(material, "restitution")
+
+
+def test_value_noise_is_deterministic():
+    noise = ValueNoise3D(seed=42)
+
+    first = noise.sample((1.25, 2.5, -0.75))
+    second = noise.sample((1.25, 2.5, -0.75))
+
+    assert first == second
+    assert 0.0 <= first <= 1.0
+
+
+def test_surface_perturbation_changes_sphere_geometry_and_keeps_uvs():
+    plain = Sphere((0, 0, 0), 1.0, Material())
+    bumpy = Sphere((0, 0, 0), 1.0, Material(), SurfacePerturbation(magnitude=0.2, scale=3.0, seed=7))
+
+    plain_distances = sorted(round(vertex.length(), 4) for triangle in plain.to_triangles(segments=12, rings=6) for vertex in (triangle.a, triangle.b, triangle.c))
+    bumpy_triangles = bumpy.to_triangles(segments=12, rings=6)
+    bumpy_distances = sorted(round(vertex.length(), 4) for triangle in bumpy_triangles for vertex in (triangle.a, triangle.b, triangle.c))
+
+    assert plain_distances != bumpy_distances
+    assert min(bumpy_distances) >= 0.8
+    assert max(bumpy_distances) <= 1.2
+    assert all(triangle.has_texture_coordinates() for triangle in bumpy_triangles)

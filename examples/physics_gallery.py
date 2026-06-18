@@ -18,6 +18,7 @@ from py_3d import (
     StaticBox,
     StaticPlane,
     Sun,
+    SurfacePerturbation,
     TextBulletin,
 )
 
@@ -143,6 +144,47 @@ def save_wall_bank() -> None:
     render(scene, "physics_wall_bank.png", Camera(position=(0.0, 1.7, -4.8), target=(0.1, 0.45, 0.0), fov_degrees=50))
 
 
+def save_bumpy_ball() -> None:
+    ball = SphereBody(
+        position=(-2.15, 1.3, 0.0),
+        radius=0.34,
+        restitution=0.45,
+        friction=0.05,
+        material=Material(color=(230, 95, 70), roughness=0.35, fuzziness=0.4),
+        visual_perturbation=SurfacePerturbation(magnitude=0.08, scale=3.2, seed=22, octaves=4),
+    )
+    ramp = StaticPlane(
+        point=(0.0, 0.0, 0.0),
+        normal=(0.34, 1.0, 0.0),
+        friction=0.06,
+        restitution=0.18,
+        material=Material(color=(75, 145, 95), roughness=0.45, fuzziness=0.2),
+        size=5.8,
+    )
+    wall = StaticBox(
+        center=(2.15, 0.5, 0.0),
+        size=(0.28, 1.6, 2.1),
+        restitution=0.65,
+        friction=0.04,
+        material=Material(color=(170, 175, 190), roughness=0.55),
+    )
+    world = PhysicsWorld(gravity=(0.0, -9.81, 0.0))
+    world.add_sphere(ball)
+    world.add_plane(ramp)
+    world.add_box(wall)
+
+    path = [ball.position]
+    for step in range(300):
+        world.step(1.0 / 60.0, substeps=2)
+        if step % 6 == 0:
+            path.append(ball.position)
+
+    scene = base_scene("BUMPY BALL\nVISUAL NOISE")
+    scene.add(ramp.to_primitive(), wall.to_primitive(), ball.to_primitive())
+    add_path(scene, path)
+    render(scene, "physics_bumpy_ball.png", Camera(position=(0.25, 2.2, -5.5), target=(0.2, 0.45, 0.0), fov_degrees=48))
+
+
 def base_scene(label: str) -> Scene:
     scene = Scene()
     scene.add_light(Sun(direction=(-0.4, -0.8, -1.0), color=(255, 245, 230), intensity=0.9))
@@ -172,6 +214,7 @@ def main() -> None:
     save_ramp_wall()
     save_floor_bounce()
     save_wall_bank()
+    save_bumpy_ball()
 
 
 if __name__ == "__main__":

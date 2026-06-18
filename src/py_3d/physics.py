@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from .materials import Material
 from .math3d import Vec3, as_vec3, clamp
+from .noise import SurfacePerturbation
 from .primitives import Box, Plane, Sphere
 
 
@@ -20,6 +21,7 @@ class SphereBody:
     restitution: float = 0.35
     friction: float = 0.2
     material: Material = Material()
+    visual_perturbation: SurfacePerturbation | None = None
 
     def __post_init__(self) -> None:
         self.position = as_vec3(self.position)
@@ -32,7 +34,7 @@ class SphereBody:
         self.friction = clamp(float(self.friction), 0.0, 1.0)
 
     def to_primitive(self) -> Sphere:
-        return Sphere(self.position, self.radius, self.material)
+        return Sphere(self.position, self.radius, self.material, self.visual_perturbation)
 
 
 @dataclass(frozen=True)

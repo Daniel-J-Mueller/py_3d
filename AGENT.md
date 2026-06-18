@@ -80,6 +80,9 @@ behavior while the engine grows.
   from physics attributes, such as friction and restitution.
 - Use `planar_project_triangles` for simple face-centered texture projection
   workflows before inventing heavier UV unwrapping abstractions.
+- Treat `SurfacePerturbation` as generated geometry. It can make a sphere look
+  bumpy, but it should not silently change physics collision behavior. Add
+  explicit collision modes later for perturbed meshes or height fields.
 
 ## Collision and Physics Guidance
 

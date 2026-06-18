@@ -8,6 +8,7 @@ from .importers import load_obj, load_stl
 from .lights import Lamp, LightSample, Sun
 from .materials import Material
 from .math3d import Vec3, as_vec3, clamp
+from .noise import FractalNoise3D, SurfacePerturbation, ValueNoise3D
 from .overlays import TextBulletin
 from .physics import PhysicsWorld, SphereBody, StaticBox, StaticPlane, World
 from .primitives import Box, Line3, Mesh, Plane, Point3, Sphere, Triangle
@@ -39,9 +40,12 @@ __all__ = [
     "SphereBody",
     "StaticBox",
     "StaticPlane",
+    "FractalNoise3D",
+    "SurfacePerturbation",
     "Sun",
     "TextBulletin",
     "Triangle",
+    "ValueNoise3D",
     "Vec3",
     "World",
     "as_vec3",
