@@ -5,7 +5,7 @@ from .camera import Camera, ProjectedPoint
 from .collision import BowlCollider, BoxCollider, CompoundSphereCollider, PlaneCollider, SphereCollider
 from .color import Color
 from . import draw
-from .gpu import GPURenderer, detect_gpu_backends
+from .gpu import GPURenderer, GPUSceneBatch, build_gpu_scene_batch, detect_gpu_backends
 from .importers import load_obj, load_stl
 from .lights import Lamp, LightSample, Sun
 from .materials import Material
@@ -29,6 +29,7 @@ __all__ = [
     "Color",
     "DepthBuffer",
     "GPURenderer",
+    "GPUSceneBatch",
     "Lamp",
     "LightSample",
     "Line3",
@@ -59,6 +60,7 @@ __all__ = [
     "Vec3",
     "World",
     "as_vec3",
+    "build_gpu_scene_batch",
     "clamp",
     "draw",
     "detect_gpu_backends",

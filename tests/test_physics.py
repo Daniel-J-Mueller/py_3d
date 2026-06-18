@@ -203,6 +203,13 @@ def test_sphere_body_has_default_moment_of_inertia():
     assert body.kinetic_friction == body.friction
 
 
+def test_dampening_alias_sets_damping():
+    body = SphereBody(position=(0, 0, 0), radius=0.5, dampening=0.35)
+
+    assert body.damping == 0.35
+    assert body.dampening == 0.35
+
+
 def test_floor_contact_adds_rolling_angular_velocity():
     body = SphereBody(
         position=(0, 0.2, 0),
@@ -239,3 +246,29 @@ def test_compound_sphere_collider_drives_contact_from_offsets():
 
     assert body.position.y >= 0.18
     assert body.collision_radius() > body.radius
+
+
+def test_squishy_contact_damps_rebound_and_allows_give():
+    hard = SphereBody(position=(0, 0.15, 0), radius=0.3, velocity=(0, -1, 0), restitution=1.0)
+    soft = SphereBody(
+        position=(0, 0.15, 0),
+        radius=0.3,
+        velocity=(0, -1, 0),
+        restitution=1.0,
+        squishiness=0.8,
+        damping=0.45,
+    )
+    floor = StaticPlane(point=(0, 0, 0), normal=(0, 1, 0), restitution=1.0)
+    hard_world = PhysicsWorld(gravity=(0, 0, 0))
+    hard_world.add_sphere(hard)
+    hard_world.add_plane(floor)
+    soft_world = PhysicsWorld(gravity=(0, 0, 0))
+    soft_world.add_sphere(soft)
+    soft_world.add_plane(floor)
+
+    hard_world.step(0.05)
+    soft_world.step(0.05)
+
+    assert hard.position.y >= hard.radius
+    assert soft.position.y < soft.radius
+    assert 0.0 < soft.velocity.y < hard.velocity.y

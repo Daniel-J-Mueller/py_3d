@@ -19,18 +19,21 @@ class SphereBody:
     position: Vec3 | tuple[float, float, float]
     radius: float
     velocity: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
-    angular_velocity: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
-    rotation: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
     mass: float = 1.0
-    moment_of_inertia: float | None = None
     restitution: float = 0.35
     friction: float = 0.2
-    static_friction: float | None = None
-    kinetic_friction: float | None = None
-    rolling_resistance: float = 0.015
     material: Material = Material()
     visual_perturbation: SurfacePerturbation | None = None
     collision_boundary: SphereCollider | CompoundSphereCollider | None = None
+    angular_velocity: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
+    rotation: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
+    moment_of_inertia: float | None = None
+    static_friction: float | None = None
+    kinetic_friction: float | None = None
+    rolling_resistance: float = 0.015
+    squishiness: float = 0.0
+    damping: float = 0.0
+    dampening: float | None = None
 
     def __post_init__(self) -> None:
         self.position = as_vec3(self.position)
@@ -50,6 +53,9 @@ class SphereBody:
         self.static_friction = clamp(float(self.static_friction if self.static_friction is not None else self.friction), 0.0, 1.0)
         self.kinetic_friction = clamp(float(self.kinetic_friction if self.kinetic_friction is not None else self.friction), 0.0, 1.0)
         self.rolling_resistance = clamp(float(self.rolling_resistance), 0.0, 1.0)
+        self.squishiness = clamp(float(self.squishiness), 0.0, 1.0)
+        self.damping = clamp(float(self.dampening if self.dampening is not None else self.damping), 0.0, 1.0)
+        self.dampening = self.damping
 
     def to_primitive(self) -> Sphere:
         return Sphere(self.position, self.radius, self.material, self.visual_perturbation)
@@ -99,12 +105,19 @@ class StaticPlane:
     material: Material = Material()
     size: float | None = None
     collision_boundary: PlaneCollider | None = None
+    squishiness: float = 0.0
+    damping: float = 0.0
+    dampening: float | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "point", as_vec3(self.point))
         object.__setattr__(self, "normal", as_vec3(self.normal).normalized(Vec3(0.0, 1.0, 0.0)))
         object.__setattr__(self, "friction", clamp(float(self.friction), 0.0, 1.0))
         object.__setattr__(self, "restitution", clamp(float(self.restitution), 0.0, 1.0))
+        object.__setattr__(self, "squishiness", clamp(float(self.squishiness), 0.0, 1.0))
+        damping = self.dampening if self.dampening is not None else self.damping
+        object.__setattr__(self, "damping", clamp(float(damping), 0.0, 1.0))
+        object.__setattr__(self, "dampening", self.damping)
 
     def to_primitive(self) -> Plane:
         return Plane(self.point, self.normal, self.material, self.size)
@@ -133,6 +146,9 @@ class StaticBox:
     restitution: float = 0.25
     material: Material = Material()
     collision_boundary: BoxCollider | None = None
+    squishiness: float = 0.0
+    damping: float = 0.0
+    dampening: float | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "center", as_vec3(self.center))
@@ -141,6 +157,10 @@ class StaticBox:
             raise ValueError("static box size components must be positive")
         object.__setattr__(self, "friction", clamp(float(self.friction), 0.0, 1.0))
         object.__setattr__(self, "restitution", clamp(float(self.restitution), 0.0, 1.0))
+        object.__setattr__(self, "squishiness", clamp(float(self.squishiness), 0.0, 1.0))
+        damping = self.dampening if self.dampening is not None else self.damping
+        object.__setattr__(self, "damping", clamp(float(damping), 0.0, 1.0))
+        object.__setattr__(self, "dampening", self.damping)
 
     def to_primitive(self) -> Box:
         return Box(self.center, self.size, self.material)
@@ -179,6 +199,9 @@ class KinematicBowl:
     material: Material = Material()
     depth: float = 1.0
     collision_boundary: BowlCollider | None = None
+    squishiness: float = 0.0
+    damping: float = 0.0
+    dampening: float | None = None
 
     def __post_init__(self) -> None:
         self.center = as_vec3(self.center)
@@ -189,6 +212,9 @@ class KinematicBowl:
             raise ValueError("kinematic bowl depth must be in the range (0, 1]")
         self.friction = clamp(float(self.friction), 0.0, 1.0)
         self.restitution = clamp(float(self.restitution), 0.0, 1.0)
+        self.squishiness = clamp(float(self.squishiness), 0.0, 1.0)
+        self.damping = clamp(float(self.dampening if self.dampening is not None else self.damping), 0.0, 1.0)
+        self.dampening = self.damping
 
     def set_center(self, center: Vec3 | tuple[float, float, float], dt: float | None = None) -> None:
         next_center = as_vec3(center)
@@ -299,10 +325,9 @@ def _resolve_sphere_plane(sphere: SphereBody, plane: StaticPlane, dt: float) -> 
         if distance >= sphere_radius:
             continue
         penetration = sphere_radius - distance
-        sphere.position = sphere.position + plane_collider.normal * penetration
-        normal_speed = sphere.velocity.dot(plane_collider.normal)
-        if normal_speed < 0.0:
-            sphere.velocity = sphere.velocity - plane_collider.normal * ((1.0 + sphere.restitution * plane.restitution) * normal_speed)
+        correction = _soft_penetration_correction(penetration, sphere_radius, sphere, plane)
+        sphere.position = sphere.position + plane_collider.normal * correction
+        _apply_kinematic_normal_impulse(sphere, plane_collider.normal, Vec3(0.0, 0.0, 0.0), plane, contact_arm)
         _apply_contact_friction(sphere, plane_collider.normal, Vec3(0.0, 0.0, 0.0), plane.friction, contact_arm, dt)
 
 
@@ -328,11 +353,10 @@ def _resolve_sphere_box(sphere: SphereBody, box: StaticBox, dt: float) -> None:
         contact_arm = sphere_center - sphere.position - normal * sphere_radius
         distance = distance_squared ** 0.5
         penetration = sphere_radius - distance if distance > 0.0 else sphere_radius
-        sphere.position = sphere.position + normal * penetration
+        correction = _soft_penetration_correction(penetration, sphere_radius, sphere, box)
+        sphere.position = sphere.position + normal * correction
 
-        normal_speed = sphere.velocity.dot(normal)
-        if normal_speed < 0.0:
-            sphere.velocity = sphere.velocity - normal * ((1.0 + sphere.restitution * box.restitution) * normal_speed)
+        _apply_kinematic_normal_impulse(sphere, normal, Vec3(0.0, 0.0, 0.0), box, contact_arm)
         _apply_contact_friction(sphere, normal, Vec3(0.0, 0.0, 0.0), box.friction, contact_arm, dt)
 
 
@@ -349,9 +373,12 @@ def _resolve_sphere_bowl(sphere: SphereBody, bowl: KinematicBowl, dt: float) -> 
             if distance + sphere_radius > radius:
                 normal = local.normalized(Vec3(0.0, -1.0, 0.0))
                 penetration = distance + sphere_radius - radius
-                sphere.position = sphere.position - normal * penetration
-                contact_arm = component_offset - normal * sphere_radius
-                _bounce_against_kinematic_surface(sphere, bowl, normal, contact_arm, dt, outward_speed=True)
+                push_normal = -normal
+                correction = _soft_penetration_correction(penetration, sphere_radius, sphere, bowl)
+                sphere.position = sphere.position + push_normal * correction
+                contact_arm = component_offset + push_normal * sphere_radius
+                _apply_kinematic_normal_impulse(sphere, push_normal, bowl.velocity, bowl, contact_arm)
+                _apply_contact_friction(sphere, push_normal, bowl.velocity, bowl.friction, contact_arm, dt)
 
         sphere_center = sphere.position + component_offset
         local = sphere_center - bowl_center
@@ -363,9 +390,11 @@ def _resolve_sphere_bowl(sphere: SphereBody, bowl: KinematicBowl, dt: float) -> 
         bottom_contact_radius = bottom_radius + sphere_radius
         if local.y < bottom_y - bowl_center.y + sphere_radius and horizontal_distance_squared <= bottom_contact_radius * bottom_contact_radius:
             penetration = bottom_y + sphere_radius - sphere_center.y
-            sphere.position = sphere.position + Vec3(0.0, penetration, 0.0)
+            correction = _soft_penetration_correction(penetration, sphere_radius, sphere, bowl)
+            sphere.position = sphere.position + Vec3(0.0, correction, 0.0)
             contact_arm = component_offset - Vec3(0.0, sphere_radius, 0.0)
-            _bounce_against_kinematic_surface(sphere, bowl, Vec3(0.0, 1.0, 0.0), contact_arm, dt, outward_speed=False)
+            _apply_kinematic_normal_impulse(sphere, Vec3(0.0, 1.0, 0.0), bowl.velocity, bowl, contact_arm)
+            _apply_contact_friction(sphere, Vec3(0.0, 1.0, 0.0), bowl.velocity, bowl.friction, contact_arm, dt)
 
 
 def _resolve_sphere_sphere(first: SphereBody, second: SphereBody, dt: float) -> None:
@@ -392,9 +421,10 @@ def _resolve_sphere_sphere(first: SphereBody, second: SphereBody, dt: float) -> 
                 distance = distance_squared ** 0.5
                 normal = delta / distance
             penetration = radius_sum - distance
+            correction = _soft_penetration_correction(penetration, min(first_radius, second_radius), first, second)
 
-            first.position = first.position - normal * (penetration * first_inverse_mass / total_inverse_mass)
-            second.position = second.position + normal * (penetration * second_inverse_mass / total_inverse_mass)
+            first.position = first.position - normal * (correction * first_inverse_mass / total_inverse_mass)
+            second.position = second.position + normal * (correction * second_inverse_mass / total_inverse_mass)
 
             first_contact_velocity = first.velocity + first.angular_velocity.cross(first_offset)
             second_contact_velocity = second.velocity + second.angular_velocity.cross(second_offset)
@@ -402,37 +432,70 @@ def _resolve_sphere_sphere(first: SphereBody, second: SphereBody, dt: float) -> 
             normal_speed = relative_velocity.dot(normal)
             if normal_speed >= 0.0:
                 continue
-            restitution = first.restitution * second.restitution
-            impulse_strength = -((1.0 + restitution) * normal_speed) / total_inverse_mass
+            restitution = _effective_restitution(first, second)
+            first_inverse_inertia = first.inverse_moment_of_inertia()
+            second_inverse_inertia = second.inverse_moment_of_inertia()
+            effective_inverse_mass = (
+                total_inverse_mass
+                + first_offset.cross(normal).length_squared() * first_inverse_inertia
+                + second_offset.cross(normal).length_squared() * second_inverse_inertia
+            )
+            if effective_inverse_mass <= 0.0:
+                continue
+            impulse_strength = -((1.0 + restitution) * normal_speed) / effective_inverse_mass
             impulse = normal * impulse_strength
             first.velocity = first.velocity - impulse * first_inverse_mass
             second.velocity = second.velocity + impulse * second_inverse_mass
-            first.angular_velocity = first.angular_velocity - first_offset.cross(impulse) * first.inverse_moment_of_inertia()
-            second.angular_velocity = second.angular_velocity + second_offset.cross(impulse) * second.inverse_moment_of_inertia()
+            first.angular_velocity = first.angular_velocity - first_offset.cross(impulse) * first_inverse_inertia
+            second.angular_velocity = second.angular_velocity + second_offset.cross(impulse) * second_inverse_inertia
             _apply_pair_friction(first, second, normal, first_offset, second_offset, dt)
 
 
-def _bounce_against_kinematic_surface(
+def _contact_squishiness(first, second) -> float:
+    return clamp((getattr(first, "squishiness", 0.0) + getattr(second, "squishiness", 0.0)) * 0.5, 0.0, 1.0)
+
+
+def _contact_damping(first, second) -> float:
+    explicit = (getattr(first, "damping", 0.0) + getattr(second, "damping", 0.0)) * 0.5
+    squish_coupling = _contact_squishiness(first, second) * 0.55
+    return clamp(explicit + squish_coupling, 0.0, 1.0)
+
+
+def _effective_restitution(first, second) -> float:
+    bounce = getattr(first, "restitution", 0.0) * getattr(second, "restitution", 0.0)
+    return clamp(bounce * (1.0 - _contact_damping(first, second)), 0.0, 1.0)
+
+
+def _soft_penetration_correction(penetration: float, contact_radius: float, first, second) -> float:
+    squishiness = _contact_squishiness(first, second)
+    allowance = max(0.0, contact_radius) * squishiness * 0.45
+    stiffness = 1.0 - squishiness * 0.7
+    return max(0.0, penetration - allowance) * stiffness
+
+
+def _apply_kinematic_normal_impulse(
     sphere: SphereBody,
-    bowl: KinematicBowl,
     normal: Vec3,
+    surface_velocity: Vec3,
+    surface,
     contact_arm: Vec3,
-    dt: float,
-    *,
-    outward_speed: bool,
 ) -> None:
-    relative_velocity = sphere.velocity - bowl.velocity
+    contact_velocity = sphere.velocity + sphere.angular_velocity.cross(contact_arm)
+    relative_velocity = contact_velocity - surface_velocity
     normal_speed = relative_velocity.dot(normal)
-    if outward_speed:
-        if normal_speed <= 0.0:
-            return
-    elif normal_speed >= 0.0:
+    if normal_speed >= 0.0:
         return
 
-    restitution = sphere.restitution * bowl.restitution
-    reflected = relative_velocity - normal * ((1.0 + restitution) * normal_speed)
-    sphere.velocity = bowl.velocity + reflected
-    _apply_contact_friction(sphere, normal, bowl.velocity, bowl.friction, contact_arm, dt)
+    inverse_inertia = sphere.inverse_moment_of_inertia()
+    effective_inverse_mass = sphere.inverse_mass() + contact_arm.cross(normal).length_squared() * inverse_inertia
+    if effective_inverse_mass <= 0.0:
+        return
+
+    restitution = _effective_restitution(sphere, surface)
+    impulse_strength = -((1.0 + restitution) * normal_speed) / effective_inverse_mass
+    impulse = normal * impulse_strength
+    sphere.velocity = sphere.velocity + impulse * sphere.inverse_mass()
+    sphere.angular_velocity = sphere.angular_velocity + contact_arm.cross(impulse) * inverse_inertia
 
 
 def _apply_contact_friction(
@@ -507,8 +570,12 @@ def _apply_pair_friction(
 
 
 def _integrate_angular_state(sphere: SphereBody, dt: float) -> None:
+    if sphere.damping > 0.0:
+        sphere.velocity = sphere.velocity * max(0.0, 1.0 - sphere.damping * dt)
     if sphere.rolling_resistance > 0.0:
         sphere.angular_velocity = sphere.angular_velocity * max(0.0, 1.0 - sphere.rolling_resistance * dt)
+    if sphere.damping > 0.0:
+        sphere.angular_velocity = sphere.angular_velocity * max(0.0, 1.0 - sphere.damping * 2.0 * dt)
     sphere.rotation = sphere.rotation + sphere.angular_velocity * dt
 
 

@@ -41,6 +41,10 @@ in `renderings-tests/` so visual changes are easy to inspect.
 | --- |
 | ![kinematic fruit bowl](renderings-tests/fruit_bowl.png) |
 
+<video src="renderings-tests/fruit_bowl.mp4" controls width="640"></video>
+
+[View the fruit bowl MP4](renderings-tests/fruit_bowl.mp4)
+
 ## Project Goals
 
 - Provide a clean Python API for 3D pixel drawing on Windows and Linux.
@@ -296,6 +300,10 @@ Dynamic bodies now expose early rigid-body controls:
 - `static_friction` and `kinetic_friction`: explicit coefficients. The older
   `friction` field remains as a simple default for both.
 - `rolling_resistance`: small damping for angular velocity.
+- `squishiness`: contact softness. Higher values allow more temporary give
+  before positional correction.
+- `damping` / `dampening`: contact-energy loss. This is coupled with
+  `squishiness`, so softer objects rebound less and tend to plop.
 
 Contact friction now applies tangential impulses at the contact point, so a
 sphere on a surface can pick up spin instead of only strafing. This is still a
@@ -370,6 +378,9 @@ GPU targets are:
 The first scaffold is `GPURenderer`. Today it detects optional Python GPU
 packages and can fall back to the CPU renderer; strict mode raises a clear
 runtime error instead of pretending GPU rasterization is implemented.
+`build_gpu_scene_batch(scene, settings)` flattens renderable geometry into
+positions, colors, and triangle indices so a future backend has a concrete
+upload contract.
 
 ## Development
 
@@ -450,7 +461,8 @@ It drives a `KinematicBowl` up and down while several dynamic fruit spheres
 bounce inside it and collide with each other. The orange and lemon use visual
 surface perturbation, the watermelon stays smooth, and the banana is a curved
 render mesh with a compound collision boundary generated from the same curved
-centerline. It writes
+centerline. Fruit bodies use mass, inertia, friction, squishiness, and damping
+so collisions read more like soft produce than hard billiard balls. It writes
 `renderings-tests/fruit_bowl.png`.
 
 Run the live fruit bowl viewer:

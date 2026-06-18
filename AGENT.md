@@ -107,6 +107,9 @@ behavior while the engine grows.
 - Preserve angular state when changing dynamic bodies. `mass`,
   `moment_of_inertia`, `static_friction`, `kinetic_friction`,
   `angular_velocity`, and `rotation` are part of the early rolling model.
+- Preserve soft-contact behavior when tuning physics. `squishiness` controls
+  temporary give in contacts; `damping`/`dampening` controls energy loss and is
+  coupled to squishiness for plopping behavior.
 - For non-spherical visual objects, prefer a render-derived compound boundary
   such as `CompoundSphereCollider` before falling back to one oversized sphere.
 - Add pairwise dynamic contacts only when tested. Sphere-sphere collision is the

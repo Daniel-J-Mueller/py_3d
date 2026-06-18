@@ -7,7 +7,8 @@ from importlib.util import find_spec
 
 from .buffer import PixelBuffer
 from .camera import Camera
-from .render import CPURenderer, RenderSettings, Renderer
+from .color import Color
+from .render import CPURenderer, RenderSettings, Renderer, _triangles_for
 from .scene import Scene
 
 
@@ -20,6 +21,31 @@ def detect_gpu_backends() -> tuple[str, ...]:
         ("OpenGL", "PyOpenGL"),
     )
     return tuple(label for module_name, label in candidates if find_spec(module_name) is not None)
+
+
+@dataclass(frozen=True)
+class GPUSceneBatch:
+    """Flattened triangle data ready for a future GPU upload path."""
+
+    positions: tuple[tuple[float, float, float], ...]
+    colors: tuple[Color, ...]
+    indices: tuple[tuple[int, int, int], ...]
+
+
+def build_gpu_scene_batch(scene: Scene, settings: RenderSettings | None = None) -> GPUSceneBatch:
+    """Flatten renderable scene geometry into triangle buffers."""
+
+    active_settings = settings or RenderSettings()
+    positions: list[tuple[float, float, float]] = []
+    colors: list[Color] = []
+    indices: list[tuple[int, int, int]] = []
+    for obj in scene.objects:
+        for triangle in _triangles_for(obj, active_settings):
+            index = len(positions)
+            positions.extend((triangle.a.as_tuple(), triangle.b.as_tuple(), triangle.c.as_tuple()))
+            colors.extend((triangle.material.color, triangle.material.color, triangle.material.color))
+            indices.append((index, index + 1, index + 2))
+    return GPUSceneBatch(tuple(positions), tuple(colors), tuple(indices))
 
 
 @dataclass
@@ -40,6 +66,9 @@ class GPURenderer:
         if self.fallback_renderer is None:
             self.fallback_renderer = CPURenderer()
         self.detected_backends = detect_gpu_backends()
+
+    def prepare(self, scene: Scene, settings: RenderSettings | None = None) -> GPUSceneBatch:
+        return build_gpu_scene_batch(scene, settings)
 
     @property
     def is_accelerated(self) -> bool:

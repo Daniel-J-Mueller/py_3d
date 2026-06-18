@@ -1,6 +1,6 @@
 import pytest
 
-from py_3d import Bowl, Box, CPURenderer, Camera, Color, GPURenderer, Lamp, Material, PixelBuffer, Plane, RenderEngine, RenderSettings, Scene, Sphere, Sun, TextBulletin, Triangle
+from py_3d import Bowl, Box, CPURenderer, Camera, Color, GPURenderer, Lamp, Material, PixelBuffer, Plane, RenderEngine, RenderSettings, Scene, Sphere, Sun, TextBulletin, Triangle, build_gpu_scene_batch
 
 
 def test_cpu_renderer_renders_triangle_offscreen():
@@ -125,6 +125,17 @@ def test_gpu_renderer_scaffold_strict_mode_is_explicit():
 
     with pytest.raises(RuntimeError, match="GPU renderer scaffold"):
         RenderEngine(GPURenderer(allow_cpu_fallback=False)).render(scene, camera, RenderSettings(width=8, height=8))
+
+
+def test_gpu_scene_batch_flattens_triangle_geometry():
+    scene = Scene()
+    scene.add(Triangle((0, 0, 0), (1, 0, 0), (0, 1, 0), Material(color=(10, 20, 30))))
+
+    batch = build_gpu_scene_batch(scene, RenderSettings(width=8, height=8))
+
+    assert batch.positions == ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0), (0.0, 1.0, 0.0))
+    assert batch.indices == ((0, 1, 2),)
+    assert all(color == Color(10, 20, 30) for color in batch.colors)
 
 
 def test_textured_triangles_render_from_png_asset():
