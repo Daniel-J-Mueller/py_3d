@@ -20,6 +20,7 @@ from .physics import KinematicBowl, PhysicsWorld, SphereBody, StaticBox, StaticP
 from .primitives import BlobSurface, Bowl, Box, Capsule, HangingConeLampPrimitive, LampPrimitive, Line3, Mesh, Plane, Point3, Sphere, Triangle
 from .render import CPURenderer, RenderEngine, RenderSettings, Renderer
 from .scene import Scene
+from .sky import SkyPrefab
 from .textures import planar_project_triangles
 
 __all__ = [
@@ -70,6 +71,7 @@ __all__ = [
     "StaticBox",
     "StaticPlane",
     "FractalNoise3D",
+    "SkyPrefab",
     "SurfacePerturbation",
     "Sun",
     "TextBulletin",

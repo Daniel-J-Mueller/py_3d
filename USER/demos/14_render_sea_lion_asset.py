@@ -1,4 +1,4 @@
-"""Render the prepared sea lion mesh asset preview."""
+"""Launch the live prepared sea lion mesh asset preview."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def main() -> None:
-    subprocess.run(["python", "USER/tests/run_environment.py", "-e", "sea_lion", "--variant", "asset_preview"], cwd=ROOT)
+    subprocess.run(["python", "examples/sea_lion_asset_demo.py", "--live", "--asset", "USER/assets/sea_lion/sea_lion.py3dmesh.json"], cwd=ROOT)
 
 
 if __name__ == "__main__":

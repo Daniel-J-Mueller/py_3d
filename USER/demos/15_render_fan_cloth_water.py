@@ -1,4 +1,4 @@
-"""Render the fan, cloth, and vector-cloud water demo."""
+"""Launch the live fan, cloth, and vector-cloud water demo."""
 
 from __future__ import annotations
 
@@ -14,8 +14,7 @@ def main() -> None:
         [
             "python",
             "examples/fan_cloth_water_demo.py",
-            "--output",
-            "USER/environments/fan_cloth_water/renderings/fan_cloth_water.png",
+            "--live",
             "--quality",
             "balanced",
         ],

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import cos, pi, sin, tau
 from pathlib import Path
 import subprocess
@@ -14,6 +14,8 @@ from py_3d import (
     Box,
     Camera,
     Color,
+    HUDRect,
+    HUDText,
     Line3,
     Lamp,
     Material,
@@ -22,6 +24,7 @@ from py_3d import (
     RenderEngine,
     RenderSettings,
     Scene,
+    SkyPrefab,
     Sphere,
     Sun,
     TextBulletin,
@@ -60,7 +63,7 @@ class ClothSheet:
                 pinned = row == 0 and column in {0, columns - 1, columns // 2}
                 self.nodes.append(ClothNode(Vec3(x, y, z), Vec3(0.0, 0.0, 0.0), pinned))
 
-    def step(self, dt: float, time: float, substeps: int = 3) -> None:
+    def step(self, dt: float, time: float, substeps: int = 3, *, wind_scale: float = 1.0) -> None:
         step_dt = dt / substeps
         for _ in range(substeps):
             forces = [Vec3(0.0, -1.15, 0.0) for _node in self.nodes]
@@ -69,7 +72,7 @@ class ClothSheet:
                 if node.pinned:
                     node.velocity = Vec3(0.0, 0.0, 0.0)
                     continue
-                wind = self._wind_force(node.position, time)
+                wind = self._wind_force(node.position, time) * wind_scale
                 node.velocity = (node.velocity + (forces[index] + wind) * step_dt) * 0.985
                 node.position = node.position + node.velocity * step_dt
                 if node.position.y < 0.14:
@@ -147,6 +150,8 @@ class FanWaterSimulation:
     def __init__(self, *, quality: str = "balanced") -> None:
         self.time = 0.0
         self.quality = quality
+        self.wind_scale = 1.0
+        self.blade_strength = 1.0
         self.cloth = ClothSheet(columns=14 if quality != "fast" else 10, rows=10 if quality != "fast" else 7)
         self.water_center = Vec3(1.25, 0.64, 0.0)
         self.water_radius = 0.58
@@ -170,7 +175,7 @@ class FanWaterSimulation:
 
     def step(self, dt: float) -> None:
         self.time += dt
-        self.cloth.step(dt, self.time)
+        self.cloth.step(dt, self.time, wind_scale=self.wind_scale)
         self.fluid.step(dt, substeps=3, external_force=self._fan_blade_force)
         self._constrain_water()
 
@@ -183,7 +188,7 @@ class FanWaterSimulation:
         blade_phase = sin(self.time * tau * 2.4 + distance * 8.0)
         swirl = tangent * (1.25 / (1.0 + distance * 3.0))
         lift = Vec3(0.0, 0.2 * blade_phase, 0.0)
-        return swirl + lift
+        return (swirl + lift) * self.blade_strength
 
     def _constrain_water(self) -> None:
         for particle in self.fluid.particles:
@@ -336,6 +341,259 @@ def make_settings(args: argparse.Namespace) -> RenderSettings:
     )
 
 
+class GLFanClothWaterViewer:
+    def __init__(self, args: argparse.Namespace) -> None:
+        import pygame
+        from py_3d.live import LiveFlyCamera, LiveMenu, LiveMenuOption, ModernGLLiveRenderer
+
+        self.pygame = pygame
+        self.args = args
+        self.simulation = FanWaterSimulation(quality=args.quality)
+        self.settings = make_settings(args)
+        self.sky = SkyPrefab(time_of_day=14.0, cycle_enabled=False, stars_enabled=True, clouds_enabled=True)
+        base_camera = make_camera()
+        self.camera_controller = LiveFlyCamera.looking_at(
+            base_camera.position,
+            base_camera.target,
+            fov_degrees=base_camera.fov_degrees,
+            speed=2.4,
+        )
+        self.keys: set[str] = set()
+        self.paused = False
+        self.quality_order = ("fast", "balanced", "high", "ultra")
+        self.renderer = ModernGLLiveRenderer(
+            args.window_width,
+            args.window_height,
+            title="py_3d fan cloth water - OpenGL live",
+            vsync=getattr(args, "vsync", True),
+        )
+        self.renderer.menu = LiveMenu(
+            "py_3d fan cloth water",
+            (
+                LiveMenuOption("done", "Done"),
+                LiveMenuOption("quality_next", "Quality preset"),
+                LiveMenuOption("wind_up", "More cloth wind"),
+                LiveMenuOption("wind_down", "Less cloth wind"),
+                LiveMenuOption("blade_up", "More water swirl"),
+                LiveMenuOption("blade_down", "Less water swirl"),
+                LiveMenuOption("reflections_up", "More reflections"),
+                LiveMenuOption("reflections_down", "Fewer reflections"),
+                LiveMenuOption("sky_cycle", "Day/night cycle"),
+                LiveMenuOption("sky_time_up", "Time later"),
+                LiveMenuOption("sky_time_down", "Time earlier"),
+                LiveMenuOption("sky_clouds", "Clouds"),
+                LiveMenuOption("sky_stars", "Stars"),
+                LiveMenuOption("pause", "Pause/run physics"),
+                LiveMenuOption("reset", "Reset simulation"),
+                LiveMenuOption("quit", "Quit demo"),
+            ),
+        )
+        self._refresh_menu_options()
+        self.renderer.set_mouse_captured(True)
+        self._last_title_update = 0
+
+    def run(self) -> None:
+        clock = self.pygame.time.Clock()
+        dt = 1.0 / self.args.fps
+        running = True
+        try:
+            while running:
+                for event in self.pygame.event.get():
+                    if event.type == self.pygame.QUIT:
+                        running = False
+                    elif self.renderer.handle_resize_event(event):
+                        continue
+                    elif self.renderer.menu.visible and event.type in (self.pygame.MOUSEMOTION, self.pygame.MOUSEBUTTONDOWN, self.pygame.MOUSEWHEEL):
+                        menu_action = self.renderer.menu.handle_mouse_event(event, self.pygame)
+                        if menu_action is not None:
+                            running = self._handle_menu_action(menu_action)
+                    elif event.type == self.pygame.MOUSEBUTTONDOWN and not self.renderer.menu.visible:
+                        self.renderer.set_mouse_captured(True)
+                    elif event.type == self.pygame.MOUSEMOTION and self.renderer.mouse_captured:
+                        self.camera_controller.look(event.rel[0], event.rel[1])
+                    elif event.type == self.pygame.KEYDOWN:
+                        running = self.on_key_down(event.key)
+                    elif event.type == self.pygame.KEYUP:
+                        self.on_key_up(event.key)
+
+                self.camera_controller.move(self.keys, dt)
+                self.sky.step(dt)
+                if not self.paused:
+                    self.simulation.step(dt)
+                self._update_hud()
+                scene = self.simulation.scene()
+                self._apply_sky(scene)
+                stats = self.renderer.render(scene, self.camera_controller.smoothed_camera(dt), self.sky.settings_for(self.settings))
+                self._update_title(stats)
+                dt = max(1.0 / 240.0, min(0.05, clock.tick(self.args.fps) / 1000.0))
+        finally:
+            self.renderer.close()
+
+    def on_key_down(self, key: int) -> bool:
+        pygame = self.pygame
+        menu_action = self.renderer.menu.handle_key(key, pygame)
+        if menu_action is not None:
+            return self._handle_menu_action(menu_action)
+        movement_key = self._movement_key(key)
+        if movement_key is not None:
+            self.keys.add(movement_key)
+        elif key == pygame.K_p:
+            self.paused = not self.paused
+            self._refresh_menu_options()
+        elif key == pygame.K_r:
+            self._reset_simulation()
+        elif key == pygame.K_LEFTBRACKET:
+            self._adjust_wind(-0.15)
+        elif key == pygame.K_RIGHTBRACKET:
+            self._adjust_wind(0.15)
+        return True
+
+    def on_key_up(self, key: int) -> None:
+        movement_key = self._movement_key(key)
+        if movement_key is not None:
+            self.keys.discard(movement_key)
+
+    def _movement_key(self, key: int) -> str | None:
+        pygame = self.pygame
+        if key == pygame.K_w:
+            return "w"
+        if key == pygame.K_a:
+            return "a"
+        if key == pygame.K_s:
+            return "s"
+        if key == pygame.K_d:
+            return "d"
+        if key == pygame.K_SPACE:
+            return "space"
+        if key in (pygame.K_LCTRL, pygame.K_RCTRL):
+            return "ctrl"
+        return None
+
+    def _handle_menu_action(self, action: str) -> bool:
+        if action in {"handled", "navigate"}:
+            return True
+        if action == "opened":
+            self.keys.clear()
+            self.renderer.set_mouse_captured(False)
+            self._refresh_menu_options()
+            return True
+        if action == "quit":
+            return False
+        if action in {"done", "resume", "cancel"}:
+            self.renderer.menu.close()
+            self.renderer.set_mouse_captured(True)
+            return True
+        if action == "quality_next":
+            self._cycle_quality()
+        elif action == "wind_up":
+            self._adjust_wind(0.15)
+        elif action == "wind_down":
+            self._adjust_wind(-0.15)
+        elif action == "blade_up":
+            self._adjust_blade(0.15)
+        elif action == "blade_down":
+            self._adjust_blade(-0.15)
+        elif action == "reflections_up":
+            self._adjust_reflections(1)
+        elif action == "reflections_down":
+            self._adjust_reflections(-1)
+        elif action == "sky_cycle":
+            self.sky.toggle_cycle()
+        elif action == "sky_time_up":
+            self.sky.adjust_time(1.0)
+        elif action == "sky_time_down":
+            self.sky.adjust_time(-1.0)
+        elif action == "sky_clouds":
+            self.sky.toggle_clouds()
+        elif action == "sky_stars":
+            self.sky.toggle_stars()
+        elif action == "pause":
+            self.paused = not self.paused
+        elif action == "reset":
+            self._reset_simulation()
+        self._refresh_menu_options()
+        return True
+
+    def _cycle_quality(self) -> None:
+        index = self.quality_order.index(self.args.quality) if self.args.quality in self.quality_order else 0
+        self.args.quality = self.quality_order[(index + 1) % len(self.quality_order)]
+        old_wind = self.simulation.wind_scale
+        old_blade = self.simulation.blade_strength
+        self.simulation = FanWaterSimulation(quality=self.args.quality)
+        self.simulation.wind_scale = old_wind
+        self.simulation.blade_strength = old_blade
+
+    def _adjust_wind(self, amount: float) -> None:
+        self.simulation.wind_scale = max(0.0, min(2.5, self.simulation.wind_scale + amount))
+
+    def _adjust_blade(self, amount: float) -> None:
+        self.simulation.blade_strength = max(0.0, min(2.5, self.simulation.blade_strength + amount))
+
+    def _adjust_reflections(self, amount: int) -> None:
+        self.settings = replace(self.settings, reflection_bounces=max(0, min(5, self.settings.reflection_bounces + amount)))
+
+    def _reset_simulation(self) -> None:
+        old_wind = self.simulation.wind_scale
+        old_blade = self.simulation.blade_strength
+        self.simulation = FanWaterSimulation(quality=self.args.quality)
+        self.simulation.wind_scale = old_wind
+        self.simulation.blade_strength = old_blade
+
+    def _apply_sky(self, scene: Scene) -> Scene:
+        scene.lights = [light for light in scene.lights if not isinstance(light, Sun)]
+        self.sky.apply(scene)
+        return scene
+
+    def _refresh_menu_options(self) -> None:
+        from py_3d.live import LiveMenuOption
+
+        menu = self.renderer.menu
+        previous_action = menu.selected_action() if menu.options else "done"
+        options = (
+            LiveMenuOption("done", "Done"),
+            LiveMenuOption("quality_next", "Quality preset", self.args.quality),
+            LiveMenuOption("wind_up", "More cloth wind", f"{self.simulation.wind_scale:0.2f}x"),
+            LiveMenuOption("wind_down", "Less cloth wind", f"{self.simulation.wind_scale:0.2f}x"),
+            LiveMenuOption("blade_up", "More water swirl", f"{self.simulation.blade_strength:0.2f}x"),
+            LiveMenuOption("blade_down", "Less water swirl", f"{self.simulation.blade_strength:0.2f}x"),
+            LiveMenuOption("reflections_up", "More reflections", str(self.settings.reflection_bounces)),
+            LiveMenuOption("reflections_down", "Fewer reflections", str(self.settings.reflection_bounces)),
+            LiveMenuOption("sky_cycle", "Day/night cycle", "on" if self.sky.cycle_enabled else "off"),
+            LiveMenuOption("sky_time_up", "Time later", f"{self.sky.time_of_day:04.1f}h"),
+            LiveMenuOption("sky_time_down", "Time earlier", f"{self.sky.time_of_day:04.1f}h"),
+            LiveMenuOption("sky_clouds", "Clouds", "on" if self.sky.clouds_enabled else "off"),
+            LiveMenuOption("sky_stars", "Stars", "on" if self.sky.stars_enabled else "off"),
+            LiveMenuOption("pause", "Pause/run physics", "paused" if self.paused else "running"),
+            LiveMenuOption("reset", "Reset simulation"),
+            LiveMenuOption("quit", "Quit demo"),
+        )
+        menu.options = options
+        actions = [option.action for option in options]
+        menu.selected_index = actions.index(previous_action) if previous_action in actions else min(menu.selected_index, len(options) - 1)
+
+    def _update_hud(self) -> None:
+        self.renderer.hud.set(
+            HUDRect((12, 12), (232, 74), (3, 7, 10), alpha=0.55),
+            HUDText(
+                f"FAN CLOTH WATER\nWIND {self.simulation.wind_scale:0.2f}  SWIRL {self.simulation.blade_strength:0.2f}\nSKY {self.sky.time_of_day:04.1f}H",
+                (20, 20),
+                color=(238, 245, 255),
+                alpha=0.94,
+                scale=1,
+            ),
+        )
+
+    def _update_title(self, stats) -> None:
+        ticks = self.pygame.time.get_ticks()
+        if ticks - self._last_title_update < 400:
+            return
+        self._last_title_update = ticks
+        self.renderer.set_title(
+            f"py_3d fan cloth water - OpenGL live - {self.args.quality} - {self.settings.reflection_bounces} refl "
+            f"- {stats.approx_fps:0.1f} fps ({stats.build_seconds * 1000:0.1f} ms build, {stats.draw_seconds * 1000:0.1f} ms draw)"
+        )
+
+
 def render_still(args: argparse.Namespace) -> Path:
     simulation = FanWaterSimulation(quality=args.quality)
     for _ in range(int(args.warmup * args.fps)):
@@ -409,6 +667,7 @@ def render_video(args: argparse.Namespace) -> Path:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render fan-driven cloth and vector-cloud water.")
+    parser.add_argument("--live", action="store_true")
     parser.add_argument("--output", type=Path, default=OUTPUT_DIR / "fan_cloth_water.png")
     parser.add_argument("--video", type=Path)
     parser.add_argument("--ffmpeg", type=Path)
@@ -419,6 +678,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--quality", choices=("fast", "balanced", "high", "ultra"), default="balanced")
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=360)
+    parser.add_argument("--window-width", type=int, default=960)
+    parser.add_argument("--window-height", type=int, default=540)
+    parser.add_argument("--vsync", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--ambient", type=float, default=0.04)
     parser.add_argument("--gamma", type=float, default=1.12)
     parser.add_argument("--reflection-bounces", type=int, default=2)
@@ -432,6 +694,9 @@ def main() -> None:
     args = parse_args()
     if args.fps <= 0:
         raise ValueError("fps must be positive")
+    if args.live:
+        GLFanClothWaterViewer(args).run()
+        return
     if args.video is not None:
         render_video(args)
     else:

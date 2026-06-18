@@ -34,6 +34,7 @@ from py_3d import (
     RenderEngine,
     RenderSettings,
     Scene,
+    SkyPrefab,
     Sphere,
     SphereBody,
     SphereCollider,
@@ -1438,6 +1439,12 @@ class GLFruitBowlViewer:
         self.simulation = FruitBowlSimulation(bowl_material=args.bowl_material)
         self.snapshot_engine = make_engine(args.renderer, fast=getattr(args, "gpu_fast_render", True))
         self.settings = make_settings(args)
+        self._last_safe_settings = self.settings
+        self._pending_settings = self.settings
+        self._pending_quality = getattr(args, "quality", "balanced")
+        self._apply_watch_frames = 0
+        self._menu_status = ""
+        self.sky = SkyPrefab(time_of_day=14.0, cycle_enabled=False, stars_enabled=True, clouds_enabled=True)
         base_camera = make_camera()
         self.camera_controller = LiveFlyCamera.looking_at(
             base_camera.position,
@@ -1463,7 +1470,9 @@ class GLFruitBowlViewer:
         self.renderer.menu = LiveMenu(
             "py_3d fruit bowl",
             (
-                LiveMenuOption("resume", "Resume"),
+                LiveMenuOption("done", "Done"),
+                LiveMenuOption("apply", "Apply"),
+                LiveMenuOption("cancel", "Exit menu"),
                 LiveMenuOption("quality_next", "Quality preset"),
                 LiveMenuOption("poly_up", "More polygons"),
                 LiveMenuOption("poly_down", "Fewer polygons"),
@@ -1472,11 +1481,18 @@ class GLFruitBowlViewer:
                 LiveMenuOption("smooth", "Smooth shading"),
                 LiveMenuOption("texture_up", "Texture resolution"),
                 LiveMenuOption("tone_mapping", "Tone mapping"),
+                LiveMenuOption("sky_cycle", "Day/night cycle"),
+                LiveMenuOption("sky_time_up", "Time later"),
+                LiveMenuOption("sky_time_down", "Time earlier"),
+                LiveMenuOption("sky_sun_up", "Sun higher"),
+                LiveMenuOption("sky_sun_down", "Sun lower"),
+                LiveMenuOption("sky_clouds", "Clouds"),
+                LiveMenuOption("sky_stars", "Stars"),
                 LiveMenuOption("toggle_render", "Toggle wire/poly"),
                 LiveMenuOption("pause", "Pause/run physics"),
                 LiveMenuOption("reset", "Reset bowl"),
                 LiveMenuOption("snapshot", "Save snapshot"),
-                LiveMenuOption("quit", "Quit"),
+                LiveMenuOption("quit", "Quit demo"),
             ),
         )
         self._refresh_menu_options()
@@ -1494,6 +1510,10 @@ class GLFruitBowlViewer:
                         running = False
                     elif self.renderer.handle_resize_event(event):
                         continue
+                    elif self.renderer.menu.visible and event.type in (self.pygame.MOUSEMOTION, self.pygame.MOUSEBUTTONDOWN, self.pygame.MOUSEWHEEL):
+                        menu_action = self.renderer.menu.handle_mouse_event(event, self.pygame)
+                        if menu_action is not None:
+                            running = self._handle_menu_action(menu_action)
                     elif event.type == self.pygame.MOUSEBUTTONDOWN and not self.renderer.menu.visible:
                         self.renderer.set_mouse_captured(True)
                         self.on_mouse_button(event.button)
@@ -1507,20 +1527,24 @@ class GLFruitBowlViewer:
                         self.on_key_up(event.key)
 
                 self.camera_controller.move(self.keys, dt)
+                self.sky.step(dt)
                 self.update_held_fruit(dt)
                 if not self.paused:
                     self.simulation.step(dt, substeps=6 if self.held_fruit is not None else 3)
                 render_camera = self.camera_controller.smoothed_camera(dt)
                 self._update_hud()
-                stats = self.renderer.render(
-                    self.simulation.scene(
-                        label=getattr(self.args, "label", "KINEMATIC FRUIT BOWL"),
-                        light_mode=self.args.light_mode,
-                        quality_label=getattr(self.args, "quality", "balanced"),
-                    ),
-                    render_camera,
-                    self._active_settings(),
+                scene = self.simulation.scene(
+                    label=getattr(self.args, "label", "KINEMATIC FRUIT BOWL"),
+                    light_mode=self.args.light_mode,
+                    quality_label=getattr(self.args, "quality", "balanced"),
                 )
+                self._apply_sky(scene)
+                stats = self.renderer.render(
+                    scene,
+                    render_camera,
+                    self.sky.settings_for(self._active_settings()),
+                )
+                self._guard_applied_settings(stats)
                 self._update_title(stats)
                 tick_ms = clock.tick(self.args.fps if self.args.fps > 0 else 0)
                 dt = max(1.0 / 240.0, min(0.05, tick_ms / 1000.0))
@@ -1561,6 +1585,11 @@ class GLFruitBowlViewer:
     def drop_held_fruit(self) -> None:
         self.held_fruit = None
 
+    def _apply_sky(self, scene: Scene) -> Scene:
+        scene.lights = [light for light in scene.lights if not isinstance(light, Sun)]
+        self.sky.apply(scene)
+        return scene
+
     def on_key_down(self, key: int) -> bool:
         pygame = self.pygame
         menu_action = self.renderer.menu.handle_key(key, pygame)
@@ -1596,9 +1625,9 @@ class GLFruitBowlViewer:
         held = self.held_fruit.name.upper() if self.held_fruit is not None else "NONE"
         quality = getattr(self.args, "quality", "custom").upper()
         self.renderer.hud.set(
-            HUDRect((12, 12), (204, 58), (3, 7, 10), alpha=0.58),
+            HUDRect((12, 12), (230, 74), (3, 7, 10), alpha=0.58),
             HUDText(
-                f"E GRAB/DROP\nHELD {held}\n{quality}  {self.settings.reflection_bounces} REFL",
+                f"E GRAB/DROP\nHELD {held}\n{quality}  {self.settings.reflection_bounces} REFL\nSKY {self.sky.time_of_day:04.1f}H",
                 (20, 20),
                 color=(238, 245, 255),
                 alpha=0.92,
@@ -1610,33 +1639,106 @@ class GLFruitBowlViewer:
         from py_3d.live import LiveMenuOption
 
         menu = self.renderer.menu
-        previous_action = menu.selected_action() if menu.options else "resume"
-        quality = getattr(self.args, "quality", "custom")
+        previous_action = menu.selected_action() if menu.options else "done"
+        settings = self._menu_settings()
+        quality = self._pending_quality if menu.visible else getattr(self.args, "quality", "custom")
         mode = "filled" if self.full_render else "wire"
         options = (
-            LiveMenuOption("resume", "Resume"),
+            LiveMenuOption("done", "Done"),
+            LiveMenuOption("apply", "Apply", self._menu_status),
+            LiveMenuOption("cancel", "Exit menu"),
             LiveMenuOption("quality_next", "Quality preset", quality),
-            LiveMenuOption("poly_up", "More polygons", f"{self.settings.sphere_segments}x{self.settings.sphere_rings}"),
-            LiveMenuOption("poly_down", "Fewer polygons", f"{self.settings.sphere_segments}x{self.settings.sphere_rings}"),
-            LiveMenuOption("reflections_up", "More reflections", str(self.settings.reflection_bounces)),
-            LiveMenuOption("reflections_down", "Fewer reflections", str(self.settings.reflection_bounces)),
-            LiveMenuOption("smooth", "Smooth shading", "on" if self.settings.smooth_shading else "off"),
-            LiveMenuOption("texture_up", "Texture resolution", str(self.settings.texture_size)),
-            LiveMenuOption("tone_mapping", "Tone mapping", "on" if self.settings.tone_mapping else "off"),
+            LiveMenuOption("poly_up", "More polygons", f"{settings.sphere_segments}x{settings.sphere_rings}"),
+            LiveMenuOption("poly_down", "Fewer polygons", f"{settings.sphere_segments}x{settings.sphere_rings}"),
+            LiveMenuOption("reflections_up", "More reflections", str(settings.reflection_bounces)),
+            LiveMenuOption("reflections_down", "Fewer reflections", str(settings.reflection_bounces)),
+            LiveMenuOption("smooth", "Smooth shading", "on" if settings.smooth_shading else "off"),
+            LiveMenuOption("texture_up", "Texture resolution", str(settings.texture_size)),
+            LiveMenuOption("tone_mapping", "Tone mapping", "on" if settings.tone_mapping else "off"),
+            LiveMenuOption("sky_cycle", "Day/night cycle", "on" if self.sky.cycle_enabled else "off"),
+            LiveMenuOption("sky_time_up", "Time later", f"{self.sky.time_of_day:04.1f}h"),
+            LiveMenuOption("sky_time_down", "Time earlier", f"{self.sky.time_of_day:04.1f}h"),
+            LiveMenuOption("sky_sun_up", "Sun higher", f"{self.sky.effective_sun_elevation_degrees():0.0f} deg"),
+            LiveMenuOption("sky_sun_down", "Sun lower", f"{self.sky.effective_sun_elevation_degrees():0.0f} deg"),
+            LiveMenuOption("sky_clouds", "Clouds", "on" if self.sky.clouds_enabled else "off"),
+            LiveMenuOption("sky_stars", "Stars", "on" if self.sky.stars_enabled else "off"),
             LiveMenuOption("toggle_render", "Toggle wire/poly", mode),
             LiveMenuOption("pause", "Pause/run physics", "paused" if self.paused else "running"),
             LiveMenuOption("reset", "Reset bowl"),
             LiveMenuOption("snapshot", "Save snapshot"),
-            LiveMenuOption("quit", "Quit"),
+            LiveMenuOption("quit", "Quit demo"),
         )
         menu.options = options
         actions = [option.action for option in options]
         menu.selected_index = actions.index(previous_action) if previous_action in actions else min(menu.selected_index, len(options) - 1)
 
+    def _begin_menu_edit(self) -> None:
+        self._pending_settings = self.settings
+        self._pending_quality = getattr(self.args, "quality", "custom")
+        self._menu_status = "pending"
+        self._refresh_menu_options()
+
+    def _menu_settings(self) -> RenderSettings:
+        return self._pending_settings if self.renderer.menu.visible else self.settings
+
+    def _set_menu_settings(self, settings: RenderSettings) -> None:
+        if self.renderer.menu.visible:
+            self._pending_settings = settings
+            self._menu_status = "pending"
+        else:
+            self.settings = settings
+
+    def _apply_pending_settings(self) -> None:
+        self._last_safe_settings = self.settings
+        self.settings = self._pending_settings
+        setattr(self.args, "quality", self._pending_quality)
+        self._sync_args_from_settings(self.settings)
+        self._apply_watch_frames = 45
+        self._menu_status = "applied"
+        self._refresh_menu_options()
+
+    def _discard_pending_settings(self) -> None:
+        self._pending_settings = self.settings
+        self._pending_quality = getattr(self.args, "quality", "custom")
+        self._menu_status = "discarded"
+
+    def _guard_applied_settings(self, stats) -> None:
+        if self._apply_watch_frames <= 0:
+            return
+        self._apply_watch_frames -= 1
+        if stats.total_seconds <= 1.25:
+            if self._apply_watch_frames == 0:
+                self._last_safe_settings = self.settings
+            return
+        self.settings = self._last_safe_settings
+        self._pending_settings = self.settings
+        self._sync_args_from_settings(self.settings)
+        self._menu_status = "reverted slow frame"
+        self._apply_watch_frames = 0
+        self._refresh_menu_options()
+
+    def _sync_args_from_settings(self, settings: RenderSettings) -> None:
+        for key in (
+            "gamma",
+            "light_wrap",
+            "bounce_light",
+            "tone_mapping",
+            "reflection_bounces",
+            "shadow_samples",
+            "shadow_softness",
+            "max_render_distance",
+            "sphere_segments",
+            "sphere_rings",
+            "smooth_shading",
+            "texture_size",
+        ):
+            if hasattr(self.args, key):
+                setattr(self.args, key, getattr(settings, key))
+
     def _cycle_quality(self, amount: int) -> None:
         if not self.quality_order:
             return
-        current = getattr(self.args, "quality", self.quality_order[0])
+        current = self._pending_quality if self.renderer.menu.visible else getattr(self.args, "quality", self.quality_order[0])
         index = self.quality_order.index(current) if current in self.quality_order else -1
         next_quality = self.quality_order[(index + amount) % len(self.quality_order)]
         self._apply_quality(next_quality)
@@ -1662,46 +1764,48 @@ class GLFruitBowlViewer:
             "texture_size",
         }
         updates = {key: value for key, value in preset.items() if key in allowed}
-        self.settings = replace(self.settings, **updates)
-        setattr(self.args, "quality", quality)
-        for key, value in updates.items():
-            if hasattr(self.args, key):
-                setattr(self.args, key, value)
+        self._set_menu_settings(replace(self._menu_settings(), **updates))
+        self._pending_quality = quality
+        if not self.renderer.menu.visible:
+            setattr(self.args, "quality", quality)
+            self._sync_args_from_settings(self.settings)
 
     def _mark_custom_quality(self) -> None:
-        setattr(self.args, "quality", "custom")
+        if self.renderer.menu.visible:
+            self._pending_quality = "custom"
+        else:
+            setattr(self.args, "quality", "custom")
 
     def _adjust_polygons(self, amount: int) -> None:
         self._mark_custom_quality()
-        segments = max(6, min(48, self.settings.sphere_segments + amount * 2))
-        rings = max(3, min(24, self.settings.sphere_rings + amount))
-        self.settings = replace(self.settings, sphere_segments=segments, sphere_rings=rings)
-        self.args.sphere_segments = segments
-        self.args.sphere_rings = rings
+        settings = self._menu_settings()
+        segments = max(6, min(48, settings.sphere_segments + amount * 2))
+        rings = max(3, min(24, settings.sphere_rings + amount))
+        self._set_menu_settings(replace(settings, sphere_segments=segments, sphere_rings=rings))
 
     def _adjust_reflections(self, amount: int) -> None:
         self._mark_custom_quality()
-        bounces = max(0, min(5, self.settings.reflection_bounces + amount))
-        self.settings = replace(self.settings, reflection_bounces=bounces)
-        self.args.reflection_bounces = bounces
+        settings = self._menu_settings()
+        bounces = max(0, min(5, settings.reflection_bounces + amount))
+        self._set_menu_settings(replace(settings, reflection_bounces=bounces))
 
     def _adjust_texture_size(self, amount: int) -> None:
         self._mark_custom_quality()
         sizes = (128, 192, 256, 384, 512, 768)
-        current_index = min(range(len(sizes)), key=lambda index: abs(sizes[index] - self.settings.texture_size))
+        settings = self._menu_settings()
+        current_index = min(range(len(sizes)), key=lambda index: abs(sizes[index] - settings.texture_size))
         size = sizes[(current_index + amount) % len(sizes)]
-        self.settings = replace(self.settings, texture_size=size)
-        self.args.texture_size = size
+        self._set_menu_settings(replace(settings, texture_size=size))
 
     def _toggle_smooth_shading(self) -> None:
         self._mark_custom_quality()
-        self.settings = replace(self.settings, smooth_shading=not self.settings.smooth_shading)
-        self.args.smooth_shading = self.settings.smooth_shading
+        settings = self._menu_settings()
+        self._set_menu_settings(replace(settings, smooth_shading=not settings.smooth_shading))
 
     def _toggle_tone_mapping(self) -> None:
         self._mark_custom_quality()
-        self.settings = replace(self.settings, tone_mapping=not self.settings.tone_mapping)
-        self.args.tone_mapping = self.settings.tone_mapping
+        settings = self._menu_settings()
+        self._set_menu_settings(replace(settings, tone_mapping=not settings.tone_mapping))
 
     def _handle_menu_action(self, action: str) -> bool:
         if action in {"handled", "navigate"}:
@@ -1709,11 +1813,23 @@ class GLFruitBowlViewer:
         if action == "opened":
             self.keys.clear()
             self.renderer.set_mouse_captured(False)
+            self._begin_menu_edit()
             return True
-        self.renderer.menu.close()
         if action == "quit":
             return False
-        if action == "quality_next":
+        if action == "apply":
+            self._apply_pending_settings()
+        elif action == "done":
+            self._apply_pending_settings()
+            self.renderer.menu.close()
+            self.renderer.set_mouse_captured(True)
+            return True
+        elif action in {"cancel", "resume"}:
+            self._discard_pending_settings()
+            self.renderer.menu.close()
+            self.renderer.set_mouse_captured(True)
+            return True
+        elif action == "quality_next":
             self._cycle_quality(1)
         elif action == "poly_up":
             self._adjust_polygons(1)
@@ -1729,6 +1845,20 @@ class GLFruitBowlViewer:
             self._adjust_texture_size(1)
         elif action == "tone_mapping":
             self._toggle_tone_mapping()
+        elif action == "sky_cycle":
+            self.sky.toggle_cycle()
+        elif action == "sky_time_up":
+            self.sky.adjust_time(1.0)
+        elif action == "sky_time_down":
+            self.sky.adjust_time(-1.0)
+        elif action == "sky_sun_up":
+            self.sky.adjust_sun_angle(elevation_delta=5.0)
+        elif action == "sky_sun_down":
+            self.sky.adjust_sun_angle(elevation_delta=-5.0)
+        elif action == "sky_clouds":
+            self.sky.toggle_clouds()
+        elif action == "sky_stars":
+            self.sky.toggle_stars()
         elif action == "toggle_render":
             self.full_render = not self.full_render
         elif action == "pause":
@@ -1739,7 +1869,6 @@ class GLFruitBowlViewer:
         elif action == "snapshot":
             self.save_snapshot()
         self._refresh_menu_options()
-        self.renderer.set_mouse_captured(True)
         return True
 
     def on_key_up(self, key: int) -> None:
@@ -1766,14 +1895,16 @@ class GLFruitBowlViewer:
     def save_snapshot(self) -> None:
         OUTPUT_DIR.mkdir(exist_ok=True)
         path = OUTPUT_DIR / "fruit_bowl_live_snapshot.png"
+        scene = self.simulation.scene(
+            label=getattr(self.args, "label", "KINEMATIC FRUIT BOWL"),
+            light_mode=self.args.light_mode,
+            quality_label=getattr(self.args, "quality", "balanced"),
+        )
+        self._apply_sky(scene)
         self.snapshot_engine.render(
-            self.simulation.scene(
-                label=getattr(self.args, "label", "KINEMATIC FRUIT BOWL"),
-                light_mode=self.args.light_mode,
-                quality_label=getattr(self.args, "quality", "balanced"),
-            ),
+            scene,
             self.camera(),
-            self._active_settings(),
+            self.sky.settings_for(self._active_settings()),
         ).to_png(path)
         print(f"Wrote {path}")
 

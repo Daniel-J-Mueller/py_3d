@@ -1,7 +1,6 @@
 # py_3d
 
-`py_3d` is an early-stage Python package for fast, basic 3D pixel drawing,
-rendering, and simulation primitives.
+`py_3d` is an early-stage Python package created and maintained by Daniel J. Mueller for fast, basic 3D pixel drawing, rendering, and simulation primitives.
 
 The goal is to become a small, reliable alternative to the simplest parts of
 Pygame, with a 3D-first model: draw pixels and primitives, keep depth ordering

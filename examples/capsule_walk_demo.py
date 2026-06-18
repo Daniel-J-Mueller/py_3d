@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from math import cos, radians, sin
 from pathlib import Path
 
-from py_3d import Box, Camera, Color, HUDRect, HUDText, Lamp, Material, PlayerModel, RenderEngine, RenderSettings, Scene, Sun, TextBulletin, Vec3
+from py_3d import Box, Camera, Color, HUDRect, HUDText, Lamp, Material, PlayerModel, RenderEngine, RenderSettings, Scene, SkyPrefab, Sun, TextBulletin, Vec3
 
 
 OUTPUT_DIR = Path("renderings-tests") / "live-renders"
@@ -231,6 +231,7 @@ class GLCapsuleWalkViewer:
         self.camera_mode = args.camera_mode
         self.look_pitch_degrees = -6.0
         self.render_camera: Camera | None = None
+        self.sky = SkyPrefab(time_of_day=13.5, cycle_enabled=False, stars_enabled=True, clouds_enabled=True)
         global_camera = Camera(position=(3.2, 2.5, -5.2), target=(0.4, 0.65, 0.4), fov_degrees=54)
         self.free_camera = LiveFlyCamera.looking_at(
             global_camera.position,
@@ -258,12 +259,18 @@ class GLCapsuleWalkViewer:
         self.renderer.menu = LiveMenu(
             "py_3d capsule walk",
             (
-                LiveMenuOption("resume", "Resume"),
+                LiveMenuOption("done", "Done"),
                 LiveMenuOption("next_camera", "Next camera"),
+                LiveMenuOption("sky_cycle", "Day/night cycle"),
+                LiveMenuOption("sky_time_up", "Time later"),
+                LiveMenuOption("sky_time_down", "Time earlier"),
+                LiveMenuOption("sky_clouds", "Clouds"),
+                LiveMenuOption("sky_stars", "Stars"),
                 LiveMenuOption("reset", "Reset capsule"),
-                LiveMenuOption("quit", "Quit"),
+                LiveMenuOption("quit", "Quit demo"),
             ),
         )
+        self._refresh_menu_options()
         self.renderer.set_mouse_captured(True)
         self._last_title_update = 0
 
@@ -278,6 +285,10 @@ class GLCapsuleWalkViewer:
                         running = False
                     elif self.renderer.handle_resize_event(event):
                         continue
+                    elif self.renderer.menu.visible and event.type in (self.pygame.MOUSEMOTION, self.pygame.MOUSEBUTTONDOWN, self.pygame.MOUSEWHEEL):
+                        menu_action = self.renderer.menu.handle_mouse_event(event, self.pygame)
+                        if menu_action is not None:
+                            running = self._handle_menu_action(menu_action)
                     elif event.type == self.pygame.MOUSEBUTTONDOWN and not self.renderer.menu.visible:
                         self.renderer.set_mouse_captured(True)
                     elif event.type == self.pygame.MOUSEMOTION and self.renderer.mouse_captured:
@@ -291,9 +302,12 @@ class GLCapsuleWalkViewer:
                     self.free_camera.move(self.keys, dt)
                 else:
                     self.controller.step(dt, self.keys, self.blocks)
+                self.sky.step(dt)
                 camera = self._smoothed_camera(self.camera(), dt)
                 self._update_hud()
-                stats = self.renderer.render(self.scene(), camera, self.settings)
+                scene = self.scene()
+                self._apply_sky(scene)
+                stats = self.renderer.render(scene, camera, self.sky.settings_for(self.settings))
                 self._update_title(stats)
                 dt = max(1.0 / 240.0, min(0.05, clock.tick(self.args.fps) / 1000.0))
         finally:
@@ -323,19 +337,53 @@ class GLCapsuleWalkViewer:
         if action == "opened":
             self.keys.clear()
             self.renderer.set_mouse_captured(False)
+            self._refresh_menu_options()
             return True
-        self.renderer.menu.close()
         if action == "quit":
             return False
+        if action in {"done", "resume", "cancel"}:
+            self.renderer.menu.close()
+            self.renderer.set_mouse_captured(True)
+            return True
         if action == "next_camera":
             self.camera_mode = {"global": "third", "third": "first", "first": "global"}[self.camera_mode]
             self.render_camera = None
+        elif action == "sky_cycle":
+            self.sky.toggle_cycle()
+        elif action == "sky_time_up":
+            self.sky.adjust_time(1.0)
+        elif action == "sky_time_down":
+            self.sky.adjust_time(-1.0)
+        elif action == "sky_clouds":
+            self.sky.toggle_clouds()
+        elif action == "sky_stars":
+            self.sky.toggle_stars()
         elif action == "reset":
             self.controller = CapsuleController()
             self.look_pitch_degrees = -6.0
             self.render_camera = None
-        self.renderer.set_mouse_captured(True)
+        self._refresh_menu_options()
         return True
+
+    def _refresh_menu_options(self) -> None:
+        from py_3d.live import LiveMenuOption
+
+        menu = self.renderer.menu
+        previous_action = menu.selected_action() if menu.options else "done"
+        options = (
+            LiveMenuOption("done", "Done"),
+            LiveMenuOption("next_camera", "Next camera", self.camera_mode),
+            LiveMenuOption("sky_cycle", "Day/night cycle", "on" if self.sky.cycle_enabled else "off"),
+            LiveMenuOption("sky_time_up", "Time later", f"{self.sky.time_of_day:04.1f}h"),
+            LiveMenuOption("sky_time_down", "Time earlier", f"{self.sky.time_of_day:04.1f}h"),
+            LiveMenuOption("sky_clouds", "Clouds", "on" if self.sky.clouds_enabled else "off"),
+            LiveMenuOption("sky_stars", "Stars", "on" if self.sky.stars_enabled else "off"),
+            LiveMenuOption("reset", "Reset capsule"),
+            LiveMenuOption("quit", "Quit demo"),
+        )
+        menu.options = options
+        actions = [option.action for option in options]
+        menu.selected_index = actions.index(previous_action) if previous_action in actions else min(menu.selected_index, len(options) - 1)
 
     def on_key_up(self, key: int) -> None:
         movement_key = self._movement_key(key)
@@ -387,6 +435,11 @@ class GLCapsuleWalkViewer:
         )
         return scene
 
+    def _apply_sky(self, scene: Scene) -> Scene:
+        scene.lights = [light for light in scene.lights if not isinstance(light, Sun)]
+        self.sky.apply(scene)
+        return scene
+
     def _movement_key(self, key: int) -> str | None:
         pygame = self.pygame
         if key == pygame.K_w:
@@ -420,8 +473,8 @@ class GLCapsuleWalkViewer:
     def _update_hud(self) -> None:
         state = "CROUCH" if "crouch" in self.keys else ("SPRINT" if "sprint" in self.keys else "WALK")
         self.renderer.hud.set(
-            HUDRect((12, 12), (170, 48), (3, 7, 10), alpha=0.55),
-            HUDText(f"{self.camera_mode.upper()} CAMERA\n{state}", (20, 20), color=(238, 245, 255), alpha=0.94, scale=1),
+            HUDRect((12, 12), (178, 62), (3, 7, 10), alpha=0.55),
+            HUDText(f"{self.camera_mode.upper()} CAMERA\n{state}\nSKY {self.sky.time_of_day:04.1f}H", (20, 20), color=(238, 245, 255), alpha=0.94, scale=1),
         )
 
     def _update_title(self, stats) -> None:

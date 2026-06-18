@@ -250,6 +250,7 @@ _VERTEX_ATTRIBUTES = ("in_position", "in_normal", "in_color", "in_emission", "in
 _MAX_TEXTURES = 8
 _OVERLAY_VERTEX_FORMAT = "2f 2f"
 _OVERLAY_VERTEX_ATTRIBUTES = ("in_position", "in_texcoord")
+_MENU_BUTTON_ACTIONS = {"apply", "done", "cancel", "resume", "quit"}
 
 
 @dataclass(frozen=True)
@@ -393,6 +394,7 @@ class LiveMenu:
     )
     selected_index: int = 0
     visible: bool = False
+    hitboxes: tuple[tuple[int, int, int, int, int], ...] = ()
 
     def __post_init__(self) -> None:
         if not self.options:
@@ -404,6 +406,7 @@ class LiveMenu:
 
     def close(self) -> None:
         self.visible = False
+        self.hitboxes = ()
 
     def toggle(self) -> None:
         self.visible = not self.visible
@@ -414,6 +417,46 @@ class LiveMenu:
     def selected_action(self) -> str:
         return self.options[self.selected_index].action
 
+    def has_action(self, action: str) -> bool:
+        return any(option.action == action for option in self.options)
+
+    def cancel_action(self) -> str:
+        if self.has_action("cancel"):
+            return "cancel"
+        if self.has_action("done"):
+            return "done"
+        return "resume"
+
+    def set_hitboxes(self, hitboxes: Iterable[tuple[int, int, int, int, int]]) -> None:
+        self.hitboxes = tuple(hitboxes)
+
+    def index_at(self, position: tuple[int, int]) -> int | None:
+        x, y = position
+        for left, top, width, height, index in self.hitboxes:
+            if left <= x <= left + width and top <= y <= top + height:
+                return index
+        return None
+
+    def handle_mouse_event(self, event, pygame) -> str | None:
+        if not self.visible:
+            return None
+        if event.type == pygame.MOUSEMOTION:
+            index = self.index_at(event.pos)
+            if index is not None:
+                self.selected_index = index
+                return "navigate"
+            return "handled"
+        if event.type == pygame.MOUSEWHEEL:
+            self.move(-event.y)
+            return "navigate"
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            index = self.index_at(event.pos)
+            if index is not None:
+                self.selected_index = index
+                return self.selected_action()
+            return "handled"
+        return None
+
     def handle_key(self, key: int, pygame) -> str | None:
         if not self.visible:
             if key == pygame.K_ESCAPE:
@@ -421,7 +464,7 @@ class LiveMenu:
                 return "opened"
             return None
         if key == pygame.K_ESCAPE:
-            return "resume"
+            return self.cancel_action()
         if key in (pygame.K_DOWN, pygame.K_s, pygame.K_TAB):
             self.move(1)
             return "navigate"
@@ -743,20 +786,58 @@ class ModernGLLiveRenderer:
                 )
 
     def _draw_menu(self, width: int, height: int) -> None:
+        scale = 2
+        padding = 14
+        indexed_options = tuple((index, option) for index, option in enumerate(self.menu.options) if option.action not in _MENU_BUTTON_ACTIONS)
+        button_options = tuple((index, option) for index, option in enumerate(self.menu.options) if option.action in _MENU_BUTTON_ACTIONS)
         lines = [self.menu.title.upper(), ""]
-        for index, option in enumerate(self.menu.options):
+        line_indices: list[int | None] = [None, None]
+        for index, option in indexed_options:
             prefix = "> " if index == self.menu.selected_index else "  "
             suffix = f" : {option.detail}" if option.detail else ""
             lines.append(f"{prefix}{option.label}{suffix}")
+            line_indices.append(index)
         lines.append("")
-        lines.append("ESC RESUMES  ENTER SELECTS")
+        line_indices.append(None)
+        footer = ""
+        footer_spans: list[tuple[int, str, int]] = []
+        cursor = 0
+        for option_index, option in button_options:
+            label_text = option.label.upper()
+            label = f"[>{label_text}<]" if option_index == self.menu.selected_index else f"[{label_text}]"
+            if footer:
+                footer += "  "
+                cursor += draw.text_size("  ", scale=scale)[0]
+            footer_spans.append((cursor, label, option_index))
+            footer += label
+            cursor += draw.text_size(label, scale=scale)[0]
+        if footer:
+            lines.append(footer)
+            line_indices.append(None)
+        lines.append("CLICK OPTIONS OR USE ARROWS")
+        line_indices.append(None)
         text = "\n".join(lines)
-        text_width, text_height = draw.text_size(text, scale=2)
+        text_width, text_height = draw.text_size(text, scale=scale)
         position = (
-            max(12, int((width - text_width - 28) * 0.5)),
-            max(12, int((height - text_height - 28) * 0.5)),
+            max(12, int((width - text_width - padding * 2) * 0.5)),
+            max(12, int((height - text_height - padding * 2) * 0.5)),
         )
-        self._draw_bulletin_texture(text, position, Color(246, 248, 255), Color(4, 7, 12), 14, 2, width, height)
+        hitboxes: list[tuple[int, int, int, int, int]] = []
+        line_step = (7 + 1) * scale
+        content_left = position[0] + padding
+        content_top = position[1] + padding
+        content_width = max(1, text_width)
+        for line_number, option_index in enumerate(line_indices):
+            if option_index is None:
+                continue
+            hitboxes.append((content_left, content_top + line_number * line_step - scale, content_width, line_step, option_index))
+        if footer:
+            footer_line = lines.index(footer)
+            footer_top = content_top + footer_line * line_step - scale
+            for span_left, label, option_index in footer_spans:
+                hitboxes.append((content_left + span_left, footer_top, draw.text_size(label, scale=scale)[0], line_step, option_index))
+        self.menu.set_hitboxes(hitboxes)
+        self._draw_bulletin_texture(text, position, Color(246, 248, 255), Color(4, 7, 12), padding, scale, width, height)
 
     def _draw_crosshair(self, width: int, height: int) -> None:
         image_width, image_height, data = _crosshair_rgba(Color(235, 244, 255))
