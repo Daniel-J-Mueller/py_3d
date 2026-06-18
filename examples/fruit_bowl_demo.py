@@ -208,11 +208,19 @@ class FruitBowlSimulation:
             center=self._driven_center(0.0),
             radius=1.35,
             depth=0.96,
-            restitution=0.42,
-            friction=0.18,
-            squishiness=0.18,
-            damping=0.18,
-            material=Material(color=(145, 95, 210), absorption=(0.08, 0.1, 0.03), roughness=0.3, fuzziness=0.08, specular=0.28, shininess=28.0),
+            restitution=0.18,
+            friction=0.48,
+            squishiness=0.08,
+            damping=0.16,
+            material=Material(
+                color=(132, 82, 42),
+                absorption=(0.08, 0.12, 0.18),
+                roughness=0.62,
+                fuzziness=0.18,
+                specular=0.12,
+                shininess=18.0,
+            ),
+            visual_perturbation=SurfacePerturbation(magnitude=0.028, scale=8.0, seed=91, octaves=4, gain=0.5),
         )
         self.floor = StaticPlane(
             point=(0.0, -1.75, 0.0),
@@ -330,6 +338,7 @@ class FruitBowlSimulation:
         for _ in range(substeps):
             self.time += step_dt
             self.bowl.set_center(self._driven_center(self.time), dt=step_dt)
+            self.bowl.set_angular_velocity(self._driven_angular_velocity(self.time))
             for fruit in self.fruits:
                 fruit.sync_collision_boundary()
             self.world.step(step_dt)
@@ -337,13 +346,25 @@ class FruitBowlSimulation:
     @staticmethod
     def _driven_center(time: float) -> Vec3:
         phase = (time * 0.95) % 1.0
-        toss = 0.34 * FruitBowlSimulation._pulse(phase, 0.12, 0.055)
-        drop = -0.09 * FruitBowlSimulation._pulse(phase, 0.26, 0.075)
-        catch = 0.08 * FruitBowlSimulation._pulse(phase, 0.58, 0.12)
+        toss = 0.18 * FruitBowlSimulation._pulse(phase, 0.12, 0.055)
+        drop = -0.05 * FruitBowlSimulation._pulse(phase, 0.26, 0.075)
+        catch = 0.05 * FruitBowlSimulation._pulse(phase, 0.58, 0.12)
+        side_punch = FruitBowlSimulation._pulse(phase, 0.17, 0.045) - FruitBowlSimulation._pulse(phase, 0.44, 0.06)
         return Vec3(
-            0.1 * sin(time * 1.7),
-            0.02 + 0.09 * sin(time * tau * 0.72) + toss + drop + catch,
-            0.1 * sin(time * 2.1 + 0.6),
+            0.1 * sin(time * 1.7) + 0.09 * side_punch,
+            0.0 + 0.05 * sin(time * tau * 0.72) + toss + drop + catch,
+            0.1 * sin(time * 2.1 + 0.6) - 0.07 * side_punch,
+        )
+
+    @staticmethod
+    def _driven_angular_velocity(time: float) -> Vec3:
+        phase = (time * 0.95) % 1.0
+        kick = FruitBowlSimulation._pulse(phase, 0.18, 0.06)
+        counter_kick = FruitBowlSimulation._pulse(phase, 0.47, 0.075)
+        return Vec3(
+            0.55 * sin(time * 4.1) + 1.25 * kick,
+            0.5 * sin(time * 2.6 + 0.7),
+            0.5 * cos(time * 3.7) - 1.1 * counter_kick,
         )
 
     @staticmethod
@@ -365,7 +386,7 @@ class FruitBowlSimulation:
             scene.add_light(light)
         scene.add_bulletin(
             TextBulletin(
-                f"{label}\nDRIVEN TOSSES + {light_mode.upper()} LIGHTS",
+                f"{label}\nDRIVEN JOSTLE AND {light_mode.upper()} LIGHTS",
                 position=(10, 10),
                 color=(246, 248, 255),
                 background=(5, 7, 11),
@@ -386,13 +407,12 @@ class FruitBowlSimulation:
                         Material(color=light.color, emission=light.color, diffuse=0.35, specular=0.8, shininess=80.0),
                     )
                 )
-                markers.append(
-                    Line3(
-                        light.position,
-                        Vec3(0.0, 0.0, 0.0),
-                        Material(color=light.color, emission=light.color),
-                    )
-                )
+            elif isinstance(light, Sun):
+                direction = (-light.direction).normalized(Vec3(0.0, 1.0, 0.0))
+                start = Vec3(-2.15, 2.0, -2.2)
+                end = start + direction * 0.42
+                markers.append(Line3(start, end, Material(color=light.color, emission=light.color)))
+                markers.append(Sphere(start, 0.035, Material(color=light.color, emission=light.color, diffuse=0.1)))
         return tuple(markers)
 
     def _lights_for_mode(self, light_mode: str) -> tuple[Sun | Lamp, ...]:

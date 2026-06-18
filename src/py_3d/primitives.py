@@ -130,9 +130,11 @@ class Sphere:
     radius: float
     material: Material = Material()
     perturbation: SurfacePerturbation | None = None
+    rotation: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "center", as_vec3(self.center))
+        object.__setattr__(self, "rotation", as_vec3(self.rotation))
         if self.radius <= 0.0:
             raise ValueError("sphere radius must be positive")
 
@@ -157,8 +159,9 @@ class Sphere:
                     sin(phi) * sin(theta),
                 )
                 radius = self._radius_at(normal)
-                row.append(self.center + normal * radius)
-                normal_row.append(normal)
+                rotated_normal = _rotate_euler(normal, self.rotation)
+                row.append(self.center + rotated_normal * radius)
+                normal_row.append(rotated_normal)
             vertices.append(row)
             normals.append(normal_row)
 
@@ -229,6 +232,7 @@ class Bowl:
     radius: float
     material: Material = Material()
     depth: float = 1.0
+    perturbation: SurfacePerturbation | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "center", as_vec3(self.center))
@@ -259,7 +263,7 @@ class Bowl:
                     cos(phi),
                     sin(phi) * sin(theta),
                 )
-                row.append(self.center + normal * self.radius)
+                row.append(self.center + normal * self._radius_at(normal))
                 normal_row.append(normal)
             vertices.append(row)
             normals.append(normal_row)
@@ -335,6 +339,11 @@ class Bowl:
                 )
         return tuple(triangles)
 
+    def _radius_at(self, normal: Vec3) -> float:
+        if self.perturbation is None:
+            return self.radius
+        return max(0.001, self.radius + self.perturbation.displacement(normal))
+
 
 @dataclass(frozen=True)
 class Plane:
@@ -363,3 +372,12 @@ class Plane:
         c = self.point + tangent * half + bitangent * half
         d = self.point - tangent * half + bitangent * half
         return (Triangle(a, b, c, self.material), Triangle(a, c, d, self.material))
+
+
+def _rotate_euler(value: Vec3, rotation: Vec3) -> Vec3:
+    cx, sx = cos(rotation.x), sin(rotation.x)
+    cy, sy = cos(rotation.y), sin(rotation.y)
+    cz, sz = cos(rotation.z), sin(rotation.z)
+    x_rotated = Vec3(value.x, value.y * cx - value.z * sx, value.y * sx + value.z * cx)
+    y_rotated = Vec3(x_rotated.x * cy + x_rotated.z * sy, x_rotated.y, -x_rotated.x * sy + x_rotated.z * cy)
+    return Vec3(y_rotated.x * cz - y_rotated.y * sz, y_rotated.x * sz + y_rotated.y * cz, y_rotated.z)

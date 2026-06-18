@@ -67,7 +67,7 @@ class SphereBody:
         self.dampening = self.damping
 
     def to_primitive(self) -> Sphere:
-        return Sphere(self.position, self.radius, self.material, self.visual_perturbation)
+        return Sphere(self.position, self.radius, self.material, self.visual_perturbation, self.rotation)
 
     def synced_collision_boundary(self) -> SphereCollider:
         """Return the render-derived collider without changing override state."""
@@ -211,10 +211,13 @@ class KinematicBowl:
     squishiness: float = 0.0
     damping: float = 0.0
     dampening: float | None = None
+    visual_perturbation: SurfacePerturbation | None = None
+    angular_velocity: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
 
     def __post_init__(self) -> None:
         self.center = as_vec3(self.center)
         self.velocity = as_vec3(self.velocity)
+        self.angular_velocity = as_vec3(self.angular_velocity)
         if self.radius <= 0.0:
             raise ValueError("kinematic bowl radius must be positive")
         if self.depth <= 0.0 or self.depth > 1.0:
@@ -231,8 +234,14 @@ class KinematicBowl:
             self.velocity = (next_center - self.center) / dt
         self.center = next_center
 
+    def set_angular_velocity(self, angular_velocity: Vec3 | tuple[float, float, float]) -> None:
+        self.angular_velocity = as_vec3(angular_velocity)
+
+    def surface_velocity_at(self, point: Vec3 | tuple[float, float, float]) -> Vec3:
+        return self.velocity + self.angular_velocity.cross(as_vec3(point) - self.center)
+
     def to_primitive(self) -> Bowl:
-        return Bowl(self.center, self.radius, self.material, self.depth)
+        return Bowl(self.center, self.radius, self.material, self.depth, self.visual_perturbation)
 
     def synced_collision_boundary(self) -> BowlCollider:
         return BowlCollider.from_bowl(self.to_primitive(), owner_position=self.center)
@@ -404,8 +413,9 @@ def _resolve_sphere_bowl(sphere: SphereBody, bowl: KinematicBowl, dt: float) -> 
                 correction = _soft_penetration_correction(penetration, sphere_radius, sphere, bowl)
                 sphere.position = sphere.position + push_normal * correction
                 contact_arm = component_offset + push_normal * sphere_radius
-                _apply_kinematic_normal_impulse(sphere, push_normal, bowl.velocity, bowl, contact_arm)
-                _apply_contact_friction(sphere, push_normal, bowl.velocity, bowl.friction, contact_arm, dt)
+                surface_velocity = bowl.surface_velocity_at(sphere.position + contact_arm)
+                _apply_kinematic_normal_impulse(sphere, push_normal, surface_velocity, bowl, contact_arm)
+                _apply_contact_friction(sphere, push_normal, surface_velocity, bowl.friction, contact_arm, dt)
 
         sphere_center = sphere.position + component_offset
         local = sphere_center - bowl_center
@@ -420,8 +430,9 @@ def _resolve_sphere_bowl(sphere: SphereBody, bowl: KinematicBowl, dt: float) -> 
             correction = _soft_penetration_correction(penetration, sphere_radius, sphere, bowl)
             sphere.position = sphere.position + Vec3(0.0, correction, 0.0)
             contact_arm = component_offset - Vec3(0.0, sphere_radius, 0.0)
-            _apply_kinematic_normal_impulse(sphere, Vec3(0.0, 1.0, 0.0), bowl.velocity, bowl, contact_arm)
-            _apply_contact_friction(sphere, Vec3(0.0, 1.0, 0.0), bowl.velocity, bowl.friction, contact_arm, dt)
+            surface_velocity = bowl.surface_velocity_at(sphere.position + contact_arm)
+            _apply_kinematic_normal_impulse(sphere, Vec3(0.0, 1.0, 0.0), surface_velocity, bowl, contact_arm)
+            _apply_contact_friction(sphere, Vec3(0.0, 1.0, 0.0), surface_velocity, bowl.friction, contact_arm, dt)
 
 
 def _resolve_sphere_sphere(first: SphereBody, second: SphereBody, dt: float) -> None:

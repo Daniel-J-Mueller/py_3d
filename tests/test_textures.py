@@ -1,4 +1,4 @@
-from py_3d import Material, Sphere, SurfacePerturbation, Triangle, ValueNoise3D, planar_project_triangles
+from py_3d import Bowl, Material, Sphere, SurfacePerturbation, Triangle, ValueNoise3D, planar_project_triangles
 
 
 def test_sphere_generates_texture_coordinates():
@@ -59,3 +59,24 @@ def test_surface_perturbation_changes_sphere_geometry_and_keeps_uvs():
     assert min(bumpy_distances) >= 0.8
     assert max(bumpy_distances) <= 1.2
     assert all(triangle.has_texture_coordinates() for triangle in bumpy_triangles)
+
+
+def test_sphere_rotation_drives_render_geometry_without_changing_uvs():
+    plain = Sphere((0, 0, 0), 1.0, Material())
+    rotated = Sphere((0, 0, 0), 1.0, Material(), rotation=(0.0, 0.7, 0.25))
+
+    plain_triangles = plain.to_triangles(segments=12, rings=6)
+    rotated_triangles = rotated.to_triangles(segments=12, rings=6)
+
+    assert plain_triangles[8].a != rotated_triangles[8].a
+    assert plain_triangles[8].uv_a == rotated_triangles[8].uv_a
+
+
+def test_surface_perturbation_changes_bowl_geometry():
+    plain = Bowl((0, 0, 0), 1.0, Material(), depth=0.85)
+    bumpy = Bowl((0, 0, 0), 1.0, Material(), depth=0.85, perturbation=SurfacePerturbation(magnitude=0.08, scale=5.0, seed=13))
+
+    plain_distances = sorted(round(vertex.length(), 4) for triangle in plain.to_triangles(segments=12, rings=5) for vertex in (triangle.a, triangle.b, triangle.c))
+    bumpy_distances = sorted(round(vertex.length(), 4) for triangle in bumpy.to_triangles(segments=12, rings=5) for vertex in (triangle.a, triangle.b, triangle.c))
+
+    assert plain_distances != bumpy_distances

@@ -342,6 +342,9 @@ Dynamic bodies now expose early rigid-body controls:
 Contact friction now applies tangential impulses at the contact point, so a
 sphere on a surface can pick up spin instead of only strafing. This is still a
 simple educational model, not a full rigid-body solver.
+`SphereBody.to_primitive()` also passes body rotation into generated sphere
+geometry, so visual texture coordinates and procedural bumps roll with the
+physics body by default.
 
 ## Proposed Package Layout
 
@@ -509,6 +512,8 @@ render mesh with a compound collision boundary generated from the same curved
 centerline. Fruit bodies use mass, inertia, friction, squishiness, and damping
 so collisions read more like soft produce than hard billiard balls. It writes
 `renderings-tests/fruit_bowl.png`.
+The bowl is wood-colored, visually perturbed, and uses higher friction/lower
+restitution so it behaves more like a wooden bowl than a hard plastic shell.
 
 Run the live fruit bowl viewer:
 

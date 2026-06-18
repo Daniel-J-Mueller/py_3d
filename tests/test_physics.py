@@ -162,9 +162,11 @@ def test_kinematic_bowl_set_center_updates_velocity_and_syncs_collider():
     bowl = KinematicBowl(center=(0, 0, 0), radius=1.25, depth=0.75, collision_boundary=BowlCollider(radius=0.8))
 
     bowl.set_center((0, 0.5, 0), dt=0.25)
+    bowl.set_angular_velocity((0, 2, 0))
     synced = bowl.sync_collision_boundary(force=True)
 
     assert bowl.velocity == Vec3(0.0, 2.0, 0.0)
+    assert bowl.surface_velocity_at((1, 0.5, 0)) == Vec3(0.0, 2.0, -2.0)
     assert synced.radius == 1.25
     assert synced.depth == 0.75
 
