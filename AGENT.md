@@ -50,6 +50,12 @@ behavior while the engine grows.
 - Materials should expose absorption and base color directly.
 - Future GPU backends should be optional and should not force a different scene,
   material, camera, or light model.
+- Keep acceleration behind the `Renderer` protocol. The pure-Python CPU renderer
+  is the correctness reference; optional NumPy, Numba, Cython, OpenGL, Vulkan,
+  WebGPU, or platform compute backends should match its behavior.
+- Profile before optimizing. Prefer improvements that keep the reference path
+  understandable, such as cached projection constants, cached static geometry,
+  prepared triangle data, and tight buffer writes.
 - Keep text bulletins on the roadmap for 3D views. They should work as overlays
   for labels, debug status, and scene callouts without requiring a GUI window.
 - For real-time and wiremesh/wireframe views, plan clicked-in mouse and keyboard

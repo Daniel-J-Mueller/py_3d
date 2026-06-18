@@ -69,22 +69,34 @@ class PixelBuffer:
         _validate_dimensions(width, height)
         if width == self.width and height == self.height:
             return self.copy()
+        x_indices = tuple(min(self.width - 1, int(x * self.width / width)) for x in range(width))
+        scaled_rows: dict[int, list[Color]] = {}
         pixels: list[Color] = []
         for y in range(height):
             source_y = min(self.height - 1, int(y * self.height / height))
-            for x in range(width):
-                source_x = min(self.width - 1, int(x * self.width / width))
-                pixels.append(self.pixels[source_y * self.width + source_x])
+            row = scaled_rows.get(source_y)
+            if row is None:
+                row_start = source_y * self.width
+                row = [self.pixels[row_start + source_x] for source_x in x_indices]
+                scaled_rows[source_y] = row
+            pixels.extend(row)
         return PixelBuffer(width, height, pixels)
+
+    def to_rgb_bytes(self) -> bytes:
+        payload = bytearray(len(self.pixels) * 3)
+        offset = 0
+        for pixel in self.pixels:
+            payload[offset] = pixel.r
+            payload[offset + 1] = pixel.g
+            payload[offset + 2] = pixel.b
+            offset += 3
+        return bytes(payload)
 
     def to_ppm_bytes(self) -> bytes:
         """Return the buffer encoded as binary PPM bytes."""
 
         header = f"P6\n{self.width} {self.height}\n255\n".encode("ascii")
-        payload = bytearray()
-        for pixel in self.pixels:
-            payload.extend(pixel.to_tuple())
-        return header + bytes(payload)
+        return header + self.to_rgb_bytes()
 
     def to_ppm(self, path: str | Path) -> None:
         """Write the buffer as a binary PPM image without extra dependencies."""
@@ -99,7 +111,9 @@ class PixelBuffer:
         for y in range(self.height):
             rows.append(0)
             for pixel in self.pixels[y * self.width : (y + 1) * self.width]:
-                rows.extend(pixel.to_tuple())
+                rows.append(pixel.r)
+                rows.append(pixel.g)
+                rows.append(pixel.b)
 
         payload = b"".join(
             [

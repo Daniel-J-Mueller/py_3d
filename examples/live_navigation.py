@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 import base64
-from math import cos, radians, sin
+from math import radians, sin, cos
 from pathlib import Path
 import tkinter as tk
 
@@ -66,11 +66,14 @@ class LiveViewer:
         self.yaw = 0.0
         self.pitch = 12.0
         self.drag_start: tuple[int, int] | None = None
+        self.base_photo: tk.PhotoImage | None = None
         self.photo: tk.PhotoImage | None = None
+        self.window_icon: tk.PhotoImage | None = None
 
         self.root = tk.Tk()
         self.root.title("py_3d live navigation")
         self.root.geometry(f"{args.window_width}x{args.window_height}")
+        self.set_window_icon()
         self.canvas = tk.Canvas(self.root, bg="#07090e", highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
         self.image_item = self.canvas.create_image(0, 0, anchor=tk.NW)
@@ -96,6 +99,16 @@ class LiveViewer:
     def run(self) -> None:
         self.render_once()
         self.root.mainloop()
+
+    def set_window_icon(self) -> None:
+        icon_path = Path(__file__).resolve().parents[1] / "assets" / "py_3d_logo.png"
+        if not icon_path.exists():
+            return
+        try:
+            self.window_icon = tk.PhotoImage(file=str(icon_path))
+            self.root.iconphoto(True, self.window_icon)
+        except tk.TclError as exc:
+            print(f"Could not load window icon {icon_path}: {exc}")
 
     def on_click(self, event) -> None:
         self.canvas.focus_set()
@@ -146,12 +159,22 @@ class LiveViewer:
 
     def render_once(self) -> None:
         output = self.engine.render(self.scene, self.camera(), self.settings)
-        display = output
+        self.base_photo = self._photo_from_buffer(output)
+        self.photo = self.base_photo
         if self.args.fit_window:
             width = max(1, self.canvas.winfo_width())
             height = max(1, self.canvas.winfo_height())
-            display = output.resized_nearest(width, height)
-        self.photo = self._photo_from_buffer(display)
+            scale_x = width // output.width
+            scale_y = height // output.height
+            if (
+                scale_x >= 1
+                and scale_y >= 1
+                and output.width * scale_x == width
+                and output.height * scale_y == height
+            ):
+                self.photo = self.base_photo.zoom(scale_x, scale_y)
+            else:
+                self.photo = self._photo_from_buffer(output.resized_nearest(width, height))
         self.canvas.itemconfigure(self.image_item, image=self.photo)
 
     def save_snapshot(self) -> None:

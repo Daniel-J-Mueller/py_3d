@@ -1,4 +1,4 @@
-from py_3d import Box, Camera, Color, Lamp, Material, Plane, RenderEngine, RenderSettings, Scene, Sphere, Sun, TextBulletin, Triangle
+from py_3d import Box, CPURenderer, Camera, Color, Lamp, Material, Plane, RenderEngine, RenderSettings, Scene, Sphere, Sun, TextBulletin, Triangle
 
 
 def test_cpu_renderer_renders_triangle_offscreen():
@@ -78,3 +78,16 @@ def test_text_bulletin_renders_over_scene():
 
     assert buffer.get_pixel(0, 0) == Color(10, 20, 30)
     assert any(pixel == Color(255, 255, 255) for pixel in buffer.pixels)
+
+
+def test_cached_and_uncached_cpu_renderers_match_basic_scene():
+    scene = Scene()
+    scene.add(Sphere((0, 0, 0), 0.7, Material(color=(90, 150, 230))))
+    scene.add_light(Sun(direction=(0, 0, -1), intensity=1.0))
+    camera = Camera(position=(0, 0, -4), target=(0, 0, 0))
+    settings = RenderSettings(width=64, height=64, sphere_segments=12, sphere_rings=6)
+
+    cached = RenderEngine(CPURenderer(cache_static_geometry=True)).render(scene, camera, settings)
+    uncached = RenderEngine(CPURenderer(cache_static_geometry=False)).render(scene, camera, settings)
+
+    assert cached.pixels == uncached.pixels

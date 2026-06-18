@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import ceil, floor
+from math import ceil, floor, radians, tan
 from typing import Protocol, runtime_checkable
 
 from .buffer import DepthBuffer, PixelBuffer
@@ -85,6 +85,13 @@ class CPURenderer:
     name = "Reference CPU Renderer"
     backend = "cpu"
 
+    def __init__(self, *, cache_static_geometry: bool = True) -> None:
+        self.cache_static_geometry = cache_static_geometry
+        self._triangle_cache: dict[tuple[type, int, int, int], tuple[_PreparedTriangle, ...]] = {}
+
+    def clear_cache(self) -> None:
+        self._triangle_cache.clear()
+
     def render(
         self,
         scene: Scene,
@@ -97,35 +104,55 @@ class CPURenderer:
             raise ValueError("target buffer dimensions must match render settings")
         buffer.clear(settings.background)
         depth = DepthBuffer.new(settings.width, settings.height)
+        projector = _CameraProjector(camera, settings.width, settings.height)
 
         for obj in scene.objects:
             if isinstance(obj, Point3):
-                self._draw_point(buffer, depth, camera, obj)
+                self._draw_point(buffer, depth, projector, obj)
             elif isinstance(obj, Line3):
-                self._draw_line(buffer, depth, camera, obj)
+                self._draw_line(buffer, depth, projector, obj)
             else:
-                for triangle in _triangles_for(obj, settings):
+                for triangle in self._prepared_triangles_for(obj, settings):
                     if settings.wireframe:
-                        self._draw_triangle_wireframe(buffer, depth, camera, triangle)
+                        self._draw_triangle_wireframe(buffer, depth, projector, triangle.triangle)
                     else:
-                        self._draw_triangle(buffer, depth, scene, camera, settings, triangle)
+                        self._draw_triangle(buffer, depth, scene, camera, projector, settings, triangle)
         for bulletin in scene.bulletins:
             if isinstance(bulletin, TextBulletin):
                 _draw_text_bulletin(buffer, bulletin)
         return buffer
 
-    def _draw_point(self, buffer: PixelBuffer, depth: DepthBuffer, camera: Camera, point: Point3) -> None:
-        projected = camera.project(point.position, buffer.width, buffer.height)
+    def _prepared_triangles_for(self, obj, settings: RenderSettings) -> tuple["_PreparedTriangle", ...]:
+        if isinstance(obj, Triangle):
+            return (_PreparedTriangle(obj, obj.center(), obj.normal()),)
+        if not self.cache_static_geometry:
+            return _prepare_triangles(_triangles_for(obj, settings))
+
+        if isinstance(obj, Sphere):
+            key = (type(obj), id(obj), settings.sphere_segments, settings.sphere_rings)
+        else:
+            key = (type(obj), id(obj), 0, 0)
+        triangles = self._triangle_cache.get(key)
+        if triangles is None:
+            triangles = _prepare_triangles(_triangles_for(obj, settings))
+            self._triangle_cache[key] = triangles
+        return triangles
+
+    def _draw_point(self, buffer: PixelBuffer, depth: DepthBuffer, projector: "_CameraProjector", point: Point3) -> None:
+        projected = projector.project(point.position)
         if projected is None:
             return
         x = round(projected.x)
         y = round(projected.y)
-        if depth.test_and_set(x, y, projected.depth):
-            buffer.set_pixel(x, y, point.material.color)
+        if 0 <= x < buffer.width and 0 <= y < buffer.height:
+            index = y * buffer.width + x
+            if projected.depth < depth.values[index]:
+                depth.values[index] = projected.depth
+                buffer.pixels[index] = point.material.color
 
-    def _draw_line(self, buffer: PixelBuffer, depth: DepthBuffer, camera: Camera, line: Line3) -> None:
-        start = camera.project(line.start, buffer.width, buffer.height)
-        end = camera.project(line.end, buffer.width, buffer.height)
+    def _draw_line(self, buffer: PixelBuffer, depth: DepthBuffer, projector: "_CameraProjector", line: Line3) -> None:
+        start = projector.project(line.start)
+        end = projector.project(line.end)
         if start is None or end is None:
             return
         self._draw_projected_line(buffer, depth, start, end, line.material.color)
@@ -134,12 +161,12 @@ class CPURenderer:
         self,
         buffer: PixelBuffer,
         depth: DepthBuffer,
-        camera: Camera,
+        projector: "_CameraProjector",
         triangle: Triangle,
     ) -> None:
-        a = camera.project(triangle.a, buffer.width, buffer.height)
-        b = camera.project(triangle.b, buffer.width, buffer.height)
-        c = camera.project(triangle.c, buffer.width, buffer.height)
+        a = projector.project(triangle.a)
+        b = projector.project(triangle.b)
+        c = projector.project(triangle.c)
         if a is None or b is None or c is None:
             return
         color = triangle.material.color
@@ -158,13 +185,20 @@ class CPURenderer:
         dx = end.x - start.x
         dy = end.y - start.y
         steps = max(abs(dx), abs(dy), 1.0)
+        width = buffer.width
+        height = buffer.height
+        pixels = buffer.pixels
+        depth_values = depth.values
         for index in range(int(steps) + 1):
             amount = index / steps
             x = round(start.x + dx * amount)
             y = round(start.y + dy * amount)
             z = start.depth + (end.depth - start.depth) * amount
-            if depth.test_and_set(x, y, z):
-                buffer.set_pixel(x, y, color)
+            if 0 <= x < width and 0 <= y < height:
+                buffer_index = y * width + x
+                if z < depth_values[buffer_index]:
+                    depth_values[buffer_index] = z
+                    pixels[buffer_index] = color
 
     def _draw_triangle(
         self,
@@ -172,17 +206,19 @@ class CPURenderer:
         depth: DepthBuffer,
         scene: Scene,
         camera: Camera,
+        projector: "_CameraProjector",
         settings: RenderSettings,
-        triangle: Triangle,
+        prepared: "_PreparedTriangle",
     ) -> None:
-        a = camera.project(triangle.a, buffer.width, buffer.height)
-        b = camera.project(triangle.b, buffer.width, buffer.height)
-        c = camera.project(triangle.c, buffer.width, buffer.height)
+        triangle = prepared.triangle
+        a = projector.project(triangle.a)
+        b = projector.project(triangle.b)
+        c = projector.project(triangle.c)
         if a is None or b is None or c is None:
             return
 
-        normal = triangle.normal()
-        center = triangle.center()
+        normal = prepared.normal
+        center = prepared.center
         view_direction = (camera.position - center).normalized(Vec3(0.0, 0.0, -1.0))
         facing = normal.dot(view_direction)
         if settings.cull_backfaces and facing <= 0.0:
@@ -190,7 +226,7 @@ class CPURenderer:
         if facing < 0.0:
             normal = -normal
 
-        color = _shade_triangle(scene, settings, triangle, normal)
+        color = _shade_triangle(scene, settings, triangle, normal, center)
         min_x = max(0, floor(min(a.x, b.x, c.x)))
         max_x = min(buffer.width - 1, ceil(max(a.x, b.x, c.x)))
         min_y = max(0, floor(min(a.y, b.y, c.y)))
@@ -199,19 +235,69 @@ class CPURenderer:
         area = _edge(a.x, a.y, b.x, b.y, c.x, c.y)
         if abs(area) < 1e-12:
             return
+        inv_area = 1.0 / area
+        ax, ay, az = a.x, a.y, a.depth
+        bx, by, bz = b.x, b.y, b.depth
+        cx, cy, cz = c.x, c.y, c.depth
+        width = buffer.width
+        pixels = buffer.pixels
+        depth_values = depth.values
 
         for y in range(min_y, max_y + 1):
+            row_index = y * width
+            py = y + 0.5
             for x in range(min_x, max_x + 1):
                 px = x + 0.5
-                py = y + 0.5
-                w0 = _edge(b.x, b.y, c.x, c.y, px, py) / area
-                w1 = _edge(c.x, c.y, a.x, a.y, px, py) / area
-                w2 = _edge(a.x, a.y, b.x, b.y, px, py) / area
+                w0 = ((px - bx) * (cy - by) - (py - by) * (cx - bx)) * inv_area
+                w1 = ((px - cx) * (ay - cy) - (py - cy) * (ax - cx)) * inv_area
+                w2 = ((px - ax) * (by - ay) - (py - ay) * (bx - ax)) * inv_area
                 if w0 < -1e-9 or w1 < -1e-9 or w2 < -1e-9:
                     continue
-                z = w0 * a.depth + w1 * b.depth + w2 * c.depth
-                if depth.test_and_set(x, y, z):
-                    buffer.set_pixel(x, y, color)
+                z = w0 * az + w1 * bz + w2 * cz
+                index = row_index + x
+                if z < depth_values[index]:
+                    depth_values[index] = z
+                    pixels[index] = color
+
+
+@dataclass(frozen=True)
+class _PreparedTriangle:
+    triangle: Triangle
+    center: Vec3
+    normal: Vec3
+
+
+@dataclass(frozen=True)
+class _CameraProjector:
+    camera: Camera
+    width: int
+    height: int
+
+    def __post_init__(self) -> None:
+        right, true_up, forward = self.camera.basis()
+        object.__setattr__(self, "right", right)
+        object.__setattr__(self, "true_up", true_up)
+        object.__setattr__(self, "forward", forward)
+        object.__setattr__(self, "aspect", self.width / self.height)
+        object.__setattr__(self, "focal", 1.0 / tan(radians(self.camera.fov_degrees) / 2.0))
+        object.__setattr__(self, "half_width", 0.5 * (self.width - 1))
+        object.__setattr__(self, "half_height", 0.5 * (self.height - 1))
+
+    def project(self, point: Vec3 | tuple[float, float, float]) -> ProjectedPoint | None:
+        relative = point - self.camera.position if isinstance(point, Vec3) else Vec3(*point) - self.camera.position
+        camera_x = relative.dot(self.right)
+        camera_y = relative.dot(self.true_up)
+        camera_z = relative.dot(self.forward)
+        if camera_z < self.camera.near or camera_z > self.camera.far:
+            return None
+
+        ndc_x = (camera_x * self.focal / self.aspect) / camera_z
+        ndc_y = (camera_y * self.focal) / camera_z
+        return ProjectedPoint(
+            (ndc_x + 1.0) * self.half_width,
+            (1.0 - ndc_y) * self.half_height,
+            camera_z,
+        )
 
 
 def _edge(ax: float, ay: float, bx: float, by: float, px: float, py: float) -> float:
@@ -231,8 +317,17 @@ def _triangles_for(obj, settings: RenderSettings) -> tuple[Triangle, ...]:
     return ()
 
 
-def _shade_triangle(scene: Scene, settings: RenderSettings, triangle: Triangle, normal: Vec3) -> Color:
-    center = triangle.center()
+def _prepare_triangles(triangles: tuple[Triangle, ...]) -> tuple[_PreparedTriangle, ...]:
+    return tuple(_PreparedTriangle(triangle, triangle.center(), triangle.normal()) for triangle in triangles)
+
+
+def _shade_triangle(
+    scene: Scene,
+    settings: RenderSettings,
+    triangle: Triangle,
+    normal: Vec3,
+    center: Vec3,
+) -> Color:
     light_channels = [0.0, 0.0, 0.0]
     for light in scene.lights:
         if not isinstance(light, (Lamp, Sun)) and not hasattr(light, "sample"):

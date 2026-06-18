@@ -285,6 +285,8 @@ snapshot. The window size and render output size are intentionally independent;
 use `--no-fit-window` to view the raw render buffer without scaling it to the
 window.
 
+The live Tk window uses `assets/py_3d_logo.png` as its window icon.
+
 Run the physics interaction example:
 
 ```bash
@@ -293,6 +295,19 @@ python examples/physics_interaction.py
 
 It simulates a sphere sliding down a tilted plane into a wall, then writes
 `renderings-tests/physics_interaction.png`.
+
+Run the CPU renderer benchmark:
+
+```bash
+python examples/render_benchmark.py --frames 60 --width 320 --height 180
+python examples/render_benchmark.py --frames 60 --width 320 --height 180 --no-cache
+```
+
+The current CPU renderer caches static primitive triangulation, caches triangle
+centers and normals, computes camera projection constants once per frame, and
+uses direct depth/pixel writes in the triangle hot path. The live viewer also
+uses Tk's native integer image scaling when the render size fits the window by
+an exact whole-number scale.
 
 ## Testing Expectations
 
@@ -342,6 +357,11 @@ sources.
   offline rendering.
 - Keep final viewing frame dimensions and output render dimensions independent
   for live viewers, batch renderers, and saved images.
+- Add optional accelerated renderers behind the existing `Renderer` protocol.
+  Reasonable candidates are NumPy vectorized CPU paths, Numba/Cython native CPU
+  paths, and GPU backends through OpenGL, Vulkan, WebGPU, or platform-specific
+  compute APIs. The pure-Python CPU renderer should remain the correctness
+  reference.
 
 ## Design Principle
 
