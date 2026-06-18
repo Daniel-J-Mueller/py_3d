@@ -27,6 +27,9 @@ behavior while the engine grows.
 - Keep reference implementations understandable before adding acceleration.
 - If adding an optimized path, keep it behind the same public interface as the
   clear path.
+- Keep CPU and GPU compatibility in mind early. The pure-Python CPU renderer is
+  the behavioral reference; GPU renderers should match its public interface and
+  be tested against equivalent scenes.
 - Avoid mandatory heavy dependencies unless the project has a clear need and
   tests that justify them.
 - Do not add a framework-scale abstraction just because one might be useful
@@ -36,6 +39,8 @@ behavior while the engine grows.
 
 - Render into explicit buffers. Window display should consume a buffer rather
   than own all drawing behavior.
+- Preserve offline rendering. A render pass should be usable for tests, image
+  export, batch rendering, and simulation snapshots without a live event loop.
 - Keep depth handling basic and predictable, such as a z-buffer.
 - Make camera projection, clipping, and rasterization testable without a GUI.
 - Prefer simple Lambert-style lighting before advanced shading.
@@ -43,6 +48,16 @@ behavior while the engine grows.
   - `Lamp`: positional emission with optional falloff.
   - `Sun`: directional emission.
 - Materials should expose absorption and base color directly.
+- Future GPU backends should be optional and should not force a different scene,
+  material, camera, or light model.
+- Keep text bulletins on the roadmap for 3D views. They should work as overlays
+  for labels, debug status, and scene callouts without requiring a GUI window.
+- For real-time and wiremesh/wireframe views, plan clicked-in mouse and keyboard
+  navigation. Camera controls should be explicit and should not leak into
+  headless rendering.
+- Keep live viewing dimensions separate from output render dimensions. A window
+  can be 960x540 while the render target is 320x180, 1280x720, or any other
+  explicit size.
 
 ## Collision and Physics Guidance
 

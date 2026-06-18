@@ -9,8 +9,10 @@ simple and predictable, light objects with basic material behavior, and provide
 enough collision support to build toy physics, demos, and simulations without
 pulling in a full game engine.
 
-This repository is currently at the project-definition stage. The API examples
-below describe the intended direction and should guide implementation.
+This repository now contains the first package foundation: data types for
+vectors, colors, buffers, cameras, materials, lights, primitives, scenes, and a
+pure-Python CPU reference renderer. The renderer works off-screen, so images can
+be produced without a real-time window.
 
 ## Project Goals
 
@@ -40,10 +42,36 @@ useful reference point for simple drawing ergonomics, but this project should
 favor a smaller, clearer API that treats depth, light, and simulation as
 first-class concepts.
 
-## Intended API Shape
+## Current Offline Rendering API
 
-The exact module names may change as the package is built, but the public API
-should stay close to this level of simplicity:
+The current renderer can draw lit triangles and simple primitives into an
+off-screen buffer:
+
+```python
+from py_3d import Camera, Material, RenderEngine, RenderSettings, Scene, Sun, Triangle
+
+scene = Scene()
+scene.add(
+    Triangle(
+        (-1, -1, 0),
+        (1, -1, 0),
+        (0, 1, 0),
+        Material(color=(220, 80, 40)),
+    )
+)
+scene.add_light(Sun(direction=(0, 0, -1), color=(255, 255, 255), intensity=1.0))
+
+camera = Camera(position=(0, 0, -4), target=(0, 0, 0))
+settings = RenderSettings(width=320, height=240, background=(8, 10, 14))
+
+buffer = RenderEngine().render(scene, camera, settings)
+buffer.to_ppm("triangle.ppm")
+```
+
+## Longer-Term API Shape
+
+The exact module names may continue to evolve, but the public API should stay
+close to this level of simplicity as windowing and physics are added:
 
 ```python
 import py_3d as p3d
@@ -87,12 +115,18 @@ while screen.open:
 
 ## Core Concepts
 
+### 2D Drawing
+
+The first 2D layer is immediate-mode and buffer-based. It supports basic points,
+lines, rectangles, and circles through `py_3d.draw`, and it exists both for
+simple pixel work and for overlays that may later sit on top of 3D renders.
+
 ### Surfaces and Buffers
 
 The lowest layer should be a pixel buffer with predictable memory layout. A
 window is only one possible output target. Rendering to an off-screen buffer
 should be supported from the beginning so tests, image export, and headless
-simulation are easy.
+simulation are easy. Buffers can currently be written as PPM or PNG files.
 
 ### Primitives
 
@@ -145,6 +179,15 @@ Performance matters, but early optimization should not make the architecture
 opaque. When speed work is needed, prefer isolated accelerated paths behind a
 stable Python API.
 
+The package already exposes a `Renderer` protocol and `RenderEngine` wrapper.
+The built-in `CPURenderer` is the correctness target. Future GPU renderers
+should implement the same renderer interface and be validated against the CPU
+backend using shared scenes and image/depth expectations.
+
+Rendering is not limited to real-time windows. Offline rendering is a first
+class path: callers can render a `Scene` into a `PixelBuffer`, write it to disk,
+inspect pixels in tests, or feed the buffer into a later display backend.
+
 ### Collision and Motion
 
 The collision system should start with simple shapes and simple guarantees:
@@ -165,6 +208,7 @@ py_3d/
   __init__.py
   buffer.py        # Pixel buffers, color packing, image export helpers
   camera.py        # Camera and projection math
+  color.py         # RGB color helpers
   collision.py     # Shape intersection and contact generation
   draw.py          # Immediate-mode primitive drawing helpers
   lights.py        # Lamp, Sun, and lighting utilities
@@ -180,6 +224,9 @@ examples/
 
 This layout is a starting point, not a requirement. Keep modules small and
 split them when a file starts mixing unrelated responsibilities.
+
+Current implemented modules are `buffer`, `camera`, `color`, `lights`,
+`materials`, `math3d`, `primitives`, `render`, and `scene`.
 
 ## Performance Direction
 
@@ -210,8 +257,42 @@ python -m pip install -e ".[dev]"
 python -m pytest
 ```
 
-Until the package structure is created, use this README and `AGENT.md` as the
-source of truth for project direction.
+Run the offline example:
+
+```bash
+python examples/offline_triangle.py
+```
+
+It writes `examples/output/offline_triangle.ppm`.
+
+Generate the current PNG rendering samples:
+
+```bash
+python examples/rendering_gallery.py
+```
+
+It writes PNG files to `renderings-tests/`.
+
+Run the live navigation example:
+
+```bash
+python examples/live_navigation.py --window-width 960 --window-height 540 --render-width 320 --render-height 180
+```
+
+Click into the window to focus controls. Drag or use arrow keys to orbit,
+`W/S` to zoom, `A/D` to pan, `Q/E` to move the target up/down, and `P` to save a
+snapshot. The window size and render output size are intentionally independent;
+use `--no-fit-window` to view the raw render buffer without scaling it to the
+window.
+
+Run the physics interaction example:
+
+```bash
+python examples/physics_interaction.py
+```
+
+It simulates a sphere sliding down a tilted plane into a wall, then writes
+`renderings-tests/physics_interaction.png`.
 
 ## Testing Expectations
 
@@ -244,6 +325,23 @@ Visual examples are valuable, but they should not replace numeric tests.
   - Multiple colored lights.
   - Headless render-to-image test.
 - Explore voxel and fluid-friendly data structures.
+
+Current generated package/banner artwork lives at
+`renderings-tests/github-banner.png`. It is produced by
+`examples/rendering_gallery.py` and includes text bulletins plus multiple light
+sources.
+
+## TODO
+
+- Expand text bulletins for 3D renderings with more font options, alignment,
+  anchoring, debug callouts, and scene-attached labels.
+- Expand clicked-in mouse and keyboard navigation for real-time and
+  wiremesh/wireframe renderings, including reusable camera controllers and basic
+  first-person movement modes.
+- Add a window backend that can consume the same `RenderEngine` outputs used by
+  offline rendering.
+- Keep final viewing frame dimensions and output render dimensions independent
+  for live viewers, batch renderers, and saved images.
 
 ## Design Principle
 

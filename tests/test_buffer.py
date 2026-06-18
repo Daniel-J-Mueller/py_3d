@@ -1,0 +1,62 @@
+from pathlib import Path
+
+from py_3d import Color, DepthBuffer, PixelBuffer
+
+
+def test_pixel_buffer_set_get_and_clear():
+    buffer = PixelBuffer.new(3, 2, Color(1, 2, 3))
+
+    assert buffer.get_pixel(0, 0) == Color(1, 2, 3)
+
+    buffer.set_pixel(2, 1, (10, 20, 30))
+    assert buffer.get_pixel(2, 1) == Color(10, 20, 30)
+
+    buffer.clear((5, 6, 7))
+    assert all(pixel == Color(5, 6, 7) for pixel in buffer.pixels)
+
+
+def test_depth_buffer_prefers_lower_depth():
+    depth = DepthBuffer.new(2, 2)
+
+    assert depth.test_and_set(1, 1, 10.0)
+    assert not depth.test_and_set(1, 1, 12.0)
+    assert depth.test_and_set(1, 1, 5.0)
+    assert depth.get(1, 1) == 5.0
+
+
+def test_pixel_buffer_writes_ppm(tmp_path: Path):
+    buffer = PixelBuffer.new(1, 1, Color(255, 0, 0))
+    target = tmp_path / "pixel.ppm"
+
+    buffer.to_ppm(target)
+
+    assert target.read_bytes() == b"P6\n1 1\n255\n\xff\x00\x00"
+
+
+def test_pixel_buffer_writes_png(tmp_path: Path):
+    buffer = PixelBuffer.new(2, 1, Color(255, 0, 0))
+    buffer.set_pixel(1, 0, Color(0, 0, 255))
+    target = tmp_path / "pixels.png"
+
+    buffer.to_png(target)
+
+    data = target.read_bytes()
+    assert data.startswith(b"\x89PNG\r\n\x1a\n")
+    assert b"IHDR" in data
+    assert b"IDAT" in data
+    assert data.endswith(b"IEND\xaeB`\x82")
+
+
+def test_pixel_buffer_resizes_with_nearest_neighbor():
+    buffer = PixelBuffer.new(2, 1)
+    buffer.set_pixel(0, 0, Color(255, 0, 0))
+    buffer.set_pixel(1, 0, Color(0, 0, 255))
+
+    resized = buffer.resized_nearest(4, 2)
+
+    assert resized.width == 4
+    assert resized.height == 2
+    assert resized.get_pixel(0, 0) == Color(255, 0, 0)
+    assert resized.get_pixel(1, 1) == Color(255, 0, 0)
+    assert resized.get_pixel(2, 0) == Color(0, 0, 255)
+    assert resized.get_pixel(3, 1) == Color(0, 0, 255)
