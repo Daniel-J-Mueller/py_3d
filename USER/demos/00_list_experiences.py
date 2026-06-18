@@ -11,6 +11,8 @@ ROOT = Path(__file__).resolve().parents[2]
 EXPERIENCES = [
     ("10_live_fruit_bowl_gpu.py", "Live OpenGL fruit bowl with filled GPU rendering; press R for wireframe."),
     ("11_live_capsule_walk.py", "Live OpenGL capsule controller with first-person camera."),
+    ("12_live_fruit_bowl_mirror_prelight.py", "High-spec uncapped OpenGL mirror-prelight fruit bowl."),
+    ("13_live_fruit_bowl_poly_lamp.py", "Low-poly wood fruit bowl lit by a visible lamp primitive."),
     ("20_render_feature_previews.py", "Render short still previews for fruit bowl, slime, and rocket tube."),
     ("30_render_environment_videos.py", "Render selected MP4 outputs into each environment renderings dir."),
     ("40_run_feature_tests.py", "Run pytest plus environment dry-runs with CPU/GPU specs printed."),

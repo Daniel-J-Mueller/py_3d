@@ -1,0 +1,16 @@
+{
+  "name": "floating_bulletin",
+  "package_type": "py_3d.FloatingTextBulletin",
+  "description": "Text overlay projected from a 3D world position.",
+  "basic_properties": {
+    "text": "FLOATING BULLETIN\\nWOOD BOWL + LAMP PRIMITIVE",
+    "position": [-0.15, 1.42, -0.62],
+    "screen_offset": [0, -18],
+    "anchor": [0.5, 1.0],
+    "color": [250, 244, 224],
+    "background": [15, 9, 5],
+    "padding": 5,
+    "scale": 1
+  },
+  "demo": "USER/demos/13_live_fruit_bowl_poly_lamp.py"
+}

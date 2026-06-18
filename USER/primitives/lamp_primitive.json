@@ -1,0 +1,24 @@
+{
+  "name": "lamp_primitive",
+  "package_type": "py_3d.LampPrimitive",
+  "description": "Visible low-poly lamp geometry colocated with a positional Lamp light.",
+  "basic_properties": {
+    "position": [-0.58, 1.36, -1.05],
+    "height": 0.82,
+    "base_radius": 0.16,
+    "stem_radius": 0.025,
+    "shade_radius": 0.28,
+    "shade_height": 0.24,
+    "segments": 8,
+    "color": [255, 222, 166],
+    "shade_color": [198, 152, 104],
+    "stem_color": [104, 96, 88]
+  },
+  "paired_light": {
+    "package_type": "py_3d.Lamp",
+    "position": [-0.58, 1.36, -1.05],
+    "color": [255, 222, 166],
+    "intensity": 7.2
+  },
+  "demo": "USER/demos/13_live_fruit_bowl_poly_lamp.py"
+}

@@ -1,5 +1,78 @@
 {
   "profile": "standard",
+  "render_quality": "high",
+  "render_quality_presets": {
+    "fast": {
+      "width": 640,
+      "height": 360,
+      "window_width": 960,
+      "window_height": 540,
+      "sphere_segments": 10,
+      "sphere_rings": 5,
+      "smooth_shading": false,
+      "gamma": 1.05,
+      "light_wrap": 0.08,
+      "bounce_light": 0.04,
+      "tone_mapping": false,
+      "max_render_distance": 7.0
+    },
+    "balanced": {
+      "width": 960,
+      "height": 540,
+      "window_width": 1280,
+      "window_height": 720,
+      "sphere_segments": 18,
+      "sphere_rings": 9,
+      "smooth_shading": true,
+      "gamma": 1.12,
+      "light_wrap": 0.16,
+      "bounce_light": 0.08,
+      "tone_mapping": true,
+      "max_render_distance": 8.5
+    },
+    "high": {
+      "width": 1280,
+      "height": 720,
+      "window_width": 1280,
+      "window_height": 720,
+      "sphere_segments": 24,
+      "sphere_rings": 12,
+      "smooth_shading": true,
+      "gamma": 1.15,
+      "light_wrap": 0.24,
+      "bounce_light": 0.14,
+      "tone_mapping": true,
+      "max_render_distance": 10.0
+    },
+    "ultra": {
+      "width": 1920,
+      "height": 1080,
+      "window_width": 1920,
+      "window_height": 1080,
+      "sphere_segments": 32,
+      "sphere_rings": 16,
+      "smooth_shading": true,
+      "gamma": 1.18,
+      "light_wrap": 0.28,
+      "bounce_light": 0.18,
+      "tone_mapping": true,
+      "max_render_distance": 12.0
+    },
+    "poly": {
+      "width": 1280,
+      "height": 720,
+      "window_width": 1280,
+      "window_height": 720,
+      "sphere_segments": 7,
+      "sphere_rings": 4,
+      "smooth_shading": false,
+      "gamma": 1.12,
+      "light_wrap": 0.18,
+      "bounce_light": 0.12,
+      "tone_mapping": true,
+      "max_render_distance": 9.0
+    }
+  },
   "standard_render_specs": {
     "gpu": {
       "renderer": "py_gpu",

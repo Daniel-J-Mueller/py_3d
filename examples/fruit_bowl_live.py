@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from fruit_bowl_demo import GLFruitBowlViewer, LiveFruitBowlViewer, apply_cpu_reduced_specs
+from fruit_bowl_demo import GLFruitBowlViewer, LiveFruitBowlViewer, apply_cpu_reduced_specs, apply_render_quality
 
 
 def parse_args() -> argparse.Namespace:
@@ -15,12 +15,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--window-width", type=int, default=960)
     parser.add_argument("--window-height", type=int, default=540)
     parser.add_argument("--fit-window", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--vsync", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--live-wireframe", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--quality", help="Render quality preset from USER/settings.json.")
     parser.add_argument("--ambient", type=float, default=0.0)
     parser.add_argument("--gamma", type=float, default=1.0)
+    parser.add_argument("--light-wrap", type=float, default=0.0)
+    parser.add_argument("--bounce-light", type=float, default=0.0)
+    parser.add_argument("--tone-mapping", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--label", default="KINEMATIC FRUIT BOWL")
     parser.add_argument(
         "--light-mode",
-        choices=("multiple", "blinking", "multicolor", "color-shift-blink", "mirror-prelight"),
+        choices=("multiple", "blinking", "multicolor", "color-shift-blink", "mirror-prelight", "poly-lamp", "hanging-lamp"),
         default="multiple",
     )
     parser.add_argument("--bowl-material", choices=("wood", "mirror"), default="wood")
@@ -38,15 +44,17 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    args = apply_cpu_reduced_specs(parse_args())
-    if args.fps <= 0:
-        raise ValueError("fps must be positive")
+    args = apply_cpu_reduced_specs(apply_render_quality(parse_args()))
+    if args.fps < 0:
+        raise ValueError("fps must be non-negative")
     if args.renderer == "py_gpu":
         try:
             GLFruitBowlViewer(args).run()
             return
         except Exception as exc:
             print(f"OpenGL live renderer unavailable, falling back to Tk PixelBuffer path: {exc}")
+    if args.fps == 0:
+        raise ValueError("fps must be positive for the Tk PixelBuffer fallback")
     LiveFruitBowlViewer(args).run()
 
 

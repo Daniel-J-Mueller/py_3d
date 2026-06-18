@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from math import cos, pi, sin
 from typing import Iterable
 
+from .color import Color
 from .materials import Material
 from .math3d import Vec3, as_vec3
 from .noise import SurfacePerturbation
@@ -82,6 +83,149 @@ class Mesh:
     def to_triangles(self, **kwargs) -> tuple[Triangle, ...]:
         del kwargs
         return self.triangles
+
+
+@dataclass(frozen=True)
+class LampPrimitive:
+    """A small low-poly table lamp built from primitive triangle geometry."""
+
+    position: Vec3 | tuple[float, float, float]
+    color: Color | tuple[int, int, int] = Color(255, 238, 204)
+    shade_color: Color | tuple[int, int, int] = Color(198, 152, 104)
+    stem_color: Color | tuple[int, int, int] = Color(104, 96, 88)
+    height: float = 0.82
+    base_radius: float = 0.16
+    stem_radius: float = 0.025
+    shade_radius: float = 0.28
+    shade_height: float = 0.24
+    segments: int = 8
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "position", as_vec3(self.position))
+        object.__setattr__(self, "color", Color.from_value(self.color))
+        object.__setattr__(self, "shade_color", Color.from_value(self.shade_color))
+        object.__setattr__(self, "stem_color", Color.from_value(self.stem_color))
+        if self.height <= 0.0:
+            raise ValueError("lamp height must be positive")
+        if self.base_radius <= 0.0 or self.stem_radius <= 0.0 or self.shade_radius <= 0.0:
+            raise ValueError("lamp radii must be positive")
+        if self.shade_height <= 0.0:
+            raise ValueError("lamp shade height must be positive")
+        if self.segments < 3:
+            raise ValueError("lamp segments must be at least 3")
+
+    def to_triangles(self, **kwargs) -> tuple[Triangle, ...]:
+        del kwargs
+        base_height = min(0.07, self.height * 0.16)
+        shade_bottom = self.position.y - self.shade_height * 0.54
+        base_bottom = self.position.y - self.height
+        base_center = Vec3(self.position.x, base_bottom + base_height * 0.5, self.position.z)
+        stem_center_y = (base_bottom + base_height + shade_bottom) * 0.5
+        stem_height = max(0.02, shade_bottom - (base_bottom + base_height))
+
+        stem_material = Material(color=self.stem_color, roughness=0.38, specular=0.28, shininess=30.0)
+        shade_material = Material(color=self.shade_color, roughness=0.7, fuzziness=0.08, specular=0.04, shininess=10.0)
+        bulb_material = Material(
+            color=self.color,
+            emission=self.color,
+            diffuse=0.25,
+            roughness=0.12,
+            specular=0.35,
+            shininess=48.0,
+        )
+
+        triangles: list[Triangle] = []
+        triangles.extend(_cylinder_triangles(base_center, self.base_radius, base_height, self.segments, stem_material))
+        triangles.extend(
+            _cylinder_triangles(
+                Vec3(self.position.x, stem_center_y, self.position.z),
+                self.stem_radius,
+                stem_height,
+                self.segments,
+                stem_material,
+            )
+        )
+        triangles.extend(
+            _frustum_triangles(
+                Vec3(self.position.x, shade_bottom, self.position.z),
+                Vec3(self.position.x, shade_bottom + self.shade_height, self.position.z),
+                self.shade_radius,
+                self.shade_radius * 0.62,
+                self.segments,
+                shade_material,
+            )
+        )
+        triangles.extend(
+            Sphere(self.position, self.shade_radius * 0.22, bulb_material).to_triangles(
+                segments=self.segments,
+                rings=max(3, self.segments // 2),
+            )
+        )
+        return tuple(triangles)
+
+
+@dataclass(frozen=True)
+class HangingConeLampPrimitive:
+    """A hanging conical lamp shade with a cord and glowing bulb."""
+
+    cord_start: Vec3 | tuple[float, float, float]
+    shade_center: Vec3 | tuple[float, float, float]
+    color: Color | tuple[int, int, int] = Color(255, 226, 178)
+    shade_color: Color | tuple[int, int, int] = Color(92, 76, 58)
+    cord_color: Color | tuple[int, int, int] = Color(36, 32, 30)
+    shade_height: float = 0.42
+    top_radius: float = 0.18
+    bottom_radius: float = 0.48
+    cord_radius: float = 0.015
+    segments: int = 14
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "cord_start", as_vec3(self.cord_start))
+        object.__setattr__(self, "shade_center", as_vec3(self.shade_center))
+        object.__setattr__(self, "color", Color.from_value(self.color))
+        object.__setattr__(self, "shade_color", Color.from_value(self.shade_color))
+        object.__setattr__(self, "cord_color", Color.from_value(self.cord_color))
+        if self.shade_height <= 0.0:
+            raise ValueError("lamp shade height must be positive")
+        if self.top_radius <= 0.0 or self.bottom_radius <= 0.0 or self.cord_radius <= 0.0:
+            raise ValueError("lamp radii must be positive")
+        if self.segments < 3:
+            raise ValueError("lamp segments must be at least 3")
+
+    def to_triangles(self, **kwargs) -> tuple[Triangle, ...]:
+        del kwargs
+        axis = (self.shade_center - self.cord_start).normalized(Vec3(0.0, -1.0, 0.0))
+        top_center = self.shade_center - axis * (self.shade_height * 0.5)
+        bottom_center = self.shade_center + axis * (self.shade_height * 0.5)
+        shade_material = Material(color=self.shade_color, roughness=0.62, fuzziness=0.08, specular=0.08, shininess=18.0)
+        inner_material = Material(color=self.color, emission=self.color.scale(0.22), roughness=0.34, specular=0.16, shininess=28.0)
+        cord_material = Material(color=self.cord_color, roughness=0.4, specular=0.16, shininess=24.0)
+        bulb_material = Material(color=self.color, emission=self.color, diffuse=0.15, roughness=0.08, specular=0.35, shininess=56.0)
+
+        triangles: list[Triangle] = []
+        triangles.extend(_oriented_cylinder_triangles(self.cord_start, top_center, self.cord_radius, self.segments, cord_material))
+        triangles.extend(_oriented_frustum_triangles(top_center, bottom_center, self.top_radius, self.bottom_radius, self.segments, shade_material))
+        inner_top = top_center + axis * (self.shade_height * 0.08)
+        inner_bottom = bottom_center - axis * (self.shade_height * 0.08)
+        triangles.extend(
+            _oriented_frustum_triangles(
+                inner_bottom,
+                inner_top,
+                self.bottom_radius * 0.86,
+                self.top_radius * 0.58,
+                self.segments,
+                inner_material,
+                reverse=True,
+            )
+        )
+        bulb_center = self.shade_center + axis * (self.shade_height * 0.25)
+        triangles.extend(
+            Sphere(bulb_center, self.bottom_radius * 0.18, bulb_material).to_triangles(
+                segments=max(8, self.segments),
+                rings=max(4, self.segments // 2),
+            )
+        )
+        return tuple(triangles)
 
 
 @dataclass(frozen=True)
@@ -642,6 +786,95 @@ class Plane:
             Triangle(d, h, e, self.material, normal_a=side_normals[2], normal_b=side_normals[2], normal_c=side_normals[2]),
             Triangle(d, e, a, self.material, normal_a=side_normals[2], normal_b=side_normals[2], normal_c=side_normals[2]),
         )
+
+
+def _cylinder_triangles(center: Vec3, radius: float, height: float, segments: int, material: Material) -> list[Triangle]:
+    bottom_y = center.y - height * 0.5
+    top_y = center.y + height * 0.5
+    bottom_center = Vec3(center.x, bottom_y, center.z)
+    top_center = Vec3(center.x, top_y, center.z)
+    bottom = _horizontal_ring(center.x, bottom_y, center.z, radius, segments)
+    top = _horizontal_ring(center.x, top_y, center.z, radius, segments)
+    triangles: list[Triangle] = []
+    for index in range(segments):
+        next_index = (index + 1) % segments
+        triangles.append(Triangle(bottom[index], top[index], bottom[next_index], material))
+        triangles.append(Triangle(bottom[next_index], top[index], top[next_index], material))
+        triangles.append(Triangle(top[index], top_center, top[next_index], material))
+        triangles.append(Triangle(bottom[next_index], bottom_center, bottom[index], material))
+    return triangles
+
+
+def _frustum_triangles(
+    bottom_center: Vec3,
+    top_center: Vec3,
+    bottom_radius: float,
+    top_radius: float,
+    segments: int,
+    material: Material,
+) -> list[Triangle]:
+    bottom = _horizontal_ring(bottom_center.x, bottom_center.y, bottom_center.z, bottom_radius, segments)
+    top = _horizontal_ring(top_center.x, top_center.y, top_center.z, top_radius, segments)
+    triangles: list[Triangle] = []
+    for index in range(segments):
+        next_index = (index + 1) % segments
+        triangles.append(Triangle(bottom[index], top[index], bottom[next_index], material))
+        triangles.append(Triangle(bottom[next_index], top[index], top[next_index], material))
+    return triangles
+
+
+def _oriented_cylinder_triangles(start: Vec3, end: Vec3, radius: float, segments: int, material: Material) -> list[Triangle]:
+    start_ring = _oriented_ring(start, (end - start).normalized(Vec3(0.0, -1.0, 0.0)), radius, segments)
+    end_ring = _oriented_ring(end, (end - start).normalized(Vec3(0.0, -1.0, 0.0)), radius, segments)
+    triangles: list[Triangle] = []
+    for index in range(segments):
+        next_index = (index + 1) % segments
+        triangles.append(Triangle(start_ring[index], end_ring[index], start_ring[next_index], material))
+        triangles.append(Triangle(start_ring[next_index], end_ring[index], end_ring[next_index], material))
+    return triangles
+
+
+def _oriented_frustum_triangles(
+    start: Vec3,
+    end: Vec3,
+    start_radius: float,
+    end_radius: float,
+    segments: int,
+    material: Material,
+    *,
+    reverse: bool = False,
+) -> list[Triangle]:
+    axis = (end - start).normalized(Vec3(0.0, -1.0, 0.0))
+    start_ring = _oriented_ring(start, axis, start_radius, segments)
+    end_ring = _oriented_ring(end, axis, end_radius, segments)
+    triangles: list[Triangle] = []
+    for index in range(segments):
+        next_index = (index + 1) % segments
+        if reverse:
+            triangles.append(Triangle(start_ring[next_index], end_ring[index], start_ring[index], material))
+            triangles.append(Triangle(end_ring[next_index], end_ring[index], start_ring[next_index], material))
+        else:
+            triangles.append(Triangle(start_ring[index], end_ring[index], start_ring[next_index], material))
+            triangles.append(Triangle(start_ring[next_index], end_ring[index], end_ring[next_index], material))
+    return triangles
+
+
+def _oriented_ring(center: Vec3, axis: Vec3, radius: float, segments: int) -> list[Vec3]:
+    tangent = axis.cross(Vec3(0.0, 1.0, 0.0)).normalized()
+    if tangent.length_squared() <= 1e-12:
+        tangent = axis.cross(Vec3(1.0, 0.0, 0.0)).normalized(Vec3(1.0, 0.0, 0.0))
+    bitangent = axis.cross(tangent).normalized(Vec3(0.0, 0.0, 1.0))
+    return [
+        center + tangent * (cos(2.0 * pi * index / segments) * radius) + bitangent * (sin(2.0 * pi * index / segments) * radius)
+        for index in range(segments)
+    ]
+
+
+def _horizontal_ring(cx: float, cy: float, cz: float, radius: float, segments: int) -> list[Vec3]:
+    return [
+        Vec3(cx + cos(2.0 * pi * index / segments) * radius, cy, cz + sin(2.0 * pi * index / segments) * radius)
+        for index in range(segments)
+    ]
 
 
 def _rotate_euler(value: Vec3, rotation: Vec3) -> Vec3:

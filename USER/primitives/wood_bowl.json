@@ -1,0 +1,20 @@
+{
+  "name": "wood_bowl",
+  "package_type": "py_3d.Bowl",
+  "description": "Open-top bowl using procedural wood grain and a small rim thickness.",
+  "basic_properties": {
+    "center": [0.0, 0.0, 0.0],
+    "radius": 1.35,
+    "depth": 0.96,
+    "thickness": 0.075,
+    "material": {
+      "color": [132, 82, 42],
+      "texture": "procedural wood_grain_texture()",
+      "roughness": 0.72,
+      "fuzziness": 0.24,
+      "specular": 0.08,
+      "shininess": 14.0
+    }
+  },
+  "demo": "USER/demos/13_live_fruit_bowl_poly_lamp.py"
+}

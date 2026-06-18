@@ -1,6 +1,6 @@
 {
   "environment": "capsule_walk",
-  "updated": "2026-06-18 02:55:37",
+  "updated": "2026-06-18 03:21:37",
   "rendering_dir": "USER/environments/capsule_walk/renderings",
   "baking_dir": "USER/environments/capsule_walk/baking",
   "standard_render_specs": {

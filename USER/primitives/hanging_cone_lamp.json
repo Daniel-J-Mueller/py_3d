@@ -1,0 +1,24 @@
+{
+  "name": "hanging_cone_lamp",
+  "package_type": "py_3d.HangingConeLampPrimitive",
+  "description": "Swaying conical lamp hanging above the bowl, paired with a moving warm Lamp light.",
+  "basic_properties": {
+    "cord_start": [-0.2, 2.45, -0.36],
+    "shade_center": "animated: cord_start + sway + [0, -0.96, 0]",
+    "shade_height": 0.42,
+    "top_radius": 0.18,
+    "bottom_radius": 0.48,
+    "cord_radius": 0.015,
+    "segments": 16,
+    "color": [255, 226, 178],
+    "shade_color": [82, 62, 44],
+    "cord_color": [32, 28, 25]
+  },
+  "paired_light": {
+    "package_type": "py_3d.Lamp",
+    "position": "animated bulb position inside shade",
+    "color": [255, 226, 178],
+    "intensity": "animated around 9.2"
+  },
+  "demo": "USER/demos/13_live_fruit_bowl_poly_lamp.py"
+}

@@ -224,6 +224,8 @@ Useful initial primitives:
 - `Sphere`
 - `Capsule`
 - `Bowl`
+- `LampPrimitive`
+- `HangingConeLampPrimitive`
 - `Plane`
 - `Mesh`
 - `FluidBlob`
@@ -655,15 +657,36 @@ Run the live fruit bowl viewer:
 ```bash
 python examples/fruit_bowl_live.py
 python examples/fruit_bowl_live.py --width 480 --height 270 --window-width 960 --window-height 540
-python examples/fruit_bowl_live.py --renderer py_gpu --width 480 --height 270 --max-render-distance 7.0 --window-width 960 --window-height 540
+python examples/fruit_bowl_live.py --renderer py_gpu --quality high --light-mode hanging-lamp
+python examples/fruit_bowl_live.py --renderer py_gpu --quality fast
 python examples/fruit_bowl_live.py --bowl-material mirror --light-mode mirror-prelight
+python USER/demos/12_live_fruit_bowl_mirror_prelight.py
+python USER/demos/13_live_fruit_bowl_poly_lamp.py
 ```
 
-Click into the window to focus controls. Drag or use arrow keys to orbit,
-`W/S` to zoom, `A/D` to pan, `Q/E` to move the target up/down, `Space` to pause,
-`R` to toggle between filled OpenGL rendering and wireframe, `X` to reset, and
-`P` to save a snapshot. The GPU live viewer starts filled by default; use
-`--live-wireframe` when you specifically want the mesh view first.
+The OpenGL viewer captures the mouse; click the window to recapture if needed
+and press `Esc` to open the live options menu. Use mouse look, `W/A/S/D` to
+move, `Shift`/`Ctrl` to move up/down, `Space` to pause, `R` to toggle between
+filled OpenGL rendering and wireframe, `X` to reset, and `P` to save a
+snapshot. The GPU live viewer starts filled by default; use `--live-wireframe`
+when you specifically want the mesh view first.
+
+Live rendering quality can be changed in `USER/settings.json` with
+`render_quality` (`fast`, `balanced`, `high`, `ultra`, or `poly`) and
+`render_quality_presets`. The presets control render dimensions, generated mesh
+density, smooth/flat normals, gamma, wrap lighting, bounce fill, tone mapping,
+and max render distance. CLI flags still win for one-off runs.
+
+The `12_live_fruit_bowl_mirror_prelight.py` launcher is the high-spec
+performance version of the mirror-prelight scene: 1920x1080, 24x12 generated
+meshes, no vsync, and `--fps 0` for an uncapped render loop.
+
+The `13_live_fruit_bowl_poly_lamp.py` launcher is the low-poly wood-bowl demo:
+flat live normals, 7x4 generated fruit meshes, a swaying
+`HangingConeLampPrimitive` paired with a warm moving `Lamp`, a fixed in-world
+sign, a separate floating bulletin, and a jiggly side sea lion imported from
+`assets/sea-lion-import-test`. The primitive showcase descriptors live in
+`USER/primitives/`.
 
 Render a real video file:
 
@@ -721,10 +744,12 @@ python examples/capsule_walk_demo.py --renderer py_gpu --camera-mode first
 python examples/capsule_walk_demo.py --renderer py_gpu --camera-mode global
 ```
 
-Click into the window, use `W/A/S/D` to move, arrow keys to turn, `Space` to
-jump, and `V` to cycle global, third-person, and first-person cameras. The
-`py_gpu` path uses the OpenGL live renderer when available and falls back to the
-Tk `PixelBuffer` path if a windowed OpenGL context cannot be created.
+The OpenGL viewer captures the mouse for first-person look. Use `W/A/S/D` to
+move, `Shift`/`Ctrl` to move vertically, `Space` to jump, and `V` to cycle
+global, third-person, and first-person cameras. First-person mode hides the
+capsule body so the camera is not occluded by its own model. The `py_gpu` path
+uses the OpenGL live renderer when available and falls back to the Tk
+`PixelBuffer` path if a windowed OpenGL context cannot be created.
 
 Generate the slime-fluid sample:
 
@@ -872,8 +897,8 @@ sources.
 
 ## TODO
 
-- Expand text bulletins for 3D renderings with more font options, alignment,
-  anchoring, debug callouts, and scene-attached labels.
+- Expand `FloatingTextBulletin` with more font options, alignment modes, and
+  debug callout styling.
 - Expand clicked-in mouse and keyboard navigation for real-time and
   wiremesh/wireframe renderings, including reusable camera controllers and basic
   first-person movement modes.

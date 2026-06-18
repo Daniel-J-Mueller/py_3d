@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from fruit_bowl_demo import OUTPUT_DIR, apply_cpu_reduced_specs, render_video
+from fruit_bowl_demo import OUTPUT_DIR, apply_cpu_reduced_specs, apply_render_quality, render_video
 
 
 def parse_args() -> argparse.Namespace:
@@ -17,12 +17,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fps", type=int, default=24)
     parser.add_argument("--ambient", type=float, default=0.0)
     parser.add_argument("--gamma", type=float, default=1.0)
+    parser.add_argument("--quality")
+    parser.add_argument("--light-wrap", type=float, default=0.0)
+    parser.add_argument("--bounce-light", type=float, default=0.0)
+    parser.add_argument("--tone-mapping", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--label", default="FRUIT BOWL")
     parser.add_argument("--width", type=int, default=360)
     parser.add_argument("--height", type=int, default=204)
     parser.add_argument(
         "--light-mode",
-        choices=("multiple", "blinking", "multicolor", "color-shift-blink", "mirror-prelight"),
+        choices=("multiple", "blinking", "multicolor", "color-shift-blink", "mirror-prelight", "poly-lamp", "hanging-lamp"),
         default="multiple",
     )
     parser.add_argument("--bowl-material", choices=("wood", "mirror"), default="wood")
@@ -36,7 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-render-distance", type=float)
     parser.add_argument("--sphere-segments", type=int, default=14)
     parser.add_argument("--sphere-rings", type=int, default=7)
-    args = apply_cpu_reduced_specs(parser.parse_args())
+    args = apply_cpu_reduced_specs(apply_render_quality(parser.parse_args()))
     args.require_ffmpeg = not args.allow_frame_fallback
     return args
 

@@ -2,7 +2,7 @@ import weakref
 
 import pytest
 
-from py_3d import Bowl, Box, CPURenderer, Camera, Color, GPURenderer, Lamp, Material, PixelBuffer, Plane, RenderEngine, RenderSettings, Scene, Sphere, Sun, TextBulletin, Triangle, Vec3, build_gpu_scene_batch
+from py_3d import Bowl, Box, CPURenderer, Camera, Color, FloatingTextBulletin, GPURenderer, HangingConeLampPrimitive, Lamp, LampPrimitive, Material, PixelBuffer, Plane, RenderEngine, RenderSettings, Scene, Sphere, Sun, TextBulletin, Triangle, Vec3, build_gpu_scene_batch
 from py_3d.render import _lighting_channels
 
 
@@ -139,6 +139,43 @@ def test_text_bulletin_renders_over_scene():
 
     assert buffer.get_pixel(0, 0) == Color(10, 20, 30)
     assert any(pixel == Color(255, 255, 255) for pixel in buffer.pixels)
+
+
+def test_floating_text_bulletin_projects_from_world_position():
+    scene = Scene()
+    scene.add_bulletin(
+        FloatingTextBulletin(
+            "FLOAT",
+            position=(0, 0, 0),
+            screen_offset=(0, 0),
+            color=(255, 255, 255),
+            background=(20, 12, 8),
+        )
+    )
+    camera = Camera(position=(0, 0, -3), target=(0, 0, 0))
+
+    buffer = RenderEngine().render(scene, camera, RenderSettings(width=96, height=64, background=(0, 0, 0)))
+
+    assert any(pixel == Color(255, 255, 255) for pixel in buffer.pixels)
+    assert any(pixel == Color(20, 12, 8) for pixel in buffer.pixels)
+
+
+def test_lamp_primitive_generates_renderable_triangles():
+    lamp = LampPrimitive((0, 1, 0), color=(255, 220, 160), segments=6)
+
+    triangles = lamp.to_triangles()
+
+    assert len(triangles) > 30
+    assert all(triangle.material is not None for triangle in triangles)
+
+
+def test_hanging_cone_lamp_generates_shade_cord_and_bulb():
+    lamp = HangingConeLampPrimitive((0, 2, 0), (0.2, 1.2, 0.1), segments=8)
+
+    triangles = lamp.to_triangles()
+
+    assert len(triangles) > 50
+    assert any(triangle.material.emission != Color(0, 0, 0) for triangle in triangles)
 
 
 def test_cached_and_uncached_cpu_renderers_match_basic_scene():

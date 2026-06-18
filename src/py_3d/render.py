@@ -13,7 +13,7 @@ from .color import Color
 from . import draw
 from .lights import Lamp, Sun
 from .math3d import Vec3, clamp
-from .overlays import TextBulletin
+from .overlays import FloatingTextBulletin, TextBulletin
 from .primitives import BlobSurface, Bowl, Box, Capsule, Line3, Mesh, Plane, Point3, Sphere, Triangle
 from .scene import Scene
 
@@ -27,6 +27,9 @@ class RenderSettings:
     background: Color | tuple[int, int, int] = Color(0, 0, 0)
     ambient: float = 0.0
     gamma: float = 1.0
+    light_wrap: float = 0.0
+    bounce_light: float = 0.0
+    tone_mapping: bool = False
     cull_backfaces: bool = False
     wireframe: bool = False
     smooth_shading: bool = False
@@ -47,6 +50,8 @@ class RenderSettings:
         object.__setattr__(self, "background", Color.from_value(self.background))
         object.__setattr__(self, "ambient", clamp(float(self.ambient), 0.0, 1.0))
         object.__setattr__(self, "gamma", max(0.01, float(self.gamma)))
+        object.__setattr__(self, "light_wrap", clamp(float(self.light_wrap), 0.0, 1.0))
+        object.__setattr__(self, "bounce_light", clamp(float(self.bounce_light), 0.0, 1.0))
         object.__setattr__(self, "shadow_bias", max(0.0, float(self.shadow_bias)))
         object.__setattr__(self, "edge_highlight_threshold_degrees", clamp(float(self.edge_highlight_threshold_degrees), 0.0, 180.0))
         object.__setattr__(self, "edge_highlight_color", Color.from_value(self.edge_highlight_color))
@@ -144,6 +149,8 @@ class CPURenderer:
         for bulletin in scene.bulletins:
             if isinstance(bulletin, TextBulletin):
                 _draw_text_bulletin(buffer, bulletin)
+            elif isinstance(bulletin, FloatingTextBulletin):
+                _draw_floating_text_bulletin(buffer, camera, bulletin)
         return buffer
 
     def _shadow_triangles(self, scene: Scene, settings: RenderSettings) -> tuple[Triangle, ...]:
@@ -498,6 +505,12 @@ def _lighting_channels(
 ) -> _LightingChannels:
     light_channels = [0.0, 0.0, 0.0]
     specular_channels = [0.0, 0.0, 0.0]
+    if settings is not None and settings.bounce_light > 0.0:
+        sky = max(0.0, normal.y) * settings.bounce_light
+        floor = max(0.0, -normal.y) * settings.bounce_light
+        light_channels[0] += 0.22 * sky + 0.32 * floor
+        light_channels[1] += 0.26 * sky + 0.22 * floor
+        light_channels[2] += 0.34 * sky + 0.14 * floor
     shininess = getattr(material, "shininess", 32.0) if material is not None else 32.0
     specular_enabled = material is not None and (getattr(material, "specular", 0.0) > 0.0 or getattr(material, "reflectivity", 0.0) > 0.0)
     for light in scene.lights:
@@ -505,7 +518,10 @@ def _lighting_channels(
             continue
         sample = light.sample(center)
         light_direction = sample.direction.normalized()
-        strength = max(0.0, normal.dot(light_direction)) * sample.intensity
+        facing = normal.dot(light_direction)
+        wrap = settings.light_wrap if settings is not None else 0.0
+        diffuse_response = max(0.0, (facing + wrap) / (1.0 + wrap)) if wrap > 0.0 else max(0.0, facing)
+        strength = diffuse_response * sample.intensity
         if strength > 0.0 and settings is not None and settings.ray_traced_shadows:
             max_distance = _shadow_max_distance(light, center)
             strength *= _shadow_transmission(scene, center, light_direction, max_distance, settings, source_triangle, shadow_triangles)
@@ -634,20 +650,52 @@ def _apply_gamma(color: Color, gamma: float) -> Color:
 
 
 def _draw_text_bulletin(buffer: PixelBuffer, bulletin: TextBulletin) -> None:
-    x, y = bulletin.position
+    _draw_bulletin_at(
+        buffer,
+        bulletin.text,
+        bulletin.position,
+        bulletin.color,
+        bulletin.background,
+        bulletin.padding,
+        bulletin.scale,
+    )
+
+
+def _draw_floating_text_bulletin(buffer: PixelBuffer, camera: Camera, bulletin: FloatingTextBulletin) -> None:
+    projected = camera.project(bulletin.position, buffer.width, buffer.height)
+    if projected is None:
+        return
     text_width, text_height = draw.text_size(bulletin.text, scale=bulletin.scale)
-    if bulletin.background is not None:
+    total_width = text_width + bulletin.padding * 2
+    total_height = text_height + bulletin.padding * 2
+    x = int(projected.x + bulletin.screen_offset[0] - total_width * bulletin.anchor[0])
+    y = int(projected.y + bulletin.screen_offset[1] - total_height * bulletin.anchor[1])
+    _draw_bulletin_at(buffer, bulletin.text, (x, y), bulletin.color, bulletin.background, bulletin.padding, bulletin.scale)
+
+
+def _draw_bulletin_at(
+    buffer: PixelBuffer,
+    text: str,
+    position: tuple[int, int],
+    color: Color,
+    background: Color | None,
+    padding: int,
+    scale: int,
+) -> None:
+    x, y = position
+    text_width, text_height = draw.text_size(text, scale=scale)
+    if background is not None:
         draw.rect(
             buffer,
             (x, y),
-            (text_width + bulletin.padding * 2, text_height + bulletin.padding * 2),
-            bulletin.background,
+            (text_width + padding * 2, text_height + padding * 2),
+            background,
             fill=True,
         )
     draw.text(
         buffer,
-        (x + bulletin.padding, y + bulletin.padding),
-        bulletin.text,
-        bulletin.color,
-        scale=bulletin.scale,
+        (x + padding, y + padding),
+        text,
+        color,
+        scale=scale,
     )

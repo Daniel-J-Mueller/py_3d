@@ -200,13 +200,21 @@ class CapsuleWalkViewer:
 class GLCapsuleWalkViewer:
     def __init__(self, args: argparse.Namespace) -> None:
         import pygame
-        from py_3d.live import ModernGLLiveRenderer
+        from py_3d.live import LiveFlyCamera, LiveMenu, LiveMenuOption, ModernGLLiveRenderer
 
         self.pygame = pygame
         self.args = args
         self.controller = CapsuleController()
         self.keys: set[str] = set()
         self.camera_mode = args.camera_mode
+        self.look_pitch_degrees = 0.0
+        global_camera = Camera(position=(3.2, 2.5, -5.2), target=(0.4, 0.65, 0.4), fov_degrees=54)
+        self.free_camera = LiveFlyCamera.looking_at(
+            global_camera.position,
+            global_camera.target,
+            fov_degrees=global_camera.fov_degrees,
+            speed=2.8,
+        )
         self.settings = RenderSettings(
             width=args.width,
             height=args.height,
@@ -224,32 +232,52 @@ class GLCapsuleWalkViewer:
             title="py_3d capsule walk - OpenGL live",
             vsync=True,
         )
+        self.renderer.menu = LiveMenu(
+            "py_3d capsule walk",
+            (
+                LiveMenuOption("resume", "Resume"),
+                LiveMenuOption("next_camera", "Next camera"),
+                LiveMenuOption("reset", "Reset capsule"),
+                LiveMenuOption("quit", "Quit"),
+            ),
+        )
+        self.renderer.set_mouse_captured(True)
         self._last_title_update = 0
 
     def run(self) -> None:
         clock = self.pygame.time.Clock()
+        dt = 1.0 / self.args.fps
         running = True
         try:
             while running:
                 for event in self.pygame.event.get():
                     if event.type == self.pygame.QUIT:
                         running = False
+                    elif event.type == self.pygame.MOUSEBUTTONDOWN and not self.renderer.menu.visible:
+                        self.renderer.set_mouse_captured(True)
+                    elif event.type == self.pygame.MOUSEMOTION and self.renderer.mouse_captured:
+                        self.on_mouse_motion(event.rel)
                     elif event.type == self.pygame.KEYDOWN:
                         running = self.on_key_down(event.key)
                     elif event.type == self.pygame.KEYUP:
                         self.on_key_up(event.key)
 
-                self.controller.step(1.0 / self.args.fps, self.keys, self.blocks)
+                if self.camera_mode == "global":
+                    self.free_camera.move(self.keys, dt)
+                else:
+                    self.controller.step(dt, self.keys, self.blocks)
+                    self._apply_vertical_camera_motion(dt)
                 stats = self.renderer.render(self.scene(), self.camera(), self.settings)
                 self._update_title(stats)
-                clock.tick(self.args.fps)
+                dt = max(1.0 / 240.0, min(0.05, clock.tick(self.args.fps) / 1000.0))
         finally:
             self.renderer.close()
 
     def on_key_down(self, key: int) -> bool:
         pygame = self.pygame
-        if key == pygame.K_ESCAPE:
-            return False
+        menu_action = self.renderer.menu.handle_key(key, pygame)
+        if menu_action is not None:
+            return self._handle_menu_action(menu_action)
         if key == pygame.K_v:
             self.camera_mode = {"global": "third", "third": "first", "first": "global"}[self.camera_mode]
         elif key == pygame.K_LEFT:
@@ -257,29 +285,59 @@ class GLCapsuleWalkViewer:
         elif key == pygame.K_RIGHT:
             self.controller.yaw_degrees += 5.0
         else:
-            name = pygame.key.name(key).lower()
-            if name == "space":
-                name = "space"
-            self.keys.add(name)
+            movement_key = self._movement_key(key)
+            if movement_key is not None:
+                self.keys.add(movement_key)
+        return True
+
+    def _handle_menu_action(self, action: str) -> bool:
+        if action in {"handled", "navigate"}:
+            return True
+        if action == "opened":
+            self.keys.clear()
+            self.renderer.set_mouse_captured(False)
+            return True
+        self.renderer.menu.close()
+        if action == "quit":
+            return False
+        if action == "next_camera":
+            self.camera_mode = {"global": "third", "third": "first", "first": "global"}[self.camera_mode]
+        elif action == "reset":
+            self.controller = CapsuleController()
+            self.look_pitch_degrees = 0.0
+        self.renderer.set_mouse_captured(True)
         return True
 
     def on_key_up(self, key: int) -> None:
-        self.keys.discard(self.pygame.key.name(key).lower())
-        if key == self.pygame.K_SPACE:
-            self.keys.discard("space")
+        movement_key = self._movement_key(key)
+        if movement_key is not None:
+            self.keys.discard(movement_key)
+
+    def on_mouse_motion(self, relative: tuple[int, int]) -> None:
+        dx, dy = relative
+        if self.camera_mode == "global":
+            self.free_camera.look(dx, dy)
+            return
+        self.controller.yaw_degrees += dx * 0.12
+        self.look_pitch_degrees = max(-82.0, min(82.0, self.look_pitch_degrees - dy * 0.12))
 
     def camera(self) -> Camera:
         if self.camera_mode == "first":
-            return Camera.first_person(self.controller.feet, self.controller.forward, eye_height=self.controller.height * 0.78)
+            yaw = radians(self.controller.yaw_degrees)
+            pitch = radians(self.look_pitch_degrees)
+            forward = Vec3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch)).normalized(Vec3(0.0, 0.0, 1.0))
+            eye = self.controller.feet + Vec3(0.0, self.controller.height * 0.78, 0.0)
+            return Camera(position=eye, target=eye + forward, fov_degrees=68.0, near=0.03)
         if self.camera_mode == "third":
             return Camera.third_person(self.controller.feet, self.controller.forward, distance=3.2, height=1.55)
-        return Camera(position=(3.2, 2.5, -5.2), target=(0.4, 0.65, 0.4), fov_degrees=54)
+        return self.free_camera.camera()
 
     def scene(self) -> Scene:
         scene = Scene()
         scene.add(Box((0, -0.06, 0), (7.0, 0.12, 7.0), Material(color=(54, 84, 88), roughness=0.55)))
         scene.add(*self.blocks)
-        scene.add(Capsule(self.controller.center, self.controller.radius, self.controller.height, Material(color=(92, 160, 240), roughness=0.28, specular=0.2, shininess=24)))
+        if self.camera_mode != "first":
+            scene.add(Capsule(self.controller.center, self.controller.radius, self.controller.height, Material(color=(92, 160, 240), roughness=0.28, specular=0.2, shininess=24)))
         scene.add_light(Sun(direction=(-0.35, -0.85, -0.6), color=(255, 245, 230), intensity=0.9))
         scene.add_light(Lamp(position=(1.6, 2.4, -1.2), color=(120, 170, 255), intensity=4.2))
         scene.add_bulletin(
@@ -292,6 +350,36 @@ class GLCapsuleWalkViewer:
             )
         )
         return scene
+
+    def _movement_key(self, key: int) -> str | None:
+        pygame = self.pygame
+        if key == pygame.K_w:
+            return "w"
+        if key == pygame.K_a:
+            return "a"
+        if key == pygame.K_s:
+            return "s"
+        if key == pygame.K_d:
+            return "d"
+        if key == pygame.K_SPACE:
+            return "space"
+        if key in (pygame.K_LSHIFT, pygame.K_RSHIFT):
+            return "shift"
+        if key in (pygame.K_LCTRL, pygame.K_RCTRL):
+            return "ctrl"
+        return None
+
+    def _apply_vertical_camera_motion(self, dt: float) -> None:
+        amount = 0.0
+        if "shift" in self.keys:
+            amount += self.controller.speed * dt
+        if "ctrl" in self.keys:
+            amount -= self.controller.speed * dt
+        if amount == 0.0:
+            return
+        self.controller.feet = self.controller.feet + Vec3(0.0, amount, 0.0)
+        self.controller.velocity = Vec3(self.controller.velocity.x, 0.0, self.controller.velocity.z)
+        self.controller.on_ground = False
 
     def _update_title(self, stats) -> None:
         ticks = self.pygame.time.get_ticks()

@@ -1,0 +1,14 @@
+{
+  "name": "low_poly_fruit_settings",
+  "package_type": "py_3d.RenderSettings",
+  "description": "Settings that keep generated fruit visibly faceted in the live renderer.",
+  "basic_properties": {
+    "smooth_shading": false,
+    "sphere_segments": 7,
+    "sphere_rings": 4,
+    "wireframe": false,
+    "max_render_distance": 9.0,
+    "gamma": 1.12
+  },
+  "demo": "USER/demos/13_live_fruit_bowl_poly_lamp.py"
+}
