@@ -4,6 +4,7 @@ from py_3d import (
     BoxCollider,
     CompoundSphereCollider,
     KinematicBowl,
+    Material,
     PhysicsWorld,
     PlaneCollider,
     SphereBody,
@@ -201,6 +202,15 @@ def test_sphere_body_has_default_moment_of_inertia():
     assert body.moment_of_inertia == 0.4 * 2.0 * 0.5 * 0.5
     assert body.static_friction == body.friction
     assert body.kinetic_friction == body.friction
+    assert body.rolling_resistance is not None
+
+
+def test_sphere_body_auto_friction_uses_surface_material():
+    body = SphereBody(position=(0, 0, 0), radius=0.5, friction=0.2, material=Material(roughness=0.6, fuzziness=0.3))
+
+    assert body.static_friction > body.friction
+    assert body.kinetic_friction > body.friction
+    assert body.rolling_resistance > 0.008
 
 
 def test_dampening_alias_sets_damping():

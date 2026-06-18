@@ -208,6 +208,11 @@ first:
 - `texture`: optional `PixelBuffer` sampled through triangle UV coordinates.
 - `roughness`: visual surface dulling/noise response.
 - `fuzziness`: visual per-pixel surface variation.
+- `specular`: strength of direct light highlights for shiny surfaces.
+- `shininess`: highlight tightness. Higher values make smaller, sharper
+  highlights.
+- `reflectivity`: early reflection-like boost for bright highlights. This is
+  not full ray-traced reflection yet.
 
 Image import currently supports 8-bit, non-interlaced PNG files through
 `PixelBuffer.from_png()`. The `assets/tv-test.png` file is used as the first
@@ -233,6 +238,9 @@ Lights should be data-first and explicit:
 
 Lighting should be basic but composable. It is better to have an understandable
 Lambert-style model than a large physically based system that is hard to extend.
+The CPU reference renderer now includes a simple specular highlight term, so
+materials can range from matte to shiny while preserving the same light-source
+model.
 
 ### Rendering
 
@@ -586,14 +594,17 @@ an exact whole-number scale.
 Run the GPU entry-point benchmark:
 
 ```bash
-python examples/gpu_render_benchmark.py --frames 30 --width 320 --height 180
+python examples/gpu_render_benchmark.py --renderer py_gpu --frames 60 --width 320 --height 180
+python examples/gpu_render_benchmark.py --renderer scaffold --frames 30 --width 320 --height 180
 ```
 
 `py_3d` keeps a small `GPURenderer` compatibility scaffold, but accelerated
 renderer-core work now belongs in the sibling `py_gpu` package. That package
 owns reusable batch contracts, backend selection, optional NumPy acceleration,
-and future WebGPU/OpenGL experiments. `py_gpu.adapters.py3d.Py3DRasterRenderer`
-is the first bridge back into `py_3d` scenes.
+and ModernGL/WebGPU/OpenGL experiments. `py_gpu.adapters.py3d.Py3DRasterRenderer`
+is the first bridge back into `py_3d` scenes. It is currently a flat-color batch
+adapter; full lit/material parity and persistent geometry uploads are the next
+step before this bridge should replace the reference renderer for normal demos.
 
 ## Testing Expectations
 

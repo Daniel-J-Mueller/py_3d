@@ -227,8 +227,8 @@ class CPURenderer:
         if facing < 0.0:
             normal = -normal
 
-        light_channels = _light_channels(scene, center, normal)
-        color = triangle.material.shade(light_channels, ambient=settings.ambient)
+        lighting = _lighting_channels(scene, center, normal, view_direction, triangle.material)
+        color = triangle.material.shade(lighting.diffuse, ambient=settings.ambient, specular_light=lighting.specular)
         use_texture = triangle.material.texture is not None and triangle.has_texture_coordinates()
         use_smooth_shading = settings.smooth_shading and triangle.has_vertex_normals()
         min_x = max(0, floor(min(a.x, b.x, c.x)))
@@ -261,25 +261,31 @@ class CPURenderer:
                 index = row_index + x
                 if z < depth_values[index]:
                     depth_values[index] = z
-                    active_light_channels = light_channels
+                    active_lighting = lighting
                     if use_smooth_shading:
                         world_point = triangle.a * w0 + triangle.b * w1 + triangle.c * w2
                         pixel_normal = _interpolate_normal(triangle, w0, w1, w2, normal)
-                        pixel_facing = pixel_normal.dot((camera.position - world_point).normalized(view_direction))
+                        pixel_view_direction = (camera.position - world_point).normalized(view_direction)
+                        pixel_facing = pixel_normal.dot(pixel_view_direction)
                         if pixel_facing < 0.0:
                             pixel_normal = -pixel_normal
-                        active_light_channels = _light_channels(scene, world_point, pixel_normal)
+                        active_lighting = _lighting_channels(scene, world_point, pixel_normal, pixel_view_direction, triangle.material)
                     if use_texture:
                         uv = _interpolate_uv(triangle, w0, w1, w2)
                         texture_color = triangle.material.color_at(uv)
                         shaded = triangle.material.shade(
-                            active_light_channels,
+                            active_lighting.diffuse,
                             ambient=settings.ambient,
                             base_color=texture_color,
+                            specular_light=active_lighting.specular,
                         )
                         pixels[index] = _apply_surface_attributes(shaded, triangle.material, x, y, z)
                     elif use_smooth_shading:
-                        shaded = triangle.material.shade(active_light_channels, ambient=settings.ambient)
+                        shaded = triangle.material.shade(
+                            active_lighting.diffuse,
+                            ambient=settings.ambient,
+                            specular_light=active_lighting.specular,
+                        )
                         pixels[index] = _apply_surface_attributes(shaded, triangle.material, x, y, z)
                     else:
                         pixels[index] = _apply_surface_attributes(color, triangle.material, x, y, z)
@@ -290,6 +296,12 @@ class _PreparedTriangle:
     triangle: Triangle
     center: Vec3
     normal: Vec3
+
+
+@dataclass(frozen=True)
+class _LightingChannels:
+    diffuse: tuple[float, float, float]
+    specular: tuple[float, float, float]
 
 
 @dataclass(frozen=True)
@@ -347,17 +359,34 @@ def _prepare_triangles(triangles: tuple[Triangle, ...]) -> tuple[_PreparedTriang
 
 
 def _light_channels(scene: Scene, center: Vec3, normal: Vec3) -> tuple[float, float, float]:
+    return _lighting_channels(scene, center, normal, normal, None).diffuse
+
+
+def _lighting_channels(scene: Scene, center: Vec3, normal: Vec3, view_direction: Vec3, material) -> _LightingChannels:
     light_channels = [0.0, 0.0, 0.0]
+    specular_channels = [0.0, 0.0, 0.0]
+    shininess = getattr(material, "shininess", 32.0) if material is not None else 32.0
+    specular_enabled = material is not None and (getattr(material, "specular", 0.0) > 0.0 or getattr(material, "reflectivity", 0.0) > 0.0)
     for light in scene.lights:
         if not isinstance(light, (Lamp, Sun)) and not hasattr(light, "sample"):
             continue
         sample = light.sample(center)
-        strength = max(0.0, normal.dot(sample.direction.normalized())) * sample.intensity
+        light_direction = sample.direction.normalized()
+        strength = max(0.0, normal.dot(light_direction)) * sample.intensity
         lr, lg, lb = sample.color.to_floats()
         light_channels[0] += lr * strength
         light_channels[1] += lg * strength
         light_channels[2] += lb * strength
-    return (light_channels[0], light_channels[1], light_channels[2])
+        if specular_enabled and strength > 0.0:
+            halfway = (light_direction + view_direction).normalized(light_direction)
+            highlight = max(0.0, normal.dot(halfway)) ** shininess * sample.intensity
+            specular_channels[0] += lr * highlight
+            specular_channels[1] += lg * highlight
+            specular_channels[2] += lb * highlight
+    return _LightingChannels(
+        (light_channels[0], light_channels[1], light_channels[2]),
+        (specular_channels[0], specular_channels[1], specular_channels[2]),
+    )
 
 
 def _interpolate_uv(triangle: Triangle, w0: float, w1: float, w2: float) -> tuple[float, float]:

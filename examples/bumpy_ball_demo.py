@@ -19,7 +19,6 @@ from py_3d import (
     RenderSettings,
     Scene,
     SphereBody,
-    SphereCollider,
     StaticBox,
     StaticPlane,
     Sun,
@@ -33,42 +32,44 @@ OUTPUT_DIR = Path("renderings-tests")
 
 
 def build_world() -> tuple[PhysicsWorld, SphereBody, StaticPlane, StaticBox]:
+    ramp = StaticPlane(
+        point=(0.0, 0.0, 0.0),
+        normal=(0.34, 1.0, 0.0),
+        friction=0.58,
+        restitution=0.02,
+        material=Material(color=(75, 145, 95), roughness=0.52, fuzziness=0.18, specular=0.05, shininess=14.0),
+        size=5.8,
+    )
     texture = PixelBuffer.from_png(Path("assets") / "tv-test.png")
     ball_material = Material(
         texture=texture,
         absorption=(0.04, 0.04, 0.04),
         roughness=0.35,
         fuzziness=0.15,
+        specular=0.18,
+        shininess=24.0,
     )
     perturbation = SurfacePerturbation(magnitude=0.09, scale=3.4, seed=12, octaves=4, gain=0.55)
+    collision_radius = 0.34 + perturbation.magnitude
+    start_x = -2.15
+    start_z = 0.0
+    downhill = Vec3(ramp.normal.y, -ramp.normal.x, 0.0).normalized()
     ball = SphereBody(
-        position=(-2.15, 1.3, 0.0),
+        position=_position_on_plane(start_x, start_z, collision_radius + 0.02, ramp),
         radius=0.34,
-        velocity=(0.0, 0.0, 0.0),
+        velocity=downhill * 0.55,
         mass=1.0,
-        restitution=0.42,
-        friction=0.3,
-        static_friction=0.48,
-        kinetic_friction=0.3,
-        rolling_resistance=0.02,
+        restitution=0.03,
+        friction=0.38,
         material=ball_material,
         visual_perturbation=perturbation,
-        collision_boundary=SphereCollider(radius=0.34),
-    )
-    ramp = StaticPlane(
-        point=(0.0, 0.0, 0.0),
-        normal=(0.34, 1.0, 0.0),
-        friction=0.38,
-        restitution=0.18,
-        material=Material(color=(75, 145, 95), roughness=0.45, fuzziness=0.2),
-        size=5.8,
     )
     wall = StaticBox(
         center=(2.15, 0.5, 0.0),
         size=(0.28, 1.6, 2.1),
-        restitution=0.65,
-        friction=0.18,
-        material=Material(color=(170, 175, 190), roughness=0.55),
+        restitution=0.28,
+        friction=0.32,
+        material=Material(color=(170, 175, 190), roughness=0.18, specular=0.5, shininess=52.0, reflectivity=0.18),
     )
 
     world = PhysicsWorld(gravity=(0.0, -9.81, 0.0))
@@ -76,6 +77,15 @@ def build_world() -> tuple[PhysicsWorld, SphereBody, StaticPlane, StaticBox]:
     world.add_plane(ramp)
     world.add_box(wall)
     return world, ball, ramp, wall
+
+
+def _position_on_plane(x: float, z: float, signed_distance: float, plane: StaticPlane) -> Vec3:
+    reference = Vec3(x, plane.point.y, z)
+    current_distance = (reference - plane.point).dot(plane.normal)
+    if abs(plane.normal.y) < 1e-9:
+        return reference + plane.normal * signed_distance
+    y = reference.y + (signed_distance - current_distance) / plane.normal.y
+    return Vec3(x, y, z)
 
 
 def make_scene(

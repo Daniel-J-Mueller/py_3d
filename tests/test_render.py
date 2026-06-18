@@ -50,6 +50,27 @@ def test_lamp_contributes_colored_light():
     assert center.b > center.r
 
 
+def test_specular_material_responds_to_light_position():
+    matte = Material(color=(45, 45, 45), specular=0.0)
+    shiny = Material(color=(45, 45, 45), specular=0.75, shininess=12.0)
+    camera = Camera(position=(0, 0, -4), target=(0, 0, 0))
+    settings = RenderSettings(width=65, height=65, ambient=0.0, smooth_shading=True, sphere_segments=18, sphere_rings=9)
+
+    matte_scene = Scene()
+    matte_scene.add(Sphere((0, 0, 0), 0.8, matte))
+    matte_scene.add_light(Lamp(position=(0, 0, -2), color=(255, 255, 255), intensity=2.4))
+    shiny_scene = Scene()
+    shiny_scene.add(Sphere((0, 0, 0), 0.8, shiny))
+    shiny_scene.add_light(Lamp(position=(0, 0, -2), color=(255, 255, 255), intensity=2.4))
+
+    matte_pixel = RenderEngine().render(matte_scene, camera, settings).get_pixel(32, 32)
+    shiny_pixel = RenderEngine().render(shiny_scene, camera, settings).get_pixel(32, 32)
+
+    assert shiny_pixel.r > matte_pixel.r
+    assert shiny_pixel.g > matte_pixel.g
+    assert shiny_pixel.b > matte_pixel.b
+
+
 def test_high_poly_sphere_and_other_primitives_render():
     sphere = Sphere((0, 0, 0), 0.8, Material(color=(90, 150, 230)))
     scene = Scene()

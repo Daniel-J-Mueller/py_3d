@@ -30,7 +30,7 @@ class SphereBody:
     moment_of_inertia: float | None = None
     static_friction: float | None = None
     kinetic_friction: float | None = None
-    rolling_resistance: float = 0.015
+    rolling_resistance: float | None = None
     squishiness: float = 0.0
     damping: float = 0.0
     dampening: float | None = None
@@ -50,9 +50,18 @@ class SphereBody:
             raise ValueError("moment of inertia must be positive")
         self.restitution = clamp(float(self.restitution), 0.0, 1.0)
         self.friction = clamp(float(self.friction), 0.0, 1.0)
-        self.static_friction = clamp(float(self.static_friction if self.static_friction is not None else self.friction), 0.0, 1.0)
-        self.kinetic_friction = clamp(float(self.kinetic_friction if self.kinetic_friction is not None else self.friction), 0.0, 1.0)
-        self.rolling_resistance = clamp(float(self.rolling_resistance), 0.0, 1.0)
+        if self.static_friction is None:
+            self.static_friction = _auto_static_friction(self.friction, self.material)
+        else:
+            self.static_friction = clamp(float(self.static_friction), 0.0, 1.0)
+        if self.kinetic_friction is None:
+            self.kinetic_friction = _auto_kinetic_friction(self.friction, self.material)
+        else:
+            self.kinetic_friction = clamp(float(self.kinetic_friction), 0.0, 1.0)
+        if self.rolling_resistance is None:
+            self.rolling_resistance = _auto_rolling_resistance(self.material)
+        else:
+            self.rolling_resistance = clamp(float(self.rolling_resistance), 0.0, 1.0)
         self.squishiness = clamp(float(self.squishiness), 0.0, 1.0)
         self.damping = clamp(float(self.dampening if self.dampening is not None else self.damping), 0.0, 1.0)
         self.dampening = self.damping
@@ -293,6 +302,24 @@ class PhysicsWorld:
 
 
 World = PhysicsWorld
+
+
+def _auto_static_friction(friction: float, material: Material) -> float:
+    roughness = getattr(material, "roughness", 0.0)
+    fuzziness = getattr(material, "fuzziness", 0.0)
+    return clamp(float(friction) + roughness * 0.35 + fuzziness * 0.12, 0.0, 1.0)
+
+
+def _auto_kinetic_friction(friction: float, material: Material) -> float:
+    roughness = getattr(material, "roughness", 0.0)
+    fuzziness = getattr(material, "fuzziness", 0.0)
+    return clamp(float(friction) + roughness * 0.22 + fuzziness * 0.08, 0.0, 1.0)
+
+
+def _auto_rolling_resistance(material: Material) -> float:
+    roughness = getattr(material, "roughness", 0.0)
+    fuzziness = getattr(material, "fuzziness", 0.0)
+    return clamp(0.008 + roughness * 0.025 + fuzziness * 0.015, 0.0, 0.2)
 
 
 def _resolve_sphere_environment(

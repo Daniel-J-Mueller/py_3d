@@ -25,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frames", type=int, default=60)
     parser.add_argument("--sphere-segments", type=int, default=20)
     parser.add_argument("--sphere-rings", type=int, default=10)
+    parser.add_argument("--renderer", choices=("scaffold", "py_gpu"), default="py_gpu")
     parser.add_argument("--strict", action="store_true", help="fail if no accelerated GPU rasterizer is available")
     return parser.parse_args()
 
@@ -40,7 +41,17 @@ def main() -> None:
         sphere_segments=args.sphere_segments,
         sphere_rings=args.sphere_rings,
     )
-    renderer = GPURenderer(allow_cpu_fallback=not args.strict)
+    if args.renderer == "py_gpu":
+        try:
+            from py_gpu.adapters.py3d import Py3DRasterRenderer
+
+            renderer = Py3DRasterRenderer()
+        except Exception as exc:
+            if args.strict:
+                raise RuntimeError("py_gpu renderer bridge is not available") from exc
+            renderer = GPURenderer(allow_cpu_fallback=True)
+    else:
+        renderer = GPURenderer(allow_cpu_fallback=not args.strict)
     engine = RenderEngine(renderer)
     batch = build_gpu_scene_batch(scene, settings)
 
@@ -57,9 +68,15 @@ def main() -> None:
 
     average = mean(timings)
     backends = detect_gpu_backends()
+    capabilities = getattr(getattr(renderer, "backend_impl", None), "capabilities", None)
+    accelerated = getattr(capabilities, "accelerated", getattr(renderer, "is_accelerated", False))
+    fallback_enabled = getattr(renderer, "allow_cpu_fallback", False)
     print(f"detected gpu packages: {', '.join(backends) if backends else 'none'}")
-    print(f"accelerated: {renderer.is_accelerated}")
-    print(f"fallback enabled: {renderer.allow_cpu_fallback}")
+    print(f"renderer: {renderer.name}")
+    if capabilities is not None:
+        print(f"backend: {capabilities.name}")
+    print(f"accelerated: {accelerated}")
+    print(f"fallback enabled: {fallback_enabled}")
     print(f"triangles: {len(batch.indices)}")
     print(f"frames: {args.frames}")
     print(f"size: {args.width}x{args.height}")

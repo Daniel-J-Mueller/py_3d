@@ -212,7 +212,7 @@ class FruitBowlSimulation:
             friction=0.18,
             squishiness=0.18,
             damping=0.18,
-            material=Material(color=(145, 95, 210), absorption=(0.08, 0.1, 0.03), roughness=0.35, fuzziness=0.08),
+            material=Material(color=(145, 95, 210), absorption=(0.08, 0.1, 0.03), roughness=0.3, fuzziness=0.08, specular=0.28, shininess=28.0),
         )
         self.floor = StaticPlane(
             point=(0.0, -1.75, 0.0),
@@ -221,7 +221,7 @@ class FruitBowlSimulation:
             restitution=0.35,
             squishiness=0.1,
             damping=0.12,
-            material=Material(color=(52, 89, 92), absorption=(0.14, 0.08, 0.05), roughness=0.55),
+            material=Material(color=(52, 89, 92), absorption=(0.14, 0.08, 0.05), roughness=0.5, specular=0.06, shininess=12.0),
             size=6.0,
         )
         self.fruits = [
@@ -238,7 +238,7 @@ class FruitBowlSimulation:
                     kinetic_friction=0.28,
                     squishiness=0.38,
                     damping=0.28,
-                    material=Material(color=(225, 55, 48), absorption=(0.02, 0.15, 0.16), roughness=0.22, fuzziness=0.08),
+                    material=Material(color=(225, 55, 48), absorption=(0.02, 0.15, 0.16), roughness=0.22, fuzziness=0.08, specular=0.22, shininess=28.0),
                 ),
             ),
             Fruit(
@@ -254,7 +254,7 @@ class FruitBowlSimulation:
                     kinetic_friction=0.32,
                     squishiness=0.45,
                     damping=0.34,
-                    material=Material(color=(238, 135, 42), absorption=(0.02, 0.08, 0.22), roughness=0.38, fuzziness=0.18),
+                    material=Material(color=(238, 135, 42), absorption=(0.02, 0.08, 0.22), roughness=0.38, fuzziness=0.18, specular=0.12, shininess=18.0),
                     visual_perturbation=SurfacePerturbation(magnitude=0.035, scale=5.5, seed=31, octaves=4, gain=0.55),
                     collision_boundary=SphereCollider(radius=0.27),
                 ),
@@ -272,7 +272,7 @@ class FruitBowlSimulation:
                     kinetic_friction=0.3,
                     squishiness=0.5,
                     damping=0.38,
-                    material=Material(color=(238, 218, 74), absorption=(0.03, 0.03, 0.2), roughness=0.32, fuzziness=0.16),
+                    material=Material(color=(238, 218, 74), absorption=(0.03, 0.03, 0.2), roughness=0.32, fuzziness=0.16, specular=0.16, shininess=22.0),
                     visual_perturbation=SurfacePerturbation(magnitude=0.025, scale=6.4, seed=44, octaves=4, gain=0.55),
                     collision_boundary=SphereCollider(radius=0.19),
                 ),
@@ -290,7 +290,7 @@ class FruitBowlSimulation:
                     kinetic_friction=0.18,
                     squishiness=0.26,
                     damping=0.22,
-                    material=Material(color=(50, 142, 78), absorption=(0.16, 0.03, 0.14), roughness=0.04, fuzziness=0.0),
+                    material=Material(color=(50, 142, 78), absorption=(0.16, 0.03, 0.14), roughness=0.04, fuzziness=0.0, specular=0.52, shininess=64.0, reflectivity=0.12),
                 ),
                 marker_color=(18, 55, 34),
             ),
@@ -310,7 +310,7 @@ class FruitBowlSimulation:
                     rolling_resistance=0.08,
                     squishiness=0.58,
                     damping=0.46,
-                    material=Material(color=(244, 214, 78), absorption=(0.02, 0.04, 0.2), roughness=0.18, fuzziness=0.04),
+                    material=Material(color=(244, 214, 78), absorption=(0.02, 0.04, 0.2), roughness=0.18, fuzziness=0.04, specular=0.18, shininess=24.0),
                 ),
                 visual="banana",
                 banana_yaw=26.0,
@@ -337,12 +337,12 @@ class FruitBowlSimulation:
     @staticmethod
     def _driven_center(time: float) -> Vec3:
         phase = (time * 0.95) % 1.0
-        toss = 0.72 * FruitBowlSimulation._pulse(phase, 0.12, 0.065)
-        drop = -0.2 * FruitBowlSimulation._pulse(phase, 0.26, 0.08)
-        catch = 0.16 * FruitBowlSimulation._pulse(phase, 0.58, 0.12)
+        toss = 0.34 * FruitBowlSimulation._pulse(phase, 0.12, 0.055)
+        drop = -0.09 * FruitBowlSimulation._pulse(phase, 0.26, 0.075)
+        catch = 0.08 * FruitBowlSimulation._pulse(phase, 0.58, 0.12)
         return Vec3(
-            0.14 * sin(time * 1.7),
-            0.06 + 0.16 * sin(time * tau * 0.72) + toss + drop + catch,
+            0.1 * sin(time * 1.7),
+            0.02 + 0.09 * sin(time * tau * 0.72) + toss + drop + catch,
             0.1 * sin(time * 2.1 + 0.6),
         )
 
@@ -359,7 +359,9 @@ class FruitBowlSimulation:
         scene.add(self.floor.to_primitive(), self.bowl.to_primitive())
         for fruit in self.fruits:
             scene.add(*fruit.to_primitives())
-        for light in self._lights_for_mode(light_mode):
+        lights = self._lights_for_mode(light_mode)
+        scene.add(*self._light_markers(lights))
+        for light in lights:
             scene.add_light(light)
         scene.add_bulletin(
             TextBulletin(
@@ -372,6 +374,26 @@ class FruitBowlSimulation:
             )
         )
         return scene
+
+    def _light_markers(self, lights: tuple[Sun | Lamp, ...]) -> tuple[Sphere | Line3, ...]:
+        markers: list[Sphere | Line3] = []
+        for light in lights:
+            if isinstance(light, Lamp):
+                markers.append(
+                    Sphere(
+                        light.position,
+                        0.055,
+                        Material(color=light.color, emission=light.color, diffuse=0.35, specular=0.8, shininess=80.0),
+                    )
+                )
+                markers.append(
+                    Line3(
+                        light.position,
+                        Vec3(0.0, 0.0, 0.0),
+                        Material(color=light.color, emission=light.color),
+                    )
+                )
+        return tuple(markers)
 
     def _lights_for_mode(self, light_mode: str) -> tuple[Sun | Lamp, ...]:
         mode = light_mode.lower().replace("_", "-")
