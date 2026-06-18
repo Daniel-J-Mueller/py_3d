@@ -13,9 +13,11 @@ import subprocess
 
 from py_3d import (
     Camera,
+    CompoundSphereCollider,
     CPURenderer,
     KinematicBowl,
     Lamp,
+    Line3,
     Material,
     Mesh,
     PhysicsWorld,
@@ -43,16 +45,37 @@ class Fruit:
     body: SphereBody
     visual: str = "sphere"
     banana_yaw: float = 0.0
+    marker_color: tuple[int, int, int] = (40, 30, 25)
 
-    def to_primitive(self) -> Sphere | Mesh:
+    def to_primitives(self) -> tuple[Sphere | Mesh | Line3, ...]:
         if self.visual == "banana":
-            return banana_mesh(
-                self.body.position,
-                self.body.radius,
-                self.body.material,
-                yaw_degrees=self.banana_yaw + self.body.position.x * 35.0,
+            return (
+                banana_mesh(
+                    self.body.position,
+                    self.body.radius,
+                    self.body.material,
+                    yaw_degrees=self.banana_yaw,
+                    rotation=self.body.rotation,
+                ),
             )
-        return self.body.to_primitive()
+        marker = rotate_euler(Vec3(0.0, self.body.radius * 1.03, 0.0), self.body.rotation)
+        marker_tail = rotate_euler(Vec3(self.body.radius * 0.42, self.body.radius * 0.72, 0.0), self.body.rotation)
+        return (
+            self.body.to_primitive(),
+            Line3(
+                self.body.position + marker_tail,
+                self.body.position + marker,
+                Material(color=self.marker_color, emission=(12, 10, 8)),
+            ),
+        )
+
+    def sync_collision_boundary(self) -> None:
+        if self.visual == "banana":
+            self.body.collision_boundary = banana_collider(
+                self.body.radius,
+                yaw_degrees=self.banana_yaw,
+                rotation=self.body.rotation,
+            )
 
 
 def banana_mesh(
@@ -61,6 +84,7 @@ def banana_mesh(
     material: Material,
     *,
     yaw_degrees: float = 0.0,
+    rotation: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0),
     sections: int = 10,
     sides: int = 8,
 ) -> Mesh:
@@ -71,39 +95,25 @@ def banana_mesh(
     if sides < 3:
         raise ValueError("banana sides must be at least 3")
 
-    yaw = radians(yaw_degrees)
-    yaw_cos = cos(yaw)
-    yaw_sin = sin(yaw)
-    curve_radius = radius * 1.55
-    height_scale = 0.42
-    start_angle = -1.12
-    end_angle = 1.12
-    base_y = curve_radius * height_scale * cos(start_angle)
+    rotation = as_rotation(rotation, yaw_degrees)
+    centerline = banana_centerline_offsets(radius, sections=sections, rotation=rotation)
     rings: list[list[Vec3]] = []
 
     for section in range(sections + 1):
         amount = section / sections
-        angle = start_angle + (end_angle - start_angle) * amount
-        centerline = Vec3(
-            curve_radius * sin(angle),
-            curve_radius * height_scale * cos(angle) - base_y,
-            0.0,
-        )
-        tangent = Vec3(curve_radius * cos(angle), -curve_radius * height_scale * sin(angle), 0.0).normalized(Vec3(1.0, 0.0, 0.0))
-        binormal = Vec3(0.0, 0.0, 1.0)
+        section_center = centerline[section]
+        previous_center = centerline[max(0, section - 1)]
+        next_center = centerline[min(sections, section + 1)]
+        tangent = (next_center - previous_center).normalized(Vec3(1.0, 0.0, 0.0))
+        binormal = rotate_euler(Vec3(0.0, 0.0, 1.0), rotation)
         normal = binormal.cross(tangent).normalized(Vec3(0.0, 1.0, 0.0))
         taper = sin(pi * amount) ** 0.5
         tube_radius = radius * 0.24 * (0.35 + 0.65 * taper)
         ring = []
         for side in range(sides):
             theta = tau * side / sides
-            local = centerline + normal * (cos(theta) * tube_radius) + binormal * (sin(theta) * tube_radius)
-            rotated = Vec3(
-                local.x * yaw_cos - local.z * yaw_sin,
-                local.y - radius * 0.12,
-                local.x * yaw_sin + local.z * yaw_cos,
-            )
-            ring.append(center + rotated)
+            local = section_center + normal * (cos(theta) * tube_radius) + binormal * (sin(theta) * tube_radius)
+            ring.append(center + local)
         rings.append(ring)
 
     triangles: list[Triangle] = []
@@ -130,6 +140,55 @@ def banana_mesh(
             b = rings[ring_index][side if reverse else next_side]
             triangles.append(Triangle(a, b, cap_center, cap_material))
     return Mesh(triangles)
+
+
+def banana_collider(
+    radius: float,
+    *,
+    yaw_degrees: float = 0.0,
+    rotation: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0),
+    sections: int = 10,
+) -> CompoundSphereCollider:
+    offsets = banana_centerline_offsets(radius, sections=sections, rotation=as_rotation(rotation, yaw_degrees))
+    return CompoundSphereCollider.from_offsets(offsets, radius=radius * 0.2)
+
+
+def banana_centerline_offsets(
+    radius: float,
+    *,
+    sections: int = 10,
+    rotation: Vec3 = Vec3(0.0, 0.0, 0.0),
+) -> list[Vec3]:
+    curve_radius = radius * 1.55
+    height_scale = 0.42
+    start_angle = -1.12
+    end_angle = 1.12
+    base_y = curve_radius * height_scale * cos(start_angle)
+    offsets = []
+    for section in range(sections + 1):
+        amount = section / sections
+        angle = start_angle + (end_angle - start_angle) * amount
+        local = Vec3(
+            curve_radius * sin(angle),
+            curve_radius * height_scale * cos(angle) - base_y - radius * 0.12,
+            0.0,
+        )
+        offsets.append(rotate_euler(local, rotation))
+    return offsets
+
+
+def as_rotation(rotation: Vec3 | tuple[float, float, float], yaw_degrees: float) -> Vec3:
+    value = rotation if isinstance(rotation, Vec3) else Vec3(*rotation)
+    return Vec3(value.x, value.y + radians(yaw_degrees), value.z)
+
+
+def rotate_euler(value: Vec3, rotation: Vec3) -> Vec3:
+    cx, sx = cos(rotation.x), sin(rotation.x)
+    cy, sy = cos(rotation.y), sin(rotation.y)
+    cz, sz = cos(rotation.z), sin(rotation.z)
+    x_rotated = Vec3(value.x, value.y * cx - value.z * sx, value.y * sx + value.z * cx)
+    y_rotated = Vec3(x_rotated.x * cy + x_rotated.z * sy, x_rotated.y, -x_rotated.x * sy + x_rotated.z * cy)
+    return Vec3(y_rotated.x * cz - y_rotated.y * sz, y_rotated.x * sz + y_rotated.y * cz, y_rotated.z)
 
 
 def _ring_center(ring: list[Vec3]) -> Vec3:
@@ -168,8 +227,11 @@ class FruitBowlSimulation:
                     position=(-0.42, -0.12, 0.08),
                     radius=0.23,
                     velocity=(0.6, 0.0, 0.12),
+                    mass=0.85,
                     restitution=0.74,
-                    friction=0.04,
+                    friction=0.28,
+                    static_friction=0.42,
+                    kinetic_friction=0.28,
                     material=Material(color=(225, 55, 48), absorption=(0.02, 0.15, 0.16), roughness=0.22, fuzziness=0.08),
                 ),
             ),
@@ -179,8 +241,11 @@ class FruitBowlSimulation:
                     position=(0.28, -0.2, -0.1),
                     radius=0.27,
                     velocity=(-0.35, 0.12, -0.22),
+                    mass=1.05,
                     restitution=0.7,
-                    friction=0.05,
+                    friction=0.34,
+                    static_friction=0.48,
+                    kinetic_friction=0.32,
                     material=Material(color=(238, 135, 42), absorption=(0.02, 0.08, 0.22), roughness=0.38, fuzziness=0.18),
                     visual_perturbation=SurfacePerturbation(magnitude=0.035, scale=5.5, seed=31, octaves=4, gain=0.55),
                     collision_boundary=SphereCollider(radius=0.27),
@@ -192,8 +257,11 @@ class FruitBowlSimulation:
                     position=(0.0, 0.12, 0.3),
                     radius=0.19,
                     velocity=(0.2, -0.1, -0.3),
+                    mass=0.55,
                     restitution=0.76,
-                    friction=0.03,
+                    friction=0.31,
+                    static_friction=0.46,
+                    kinetic_friction=0.3,
                     material=Material(color=(238, 218, 74), absorption=(0.03, 0.03, 0.2), roughness=0.32, fuzziness=0.16),
                     visual_perturbation=SurfacePerturbation(magnitude=0.025, scale=6.4, seed=44, octaves=4, gain=0.55),
                     collision_boundary=SphereCollider(radius=0.19),
@@ -205,10 +273,14 @@ class FruitBowlSimulation:
                     position=(-0.05, 0.22, -0.36),
                     radius=0.21,
                     velocity=(-0.18, 0.0, 0.38),
+                    mass=1.15,
                     restitution=0.72,
-                    friction=0.04,
+                    friction=0.18,
+                    static_friction=0.28,
+                    kinetic_friction=0.18,
                     material=Material(color=(50, 142, 78), absorption=(0.16, 0.03, 0.14), roughness=0.04, fuzziness=0.0),
                 ),
+                marker_color=(18, 55, 34),
             ),
             Fruit(
                 "banana",
@@ -216,15 +288,21 @@ class FruitBowlSimulation:
                     position=(0.52, 0.06, 0.24),
                     radius=0.27,
                     velocity=(-0.52, 0.06, -0.28),
+                    angular_velocity=(0.0, 0.0, 2.5),
+                    mass=0.65,
+                    moment_of_inertia=0.028,
                     restitution=0.78,
-                    friction=0.03,
+                    friction=0.18,
+                    static_friction=0.35,
+                    kinetic_friction=0.22,
                     material=Material(color=(244, 214, 78), absorption=(0.02, 0.04, 0.2), roughness=0.18, fuzziness=0.04),
-                    collision_boundary=SphereCollider(radius=0.27),
                 ),
                 visual="banana",
                 banana_yaw=26.0,
             ),
         ]
+        for fruit in self.fruits:
+            fruit.sync_collision_boundary()
         self.world.add_bowl(self.bowl)
         self.world.add_plane(self.floor)
         for fruit in self.fruits:
@@ -237,6 +315,8 @@ class FruitBowlSimulation:
         for _ in range(substeps):
             self.time += step_dt
             self.bowl.set_center(self._driven_center(self.time), dt=step_dt)
+            for fruit in self.fruits:
+                fruit.sync_collision_boundary()
             self.world.step(step_dt)
 
     @staticmethod
@@ -251,7 +331,7 @@ class FruitBowlSimulation:
         scene = Scene()
         scene.add(self.floor.to_primitive(), self.bowl.to_primitive())
         for fruit in self.fruits:
-            scene.add(fruit.to_primitive())
+            scene.add(*fruit.to_primitives())
         scene.add_light(Sun(direction=(-0.35, -0.8, -1.0), color=(255, 245, 224), intensity=0.72))
         scene.add_light(Lamp(position=(-1.8, 2.4, -2.2), color=(95, 145, 255), intensity=3.2))
         scene.add_light(Lamp(position=(1.6, 1.3, -1.3), color=(255, 120, 88), intensity=2.1))

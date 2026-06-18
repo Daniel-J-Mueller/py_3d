@@ -2,9 +2,10 @@
 
 from .buffer import DepthBuffer, PixelBuffer
 from .camera import Camera, ProjectedPoint
-from .collision import BowlCollider, BoxCollider, PlaneCollider, SphereCollider
+from .collision import BowlCollider, BoxCollider, CompoundSphereCollider, PlaneCollider, SphereCollider
 from .color import Color
 from . import draw
+from .gpu import GPURenderer, detect_gpu_backends
 from .importers import load_obj, load_stl
 from .lights import Lamp, LightSample, Sun
 from .materials import Material
@@ -22,10 +23,12 @@ __all__ = [
     "BoxCollider",
     "Bowl",
     "BowlCollider",
+    "CompoundSphereCollider",
     "CPURenderer",
     "Camera",
     "Color",
     "DepthBuffer",
+    "GPURenderer",
     "Lamp",
     "LightSample",
     "Line3",
@@ -58,6 +61,7 @@ __all__ = [
     "as_vec3",
     "clamp",
     "draw",
+    "detect_gpu_backends",
     "load_obj",
     "load_stl",
     "planar_project_triangles",

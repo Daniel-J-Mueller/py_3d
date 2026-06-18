@@ -266,6 +266,8 @@ Physics collision boundaries are explicit and may be separate from render
 geometry:
 
 - `SphereCollider(radius, offset=...)`
+- `CompoundSphereCollider([...])` for simple multi-sphere approximations of
+  curved or elongated objects.
 - `BoxCollider(size, offset=...)`
 - `PlaneCollider(point, normal)`
 - `BowlCollider(radius, depth=..., offset=...)`
@@ -284,6 +286,21 @@ continuing to collide with planes, boxes, and each other. This is useful for
 coordinated demos where the environment is animated directly but contained
 objects are still simulated.
 
+Dynamic bodies now expose early rigid-body controls:
+
+- `mass`: translational mass used for pairwise impulses.
+- `moment_of_inertia`: scalar angular inertia. Spheres default to
+  `0.4 * mass * radius ** 2`.
+- `angular_velocity` and `rotation`: angular state used by rolling contacts and
+  render-driven collision boundaries.
+- `static_friction` and `kinetic_friction`: explicit coefficients. The older
+  `friction` field remains as a simple default for both.
+- `rolling_resistance`: small damping for angular velocity.
+
+Contact friction now applies tangential impulses at the contact point, so a
+sphere on a surface can pick up spin instead of only strafing. This is still a
+simple educational model, not a full rigid-body solver.
+
 ## Proposed Package Layout
 
 ```text
@@ -294,6 +311,7 @@ py_3d/
   color.py         # RGB color helpers
   collision.py     # Shape intersection and contact generation
   draw.py          # Immediate-mode primitive drawing helpers
+  gpu.py           # Optional GPU renderer scaffold
   importers.py     # OBJ and STL loading helpers
   lights.py        # Lamp, Sun, and lighting utilities
   materials.py     # Material definitions
@@ -313,7 +331,7 @@ This layout is a starting point, not a requirement. Keep modules small and
 split them when a file starts mixing unrelated responsibilities.
 
 Current implemented modules are `buffer`, `camera`, `collision`, `color`, `draw`,
-`importers`, `lights`, `materials`, `math3d`, `overlays`, `physics`,
+`gpu`, `importers`, `lights`, `materials`, `math3d`, `overlays`, `physics`,
 `noise`, `primitives`, `render`, `scene`, and `textures`.
 
 ## Performance Direction
@@ -348,6 +366,10 @@ GPU targets are:
   features.
 - Start with a practical backend such as OpenGL, WebGPU, or a native extension
   only after profiling shows the current CPU rasterizer is the bottleneck.
+
+The first scaffold is `GPURenderer`. Today it detects optional Python GPU
+packages and can fall back to the CPU renderer; strict mode raises a clear
+runtime error instead of pretending GPU rasterization is implemented.
 
 ## Development
 
@@ -427,7 +449,8 @@ python examples/fruit_bowl_demo.py
 It drives a `KinematicBowl` up and down while several dynamic fruit spheres
 bounce inside it and collide with each other. The orange and lemon use visual
 surface perturbation, the watermelon stays smooth, and the banana is a curved
-render mesh over a simple sphere collision boundary. It writes
+render mesh with a compound collision boundary generated from the same curved
+centerline. It writes
 `renderings-tests/fruit_bowl.png`.
 
 Run the live fruit bowl viewer:

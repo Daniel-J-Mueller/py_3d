@@ -2,6 +2,7 @@ from py_3d import (
     Bowl,
     BowlCollider,
     BoxCollider,
+    CompoundSphereCollider,
     KinematicBowl,
     PhysicsWorld,
     PlaneCollider,
@@ -192,3 +193,49 @@ def test_spheres_collide_with_each_other():
     assert left.collision_center().distance_to(right.collision_center()) >= left.radius + right.radius
     assert left.velocity.x < 0.0
     assert right.velocity.x > 0.0
+
+
+def test_sphere_body_has_default_moment_of_inertia():
+    body = SphereBody(position=(0, 0, 0), radius=0.5, mass=2.0)
+
+    assert body.moment_of_inertia == 0.4 * 2.0 * 0.5 * 0.5
+    assert body.static_friction == body.friction
+    assert body.kinetic_friction == body.friction
+
+
+def test_floor_contact_adds_rolling_angular_velocity():
+    body = SphereBody(
+        position=(0, 0.2, 0),
+        radius=0.2,
+        velocity=(1.0, -0.1, 0.0),
+        friction=0.8,
+        restitution=0.0,
+        rolling_resistance=0.0,
+    )
+    floor = StaticPlane(point=(0, 0, 0), normal=(0, 1, 0), friction=0.8, restitution=0.0)
+    world = PhysicsWorld(gravity=(0, 0, 0))
+    world.add_sphere(body)
+    world.add_plane(floor)
+
+    world.step(0.1)
+
+    assert body.angular_velocity.z < 0.0
+
+
+def test_compound_sphere_collider_drives_contact_from_offsets():
+    body = SphereBody(
+        position=(0, 0.35, 0),
+        radius=0.2,
+        velocity=(0, -1, 0),
+        restitution=0.0,
+        collision_boundary=CompoundSphereCollider.from_offsets(((-0.3, 0, 0), (0.3, 0, 0)), radius=0.18),
+    )
+    floor = StaticPlane(point=(0, 0, 0), normal=(0, 1, 0), restitution=0.0)
+    world = PhysicsWorld(gravity=(0, 0, 0))
+    world.add_sphere(body)
+    world.add_plane(floor)
+
+    world.step(0.25)
+
+    assert body.position.y >= 0.18
+    assert body.collision_radius() > body.radius

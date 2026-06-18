@@ -104,6 +104,11 @@ behavior while the engine grows.
 - Keep driven objects such as `KinematicBowl` explicit. User code should be able
   to coordinate their motion while dynamic bodies respond through ordinary
   collision resolution.
+- Preserve angular state when changing dynamic bodies. `mass`,
+  `moment_of_inertia`, `static_friction`, `kinetic_friction`,
+  `angular_velocity`, and `rotation` are part of the early rolling model.
+- For non-spherical visual objects, prefer a render-derived compound boundary
+  such as `CompoundSphereCollider` before falling back to one oversized sphere.
 - Add pairwise dynamic contacts only when tested. Sphere-sphere collision is the
   current simple dynamic pair model; broader rigid-body behavior should remain
   incremental.

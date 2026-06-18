@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Iterable
 
 from .math3d import Vec3, as_vec3
 from .primitives import Bowl, Box, Plane, Sphere
@@ -28,6 +29,38 @@ class SphereCollider:
 
     def world_center(self, owner_position: Vec3 | tuple[float, float, float]) -> Vec3:
         return as_vec3(owner_position) + self.offset
+
+
+@dataclass(frozen=True)
+class CompoundSphereCollider:
+    """A compound boundary made from sphere samples relative to an owner."""
+
+    spheres: tuple[SphereCollider, ...]
+
+    def __init__(self, spheres: Iterable[SphereCollider]):
+        values = tuple(spheres)
+        if not values:
+            raise ValueError("compound sphere collider requires at least one sphere")
+        object.__setattr__(self, "spheres", values)
+
+    @classmethod
+    def from_offsets(
+        cls,
+        offsets: Iterable[Vec3 | tuple[float, float, float]],
+        radius: float,
+    ) -> "CompoundSphereCollider":
+        return cls(SphereCollider(radius=radius, offset=offset) for offset in offsets)
+
+    @property
+    def radius(self) -> float:
+        return max(sphere.offset.length() + sphere.radius for sphere in self.spheres)
+
+    def world_center(self, owner_position: Vec3 | tuple[float, float, float]) -> Vec3:
+        return as_vec3(owner_position)
+
+    def world_spheres(self, owner_position: Vec3 | tuple[float, float, float]) -> tuple[tuple[Vec3, float], ...]:
+        owner = as_vec3(owner_position)
+        return tuple((owner + sphere.offset, sphere.radius) for sphere in self.spheres)
 
 
 @dataclass(frozen=True)

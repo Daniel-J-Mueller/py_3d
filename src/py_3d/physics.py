@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import cos, pi, sin
 
-from .collision import BowlCollider, BoxCollider, PlaneCollider, SphereCollider
+from .collision import BowlCollider, BoxCollider, CompoundSphereCollider, PlaneCollider, SphereCollider
 from .materials import Material
 from .math3d import Vec3, as_vec3, clamp
 from .noise import SurfacePerturbation
@@ -19,22 +19,37 @@ class SphereBody:
     position: Vec3 | tuple[float, float, float]
     radius: float
     velocity: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
+    angular_velocity: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
+    rotation: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
     mass: float = 1.0
+    moment_of_inertia: float | None = None
     restitution: float = 0.35
     friction: float = 0.2
+    static_friction: float | None = None
+    kinetic_friction: float | None = None
+    rolling_resistance: float = 0.015
     material: Material = Material()
     visual_perturbation: SurfacePerturbation | None = None
-    collision_boundary: SphereCollider | None = None
+    collision_boundary: SphereCollider | CompoundSphereCollider | None = None
 
     def __post_init__(self) -> None:
         self.position = as_vec3(self.position)
         self.velocity = as_vec3(self.velocity)
+        self.angular_velocity = as_vec3(self.angular_velocity)
+        self.rotation = as_vec3(self.rotation)
         if self.radius <= 0.0:
             raise ValueError("sphere body radius must be positive")
         if self.mass <= 0.0:
             raise ValueError("sphere body mass must be positive")
+        if self.moment_of_inertia is None:
+            self.moment_of_inertia = 0.4 * self.mass * self.radius * self.radius
+        elif self.moment_of_inertia <= 0.0:
+            raise ValueError("moment of inertia must be positive")
         self.restitution = clamp(float(self.restitution), 0.0, 1.0)
         self.friction = clamp(float(self.friction), 0.0, 1.0)
+        self.static_friction = clamp(float(self.static_friction if self.static_friction is not None else self.friction), 0.0, 1.0)
+        self.kinetic_friction = clamp(float(self.kinetic_friction if self.kinetic_friction is not None else self.friction), 0.0, 1.0)
+        self.rolling_resistance = clamp(float(self.rolling_resistance), 0.0, 1.0)
 
     def to_primitive(self) -> Sphere:
         return Sphere(self.position, self.radius, self.material, self.visual_perturbation)
@@ -44,7 +59,7 @@ class SphereBody:
 
         return SphereCollider.from_sphere(self.to_primitive(), owner_position=self.position)
 
-    def effective_collision_boundary(self) -> SphereCollider:
+    def effective_collision_boundary(self) -> SphereCollider | CompoundSphereCollider:
         return self.collision_boundary or self.synced_collision_boundary()
 
     def sync_collision_boundary(self, *, force: bool = False) -> SphereCollider:
@@ -63,6 +78,12 @@ class SphereBody:
 
     def collision_radius(self) -> float:
         return self.effective_collision_boundary().radius
+
+    def inverse_mass(self) -> float:
+        return 1.0 / self.mass
+
+    def inverse_moment_of_inertia(self) -> float:
+        return 1.0 / self.moment_of_inertia
 
     def to_collision_primitive(self, material: Material | None = None) -> Sphere:
         collider = self.effective_collision_boundary()
@@ -242,6 +263,7 @@ class PhysicsWorld:
                     _resolve_sphere_sphere(self.spheres[first_index], self.spheres[second_index], step_dt)
             for sphere in self.spheres:
                 _resolve_sphere_environment(sphere, self.planes, self.boxes, self.bowls, step_dt)
+                _integrate_angular_state(sphere, step_dt)
 
 
 World = PhysicsWorld
@@ -262,132 +284,139 @@ def _resolve_sphere_environment(
         _resolve_sphere_bowl(sphere, bowl, dt)
 
 
+def _collider_spheres(sphere: SphereBody) -> tuple[tuple[Vec3, float], ...]:
+    collider = sphere.effective_collision_boundary()
+    if isinstance(collider, CompoundSphereCollider):
+        return collider.world_spheres(sphere.position)
+    return ((collider.world_center(sphere.position), collider.radius),)
+
+
 def _resolve_sphere_plane(sphere: SphereBody, plane: StaticPlane, dt: float) -> None:
-    sphere_collider = sphere.effective_collision_boundary()
-    sphere_center = sphere_collider.world_center(sphere.position)
     plane_collider = plane.effective_collision_boundary()
-    distance = (sphere_center - plane_collider.point).dot(plane_collider.normal)
-    if distance >= sphere_collider.radius:
-        return
-    penetration = sphere_collider.radius - distance
-    sphere.position = sphere.position + plane_collider.normal * penetration
-    normal_speed = sphere.velocity.dot(plane_collider.normal)
-    if normal_speed < 0.0:
-        sphere.velocity = sphere.velocity - plane_collider.normal * ((1.0 + sphere.restitution * plane.restitution) * normal_speed)
-    tangent = sphere.velocity - plane_collider.normal * sphere.velocity.dot(plane_collider.normal)
-    sphere.velocity = sphere.velocity - tangent * min(1.0, (sphere.friction + plane.friction) * dt)
+    for sphere_center, sphere_radius in _collider_spheres(sphere):
+        contact_arm = sphere_center - sphere.position - plane_collider.normal * sphere_radius
+        distance = (sphere_center - plane_collider.point).dot(plane_collider.normal)
+        if distance >= sphere_radius:
+            continue
+        penetration = sphere_radius - distance
+        sphere.position = sphere.position + plane_collider.normal * penetration
+        normal_speed = sphere.velocity.dot(plane_collider.normal)
+        if normal_speed < 0.0:
+            sphere.velocity = sphere.velocity - plane_collider.normal * ((1.0 + sphere.restitution * plane.restitution) * normal_speed)
+        _apply_contact_friction(sphere, plane_collider.normal, Vec3(0.0, 0.0, 0.0), plane.friction, contact_arm, dt)
 
 
 def _resolve_sphere_box(sphere: SphereBody, box: StaticBox, dt: float) -> None:
-    sphere_collider = sphere.effective_collision_boundary()
-    sphere_center = sphere_collider.world_center(sphere.position)
     box_collider = box.effective_collision_boundary()
     box_center = box_collider.world_center(box.center)
     half = box_collider.size * 0.5
-    closest = Vec3(
-        clamp(sphere_center.x, box_center.x - half.x, box_center.x + half.x),
-        clamp(sphere_center.y, box_center.y - half.y, box_center.y + half.y),
-        clamp(sphere_center.z, box_center.z - half.z, box_center.z + half.z),
-    )
-    offset = sphere_center - closest
-    distance_squared = offset.length_squared()
-    if distance_squared >= sphere_collider.radius * sphere_collider.radius:
-        return
+    for sphere_center, sphere_radius in _collider_spheres(sphere):
+        closest = Vec3(
+            clamp(sphere_center.x, box_center.x - half.x, box_center.x + half.x),
+            clamp(sphere_center.y, box_center.y - half.y, box_center.y + half.y),
+            clamp(sphere_center.z, box_center.z - half.z, box_center.z + half.z),
+        )
+        offset = sphere_center - closest
+        distance_squared = offset.length_squared()
+        if distance_squared >= sphere_radius * sphere_radius:
+            continue
 
-    if distance_squared == 0.0:
-        normal = _box_escape_normal(sphere_center, box_center, half)
-    else:
-        normal = offset.normalized()
-    distance = distance_squared ** 0.5
-    penetration = sphere_collider.radius - distance if distance > 0.0 else sphere_collider.radius
-    sphere.position = sphere.position + normal * penetration
+        if distance_squared == 0.0:
+            normal = _box_escape_normal(sphere_center, box_center, half)
+        else:
+            normal = offset.normalized()
+        contact_arm = sphere_center - sphere.position - normal * sphere_radius
+        distance = distance_squared ** 0.5
+        penetration = sphere_radius - distance if distance > 0.0 else sphere_radius
+        sphere.position = sphere.position + normal * penetration
 
-    normal_speed = sphere.velocity.dot(normal)
-    if normal_speed < 0.0:
-        sphere.velocity = sphere.velocity - normal * ((1.0 + sphere.restitution * box.restitution) * normal_speed)
-    tangent = sphere.velocity - normal * sphere.velocity.dot(normal)
-    sphere.velocity = sphere.velocity - tangent * min(1.0, (sphere.friction + box.friction) * dt)
+        normal_speed = sphere.velocity.dot(normal)
+        if normal_speed < 0.0:
+            sphere.velocity = sphere.velocity - normal * ((1.0 + sphere.restitution * box.restitution) * normal_speed)
+        _apply_contact_friction(sphere, normal, Vec3(0.0, 0.0, 0.0), box.friction, contact_arm, dt)
 
 
 def _resolve_sphere_bowl(sphere: SphereBody, bowl: KinematicBowl, dt: float) -> None:
-    sphere_collider = sphere.effective_collision_boundary()
-    sphere_center = sphere_collider.world_center(sphere.position)
     bowl_collider = bowl.effective_collision_boundary()
     bowl_center = bowl_collider.world_center(bowl.center)
-    local = sphere_center - bowl_center
-    sphere_radius = sphere_collider.radius
     radius = bowl_collider.radius
 
-    if local.y <= sphere_radius:
-        distance = local.length()
-        if distance + sphere_radius > radius:
-            normal = local.normalized(Vec3(0.0, -1.0, 0.0))
-            penetration = distance + sphere_radius - radius
-            sphere.position = sphere.position - normal * penetration
-            _bounce_against_kinematic_surface(sphere, bowl, normal, dt, outward_speed=True)
+    for sphere_center, sphere_radius in _collider_spheres(sphere):
+        component_offset = sphere_center - sphere.position
+        local = sphere_center - bowl_center
+        if local.y <= sphere_radius:
+            distance = local.length()
+            if distance + sphere_radius > radius:
+                normal = local.normalized(Vec3(0.0, -1.0, 0.0))
+                penetration = distance + sphere_radius - radius
+                sphere.position = sphere.position - normal * penetration
+                contact_arm = component_offset - normal * sphere_radius
+                _bounce_against_kinematic_surface(sphere, bowl, normal, contact_arm, dt, outward_speed=True)
 
-    sphere_center = sphere_collider.world_center(sphere.position)
-    local = sphere_center - bowl_center
-    bottom_radius = radius * cos(bowl_collider.depth * pi / 2.0)
-    if bottom_radius <= 1e-9:
-        return
-    bottom_y = bowl_center.y - radius * sin(bowl_collider.depth * pi / 2.0)
-    horizontal_distance_squared = local.x * local.x + local.z * local.z
-    bottom_contact_radius = bottom_radius + sphere_radius
-    if local.y < bottom_y - bowl_center.y + sphere_radius and horizontal_distance_squared <= bottom_contact_radius * bottom_contact_radius:
-        penetration = bottom_y + sphere_radius - sphere_center.y
-        sphere.position = sphere.position + Vec3(0.0, penetration, 0.0)
-        _bounce_against_kinematic_surface(sphere, bowl, Vec3(0.0, 1.0, 0.0), dt, outward_speed=False)
+        sphere_center = sphere.position + component_offset
+        local = sphere_center - bowl_center
+        bottom_radius = radius * cos(bowl_collider.depth * pi / 2.0)
+        if bottom_radius <= 1e-9:
+            continue
+        bottom_y = bowl_center.y - radius * sin(bowl_collider.depth * pi / 2.0)
+        horizontal_distance_squared = local.x * local.x + local.z * local.z
+        bottom_contact_radius = bottom_radius + sphere_radius
+        if local.y < bottom_y - bowl_center.y + sphere_radius and horizontal_distance_squared <= bottom_contact_radius * bottom_contact_radius:
+            penetration = bottom_y + sphere_radius - sphere_center.y
+            sphere.position = sphere.position + Vec3(0.0, penetration, 0.0)
+            contact_arm = component_offset - Vec3(0.0, sphere_radius, 0.0)
+            _bounce_against_kinematic_surface(sphere, bowl, Vec3(0.0, 1.0, 0.0), contact_arm, dt, outward_speed=False)
 
 
 def _resolve_sphere_sphere(first: SphereBody, second: SphereBody, dt: float) -> None:
-    first_collider = first.effective_collision_boundary()
-    second_collider = second.effective_collision_boundary()
-    first_center = first_collider.world_center(first.position)
-    second_center = second_collider.world_center(second.position)
-    delta = second_center - first_center
-    distance_squared = delta.length_squared()
-    radius_sum = first_collider.radius + second_collider.radius
-    if distance_squared >= radius_sum * radius_sum:
-        return
-
-    if distance_squared == 0.0:
-        normal = Vec3(1.0, 0.0, 0.0)
-        distance = 0.0
-    else:
-        distance = distance_squared ** 0.5
-        normal = delta / distance
-    penetration = radius_sum - distance
-    first_inverse_mass = 1.0 / first.mass
-    second_inverse_mass = 1.0 / second.mass
+    first_inverse_mass = first.inverse_mass()
+    second_inverse_mass = second.inverse_mass()
     total_inverse_mass = first_inverse_mass + second_inverse_mass
     if total_inverse_mass == 0.0:
         return
 
-    first.position = first.position - normal * (penetration * first_inverse_mass / total_inverse_mass)
-    second.position = second.position + normal * (penetration * second_inverse_mass / total_inverse_mass)
+    for first_center, first_radius in _collider_spheres(first):
+        first_offset = first_center - first.position
+        for second_center, second_radius in _collider_spheres(second):
+            second_offset = second_center - second.position
+            delta = second_center - first_center
+            distance_squared = delta.length_squared()
+            radius_sum = first_radius + second_radius
+            if distance_squared >= radius_sum * radius_sum:
+                continue
 
-    relative_velocity = second.velocity - first.velocity
-    normal_speed = relative_velocity.dot(normal)
-    if normal_speed >= 0.0:
-        return
-    restitution = first.restitution * second.restitution
-    impulse_strength = -((1.0 + restitution) * normal_speed) / total_inverse_mass
-    impulse = normal * impulse_strength
-    first.velocity = first.velocity - impulse * first_inverse_mass
-    second.velocity = second.velocity + impulse * second_inverse_mass
+            if distance_squared == 0.0:
+                normal = Vec3(1.0, 0.0, 0.0)
+                distance = 0.0
+            else:
+                distance = distance_squared ** 0.5
+                normal = delta / distance
+            penetration = radius_sum - distance
 
-    tangent = relative_velocity - normal * normal_speed
-    damping = min(1.0, (first.friction + second.friction) * dt)
-    if tangent.length_squared() > 0.0 and damping > 0.0:
-        first.velocity = first.velocity + tangent * (damping * 0.5)
-        second.velocity = second.velocity - tangent * (damping * 0.5)
+            first.position = first.position - normal * (penetration * first_inverse_mass / total_inverse_mass)
+            second.position = second.position + normal * (penetration * second_inverse_mass / total_inverse_mass)
+
+            first_contact_velocity = first.velocity + first.angular_velocity.cross(first_offset)
+            second_contact_velocity = second.velocity + second.angular_velocity.cross(second_offset)
+            relative_velocity = second_contact_velocity - first_contact_velocity
+            normal_speed = relative_velocity.dot(normal)
+            if normal_speed >= 0.0:
+                continue
+            restitution = first.restitution * second.restitution
+            impulse_strength = -((1.0 + restitution) * normal_speed) / total_inverse_mass
+            impulse = normal * impulse_strength
+            first.velocity = first.velocity - impulse * first_inverse_mass
+            second.velocity = second.velocity + impulse * second_inverse_mass
+            first.angular_velocity = first.angular_velocity - first_offset.cross(impulse) * first.inverse_moment_of_inertia()
+            second.angular_velocity = second.angular_velocity + second_offset.cross(impulse) * second.inverse_moment_of_inertia()
+            _apply_pair_friction(first, second, normal, first_offset, second_offset, dt)
 
 
 def _bounce_against_kinematic_surface(
     sphere: SphereBody,
     bowl: KinematicBowl,
     normal: Vec3,
+    contact_arm: Vec3,
     dt: float,
     *,
     outward_speed: bool,
@@ -402,9 +431,85 @@ def _bounce_against_kinematic_surface(
 
     restitution = sphere.restitution * bowl.restitution
     reflected = relative_velocity - normal * ((1.0 + restitution) * normal_speed)
-    tangent = reflected - normal * reflected.dot(normal)
-    reflected = reflected - tangent * min(1.0, (sphere.friction + bowl.friction) * dt)
     sphere.velocity = bowl.velocity + reflected
+    _apply_contact_friction(sphere, normal, bowl.velocity, bowl.friction, contact_arm, dt)
+
+
+def _apply_contact_friction(
+    sphere: SphereBody,
+    normal: Vec3,
+    surface_velocity: Vec3,
+    surface_friction: float,
+    contact_arm: Vec3,
+    dt: float,
+) -> None:
+    contact_velocity = sphere.velocity + sphere.angular_velocity.cross(contact_arm)
+    relative_velocity = contact_velocity - surface_velocity
+    tangent = relative_velocity - normal * relative_velocity.dot(normal)
+    tangent_speed = tangent.length()
+    if tangent_speed <= 1e-9:
+        return
+
+    tangent_direction = tangent / tangent_speed
+    contact_radius = max(1e-9, contact_arm.length())
+    effective_inverse_mass = sphere.inverse_mass() + contact_radius * contact_radius * sphere.inverse_moment_of_inertia()
+    desired_impulse = tangent_speed / effective_inverse_mass
+    coefficient = clamp(0.5 * (sphere.kinetic_friction + surface_friction), 0.0, 1.0)
+    max_impulse = coefficient * sphere.mass * 9.81 * dt
+    impulse = -tangent_direction * min(desired_impulse, max_impulse)
+
+    sphere.velocity = sphere.velocity + impulse * sphere.inverse_mass()
+    sphere.angular_velocity = sphere.angular_velocity + contact_arm.cross(impulse) * sphere.inverse_moment_of_inertia()
+
+    static_blend = min(1.0, 0.5 * (sphere.static_friction + surface_friction) * dt * 12.0)
+    if static_blend > 0.0:
+        relative_linear = sphere.velocity - surface_velocity
+        relative_tangent = relative_linear - normal * relative_linear.dot(normal)
+        desired_spin = normal.cross(relative_tangent) / contact_radius
+        sphere.angular_velocity = sphere.angular_velocity + (desired_spin - sphere.angular_velocity) * static_blend
+
+
+def _apply_pair_friction(
+    first: SphereBody,
+    second: SphereBody,
+    normal: Vec3,
+    first_offset: Vec3,
+    second_offset: Vec3,
+    dt: float,
+) -> None:
+    first_contact_velocity = first.velocity + first.angular_velocity.cross(first_offset)
+    second_contact_velocity = second.velocity + second.angular_velocity.cross(second_offset)
+    relative_velocity = second_contact_velocity - first_contact_velocity
+    tangent = relative_velocity - normal * relative_velocity.dot(normal)
+    tangent_speed = tangent.length()
+    if tangent_speed <= 1e-9:
+        return
+
+    tangent_direction = tangent / tangent_speed
+    first_inverse_inertia = first.inverse_moment_of_inertia()
+    second_inverse_inertia = second.inverse_moment_of_inertia()
+    effective_inverse_mass = (
+        first.inverse_mass()
+        + second.inverse_mass()
+        + first_offset.length_squared() * first_inverse_inertia
+        + second_offset.length_squared() * second_inverse_inertia
+    )
+    if effective_inverse_mass <= 0.0:
+        return
+    coefficient = clamp(0.5 * (first.kinetic_friction + second.kinetic_friction), 0.0, 1.0)
+    max_impulse = coefficient * min(first.mass, second.mass) * 9.81 * dt
+    impulse = tangent_direction * min(tangent_speed / effective_inverse_mass, max_impulse)
+
+    first.velocity = first.velocity + impulse * first.inverse_mass()
+    second.velocity = second.velocity - impulse * second.inverse_mass()
+    first.angular_velocity = first.angular_velocity + first_offset.cross(impulse) * first_inverse_inertia
+    second.angular_velocity = second.angular_velocity - second_offset.cross(impulse) * second_inverse_inertia
+
+
+def _integrate_angular_state(sphere: SphereBody, dt: float) -> None:
+    if sphere.rolling_resistance > 0.0:
+        sphere.angular_velocity = sphere.angular_velocity * max(0.0, 1.0 - sphere.rolling_resistance * dt)
+    sphere.rotation = sphere.rotation + sphere.angular_velocity * dt
 
 
 def _box_escape_normal(position: Vec3, center: Vec3, half: Vec3) -> Vec3:

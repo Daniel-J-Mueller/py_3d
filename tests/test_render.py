@@ -1,4 +1,6 @@
-from py_3d import Bowl, Box, CPURenderer, Camera, Color, Lamp, Material, PixelBuffer, Plane, RenderEngine, RenderSettings, Scene, Sphere, Sun, TextBulletin, Triangle
+import pytest
+
+from py_3d import Bowl, Box, CPURenderer, Camera, Color, GPURenderer, Lamp, Material, PixelBuffer, Plane, RenderEngine, RenderSettings, Scene, Sphere, Sun, TextBulletin, Triangle
 
 
 def test_cpu_renderer_renders_triangle_offscreen():
@@ -102,6 +104,27 @@ def test_cached_and_uncached_cpu_renderers_match_basic_scene():
     uncached = RenderEngine(CPURenderer(cache_static_geometry=False)).render(scene, camera, settings)
 
     assert cached.pixels == uncached.pixels
+
+
+def test_gpu_renderer_scaffold_can_fall_back_to_cpu():
+    scene = Scene()
+    scene.add(Sphere((0, 0, 0), 0.7, Material(color=(90, 150, 230))))
+    scene.add_light(Sun(direction=(0, 0, -1), intensity=1.0))
+    camera = Camera(position=(0, 0, -4), target=(0, 0, 0))
+    settings = RenderSettings(width=48, height=48, sphere_segments=10, sphere_rings=5)
+
+    cpu = RenderEngine(CPURenderer()).render(scene, camera, settings)
+    gpu_scaffold = RenderEngine(GPURenderer()).render(scene, camera, settings)
+
+    assert gpu_scaffold.pixels == cpu.pixels
+
+
+def test_gpu_renderer_scaffold_strict_mode_is_explicit():
+    scene = Scene()
+    camera = Camera()
+
+    with pytest.raises(RuntimeError, match="GPU renderer scaffold"):
+        RenderEngine(GPURenderer(allow_cpu_fallback=False)).render(scene, camera, RenderSettings(width=8, height=8))
 
 
 def test_textured_triangles_render_from_png_asset():
