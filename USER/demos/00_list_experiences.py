@@ -9,8 +9,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 EXPERIENCES = [
-    ("10_live_fruit_bowl_gpu.py", "Live GPU fruit bowl. Starts wireframe; press R for filled render."),
-    ("11_live_capsule_walk.py", "Live capsule controller with third-person camera."),
+    ("10_live_fruit_bowl_gpu.py", "Live OpenGL fruit bowl with filled GPU rendering; press R for wireframe."),
+    ("11_live_capsule_walk.py", "Live OpenGL capsule controller with first-person camera."),
     ("20_render_feature_previews.py", "Render short still previews for fruit bowl, slime, and rocket tube."),
     ("30_render_environment_videos.py", "Render selected MP4 outputs into each environment renderings dir."),
     ("40_run_feature_tests.py", "Run pytest plus environment dry-runs with CPU/GPU specs printed."),

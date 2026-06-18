@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import argparse
 
-from fruit_bowl_demo import LiveFruitBowlViewer, apply_cpu_reduced_specs
+from fruit_bowl_demo import GLFruitBowlViewer, LiveFruitBowlViewer, apply_cpu_reduced_specs
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the live bouncing fruit bowl demo.")
-    parser.add_argument("--fps", type=int, default=24)
+    parser.add_argument("--fps", type=int, default=60)
     parser.add_argument("--width", type=int, default=360)
     parser.add_argument("--height", type=int, default=204)
     parser.add_argument("--window-width", type=int, default=960)
     parser.add_argument("--window-height", type=int, default=540)
     parser.add_argument("--fit-window", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--live-wireframe", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--live-wireframe", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--ambient", type=float, default=0.0)
     parser.add_argument("--gamma", type=float, default=1.0)
     parser.add_argument(
@@ -41,6 +41,12 @@ def main() -> None:
     args = apply_cpu_reduced_specs(parse_args())
     if args.fps <= 0:
         raise ValueError("fps must be positive")
+    if args.renderer == "py_gpu":
+        try:
+            GLFruitBowlViewer(args).run()
+            return
+        except Exception as exc:
+            print(f"OpenGL live renderer unavailable, falling back to Tk PixelBuffer path: {exc}")
     LiveFruitBowlViewer(args).run()
 
 

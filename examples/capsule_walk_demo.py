@@ -197,6 +197,113 @@ class CapsuleWalkViewer:
             return self.tk.PhotoImage(data=base64.b64encode(ppm).decode("ascii"), format="PPM")
 
 
+class GLCapsuleWalkViewer:
+    def __init__(self, args: argparse.Namespace) -> None:
+        import pygame
+        from py_3d.live import ModernGLLiveRenderer
+
+        self.pygame = pygame
+        self.args = args
+        self.controller = CapsuleController()
+        self.keys: set[str] = set()
+        self.camera_mode = args.camera_mode
+        self.settings = RenderSettings(
+            width=args.width,
+            height=args.height,
+            background=(7, 9, 13),
+            ambient=args.ambient,
+            gamma=args.gamma,
+            smooth_shading=True,
+            sphere_segments=18,
+            sphere_rings=9,
+        )
+        self.blocks = make_blocks()
+        self.renderer = ModernGLLiveRenderer(
+            args.window_width,
+            args.window_height,
+            title="py_3d capsule walk - OpenGL live",
+            vsync=True,
+        )
+        self._last_title_update = 0
+
+    def run(self) -> None:
+        clock = self.pygame.time.Clock()
+        running = True
+        try:
+            while running:
+                for event in self.pygame.event.get():
+                    if event.type == self.pygame.QUIT:
+                        running = False
+                    elif event.type == self.pygame.KEYDOWN:
+                        running = self.on_key_down(event.key)
+                    elif event.type == self.pygame.KEYUP:
+                        self.on_key_up(event.key)
+
+                self.controller.step(1.0 / self.args.fps, self.keys, self.blocks)
+                stats = self.renderer.render(self.scene(), self.camera(), self.settings)
+                self._update_title(stats)
+                clock.tick(self.args.fps)
+        finally:
+            self.renderer.close()
+
+    def on_key_down(self, key: int) -> bool:
+        pygame = self.pygame
+        if key == pygame.K_ESCAPE:
+            return False
+        if key == pygame.K_v:
+            self.camera_mode = {"global": "third", "third": "first", "first": "global"}[self.camera_mode]
+        elif key == pygame.K_LEFT:
+            self.controller.yaw_degrees -= 5.0
+        elif key == pygame.K_RIGHT:
+            self.controller.yaw_degrees += 5.0
+        else:
+            name = pygame.key.name(key).lower()
+            if name == "space":
+                name = "space"
+            self.keys.add(name)
+        return True
+
+    def on_key_up(self, key: int) -> None:
+        self.keys.discard(self.pygame.key.name(key).lower())
+        if key == self.pygame.K_SPACE:
+            self.keys.discard("space")
+
+    def camera(self) -> Camera:
+        if self.camera_mode == "first":
+            return Camera.first_person(self.controller.feet, self.controller.forward, eye_height=self.controller.height * 0.78)
+        if self.camera_mode == "third":
+            return Camera.third_person(self.controller.feet, self.controller.forward, distance=3.2, height=1.55)
+        return Camera(position=(3.2, 2.5, -5.2), target=(0.4, 0.65, 0.4), fov_degrees=54)
+
+    def scene(self) -> Scene:
+        scene = Scene()
+        scene.add(Box((0, -0.06, 0), (7.0, 0.12, 7.0), Material(color=(54, 84, 88), roughness=0.55)))
+        scene.add(*self.blocks)
+        scene.add(Capsule(self.controller.center, self.controller.radius, self.controller.height, Material(color=(92, 160, 240), roughness=0.28, specular=0.2, shininess=24)))
+        scene.add_light(Sun(direction=(-0.35, -0.85, -0.6), color=(255, 245, 230), intensity=0.9))
+        scene.add_light(Lamp(position=(1.6, 2.4, -1.2), color=(120, 170, 255), intensity=4.2))
+        scene.add_bulletin(
+            TextBulletin(
+                f"CAPSULE WALK\n{self.camera_mode.upper()} CAMERA",
+                position=(10, 10),
+                color=(245, 248, 255),
+                background=(4, 6, 10),
+                padding=5,
+            )
+        )
+        return scene
+
+    def _update_title(self, stats) -> None:
+        ticks = self.pygame.time.get_ticks()
+        if ticks - self._last_title_update < 400:
+            return
+        self._last_title_update = ticks
+        self.renderer.set_title(
+            f"py_3d capsule walk - OpenGL live - {self.camera_mode} - {stats.approx_fps:0.1f} fps "
+            f"({stats.build_seconds * 1000:0.1f} ms build, {stats.draw_seconds * 1000:0.1f} ms draw)"
+        )
+
+
 def make_engine(renderer: str) -> RenderEngine:
     if renderer == "py_gpu":
         from py_gpu.adapters.py3d import Py3DRasterRenderer
@@ -219,7 +326,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a live capsule walking demo with camera modes.")
     parser.add_argument("--renderer", choices=("cpu", "py_gpu"), default="py_gpu")
     parser.add_argument("--camera-mode", choices=("global", "third", "first"), default="third")
-    parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument("--fps", type=int, default=60)
     parser.add_argument("--width", type=int, default=480)
     parser.add_argument("--height", type=int, default=270)
     parser.add_argument("--window-width", type=int, default=960)
@@ -234,6 +341,12 @@ def main() -> None:
     args = parse_args()
     if args.fps <= 0:
         raise ValueError("fps must be positive")
+    if args.renderer == "py_gpu":
+        try:
+            GLCapsuleWalkViewer(args).run()
+            return
+        except Exception as exc:
+            print(f"OpenGL live renderer unavailable, falling back to Tk PixelBuffer path: {exc}")
     CapsuleWalkViewer(args).run()
 
 

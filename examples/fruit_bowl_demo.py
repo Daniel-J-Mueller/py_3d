@@ -895,6 +895,146 @@ class LiveFruitBowlViewer:
             return self.tk.PhotoImage(data=base64.b64encode(ppm).decode("ascii"), format="PPM")
 
 
+class GLFruitBowlViewer:
+    def __init__(self, args: argparse.Namespace) -> None:
+        import pygame
+        from py_3d.live import ModernGLLiveRenderer
+
+        self.pygame = pygame
+        self.args = args
+        self.simulation = FruitBowlSimulation(bowl_material=args.bowl_material)
+        self.snapshot_engine = make_engine(args.renderer, fast=getattr(args, "gpu_fast_render", True))
+        self.settings = make_settings(args)
+        self.yaw = 0.0
+        self.pitch = 50.0
+        self.distance = 4.2
+        self.target = Vec3(0.0, -0.28, 0.0)
+        self.drag_start: tuple[int, int] | None = None
+        self.paused = False
+        self.full_render = not getattr(args, "live_wireframe", False)
+        self.renderer = ModernGLLiveRenderer(
+            args.window_width,
+            args.window_height,
+            title="py_3d fruit bowl - OpenGL live",
+            vsync=True,
+        )
+        self._last_title_update = 0
+
+    def run(self) -> None:
+        clock = self.pygame.time.Clock()
+        running = True
+        try:
+            while running:
+                for event in self.pygame.event.get():
+                    if event.type == self.pygame.QUIT:
+                        running = False
+                    elif event.type == self.pygame.MOUSEBUTTONDOWN:
+                        if event.button == 1:
+                            self.drag_start = event.pos
+                        elif event.button == 4:
+                            self.distance = max(1.6, self.distance * 0.9)
+                        elif event.button == 5:
+                            self.distance *= 1.1
+                    elif event.type == self.pygame.MOUSEBUTTONUP and event.button == 1:
+                        self.drag_start = None
+                    elif event.type == self.pygame.MOUSEMOTION and self.drag_start is not None:
+                        last_x, last_y = self.drag_start
+                        event_x, event_y = event.pos
+                        self.yaw -= (event_x - last_x) * 0.35
+                        self.pitch -= (event_y - last_y) * 0.25
+                        self.drag_start = event.pos
+                    elif event.type == self.pygame.MOUSEWHEEL:
+                        self.distance = max(1.6, self.distance * (0.9 if event.y > 0 else 1.1))
+                    elif event.type == self.pygame.KEYDOWN:
+                        running = self.on_key(event.key)
+
+                if not self.paused:
+                    self.simulation.step(1.0 / self.args.fps)
+                stats = self.renderer.render(
+                    self.simulation.scene(light_mode=self.args.light_mode),
+                    self.camera(),
+                    self._active_settings(),
+                )
+                self._update_title(stats)
+                clock.tick(self.args.fps)
+        finally:
+            self.renderer.close()
+
+    def camera(self) -> Camera:
+        yaw = radians(self.yaw)
+        pitch = radians(max(-80.0, min(80.0, self.pitch)))
+        offset = Vec3(
+            self.distance * sin(yaw) * cos(pitch),
+            self.distance * sin(pitch),
+            -self.distance * cos(yaw) * cos(pitch),
+        )
+        return Camera(position=self.target + offset, target=self.target, fov_degrees=48)
+
+    def on_key(self, key: int) -> bool:
+        pygame = self.pygame
+        if key == pygame.K_ESCAPE:
+            return False
+        if key == pygame.K_LEFT:
+            self.yaw -= 5.0
+        elif key == pygame.K_RIGHT:
+            self.yaw += 5.0
+        elif key == pygame.K_UP:
+            self.pitch -= 4.0
+        elif key == pygame.K_DOWN:
+            self.pitch += 4.0
+        elif key == pygame.K_w:
+            self.distance = max(1.6, self.distance * 0.9)
+        elif key == pygame.K_s:
+            self.distance *= 1.1
+        elif key == pygame.K_a:
+            self.target = self.target + self.camera().basis()[0] * -0.15
+        elif key == pygame.K_d:
+            self.target = self.target + self.camera().basis()[0] * 0.15
+        elif key == pygame.K_q:
+            self.target = self.target + Vec3(0.0, 0.15, 0.0)
+        elif key == pygame.K_e:
+            self.target = self.target + Vec3(0.0, -0.15, 0.0)
+        elif key == pygame.K_p:
+            self.save_snapshot()
+        elif key == pygame.K_SPACE:
+            self.paused = not self.paused
+        elif key == pygame.K_r:
+            self.full_render = not self.full_render
+        elif key == pygame.K_x:
+            self.simulation = FruitBowlSimulation(bowl_material=self.args.bowl_material)
+        return True
+
+    def save_snapshot(self) -> None:
+        OUTPUT_DIR.mkdir(exist_ok=True)
+        path = OUTPUT_DIR / "fruit_bowl_live_snapshot.png"
+        self.snapshot_engine.render(self.simulation.scene(light_mode=self.args.light_mode), self.camera(), self._active_settings()).to_png(path)
+        print(f"Wrote {path}")
+
+    def _active_settings(self) -> RenderSettings:
+        if self.full_render:
+            return self.settings
+        return replace(
+            self.settings,
+            wireframe=True,
+            smooth_shading=False,
+            ray_traced_shadows=False,
+            edge_highlight=False,
+            sphere_segments=max(8, min(self.settings.sphere_segments, 10)),
+            sphere_rings=max(4, min(self.settings.sphere_rings, 5)),
+        )
+
+    def _update_title(self, stats) -> None:
+        ticks = self.pygame.time.get_ticks()
+        if ticks - self._last_title_update < 400:
+            return
+        self._last_title_update = ticks
+        mode = "filled" if self.full_render else "wire"
+        self.renderer.set_title(
+            f"py_3d fruit bowl - OpenGL live - {mode} - {stats.approx_fps:0.1f} fps "
+            f"({stats.build_seconds * 1000:0.1f} ms build, {stats.draw_seconds * 1000:0.1f} ms draw)"
+        )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Render or run a live kinematic fruit bowl demo.")
     parser.add_argument("--live", action="store_true")
@@ -941,6 +1081,12 @@ def main() -> None:
     if args.frames <= 0:
         raise ValueError("frames must be positive")
     if args.live:
+        if args.renderer == "py_gpu":
+            try:
+                GLFruitBowlViewer(args).run()
+                return
+            except Exception as exc:
+                print(f"OpenGL live renderer unavailable, falling back to Tk PixelBuffer path: {exc}")
         LiveFruitBowlViewer(args).run()
         return
     if args.video is not None:

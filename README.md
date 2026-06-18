@@ -511,6 +511,13 @@ per-pixel `Color` object construction when a caller only needs PPM/PNG/Tk image
 bytes. This keeps the old buffer API while making readback-heavy live previews
 substantially cheaper.
 
+Live demos that request `--renderer py_gpu` use `py_3d.live.ModernGLLiveRenderer`
+when pygame and ModernGL are available. That path presents directly to an
+OpenGL window, keeps camera projection and lighting on the GPU, and caches
+generated sphere, bowl, and capsule meshes so live frames do not round-trip
+through `PixelBuffer`/PPM/Tk. The older Tk `PixelBuffer` viewer remains the CPU
+fallback and snapshot/video path.
+
 ## Development
 
 This project targets modern Python on Windows and Linux.
@@ -654,10 +661,9 @@ python examples/fruit_bowl_live.py --bowl-material mirror --light-mode mirror-pr
 
 Click into the window to focus controls. Drag or use arrow keys to orbit,
 `W/S` to zoom, `A/D` to pan, `Q/E` to move the target up/down, `Space` to pause,
-`R` to toggle between fast wireframe preview and full render, `X` to reset, and
-`P` to save a snapshot. The live viewer starts in wireframe mode by default so
-the camera can be repositioned without paying for the heavier render path every
-frame.
+`R` to toggle between filled OpenGL rendering and wireframe, `X` to reset, and
+`P` to save a snapshot. The GPU live viewer starts filled by default; use
+`--live-wireframe` when you specifically want the mesh view first.
 
 Render a real video file:
 
@@ -717,8 +723,8 @@ python examples/capsule_walk_demo.py --renderer py_gpu --camera-mode global
 
 Click into the window, use `W/A/S/D` to move, arrow keys to turn, `Space` to
 jump, and `V` to cycle global, third-person, and first-person cameras. The
-`py_gpu` path currently defaults to reference-compatible py_3d rendering so the
-live view matches the fully shaded render outputs.
+`py_gpu` path uses the OpenGL live renderer when available and falls back to the
+Tk `PixelBuffer` path if a windowed OpenGL context cannot be created.
 
 Generate the slime-fluid sample:
 
@@ -817,13 +823,12 @@ python examples/gpu_render_benchmark.py --renderer py_gpu --reference-compatible
 python examples/gpu_render_benchmark.py --renderer scaffold --frames 30 --width 320 --height 180
 ```
 
-On the current Windows development machine with ModernGL available, the fast
-`py_gpu` bridge measured about `48 fps` at `320x180` with 236 triangles and
-about `63 fps` at `480x270` with a lighter 132-triangle live setting. The raw
-`py_gpu` ModernGL raster benchmark is faster than the full `py_3d` bridge, so
-the next optimization targets are persistent static geometry uploads, less
-per-frame Python scene traversal, and direct window presentation that avoids
-GPU-to-CPU readback when screenshots or video frames are not needed.
+On the current Windows development machine with ModernGL available, the
+off-screen `py_gpu` bridge still measures readback-heavy `PixelBuffer` output,
+while the OpenGL live renderer avoids that path. A 30-frame direct-window smoke
+loop measured the fruit bowl at about `8.3 ms` CPU build plus `0.5 ms` GPU draw
+per frame, and the capsule scene at about `1.5 ms` CPU build plus `0.2 ms` GPU
+draw per frame. Screenshot and video renderers still use readback by design.
 
 ## Testing Expectations
 

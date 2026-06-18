@@ -1,6 +1,6 @@
 {
   "name": "fruit_bowl",
-  "description": "Kinematic fruit bowl scene with wireframe GPU live navigation and full render variants.",
+  "description": "Kinematic fruit bowl scene with direct OpenGL live navigation and full render variants.",
   "rendering_dir": "USER/environments/fruit_bowl/renderings",
   "baking_dir": "USER/environments/fruit_bowl/baking",
   "render_data": "USER/environments/fruit_bowl/render-data.json",
