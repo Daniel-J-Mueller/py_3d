@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from fruit_bowl_demo import OUTPUT_DIR, render_video
+from fruit_bowl_demo import OUTPUT_DIR, apply_cpu_reduced_specs, render_video
 
 
 def parse_args() -> argparse.Namespace:
@@ -26,14 +26,17 @@ def parse_args() -> argparse.Namespace:
         default="multiple",
     )
     parser.add_argument("--bowl-material", choices=("wood", "mirror"), default="wood")
-    parser.add_argument("--renderer", choices=("cpu", "py_gpu"), default="cpu")
+    parser.add_argument("--renderer", choices=("cpu", "py_gpu"), default="py_gpu")
+    parser.add_argument("--gpu-fast-render", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--cpu-reduced-specs", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--smooth-shading", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--ray-traced-shadows", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--edge-highlight", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--edge-highlight-angle", type=float, default=35.0)
+    parser.add_argument("--max-render-distance", type=float)
     parser.add_argument("--sphere-segments", type=int, default=14)
     parser.add_argument("--sphere-rings", type=int, default=7)
-    args = parser.parse_args()
+    args = apply_cpu_reduced_specs(parser.parse_args())
     args.require_ffmpeg = not args.allow_frame_fallback
     return args
 

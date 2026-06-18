@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from fruit_bowl_demo import LiveFruitBowlViewer
+from fruit_bowl_demo import LiveFruitBowlViewer, apply_cpu_reduced_specs
 
 
 def parse_args() -> argparse.Namespace:
@@ -15,6 +15,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--window-width", type=int, default=960)
     parser.add_argument("--window-height", type=int, default=540)
     parser.add_argument("--fit-window", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--live-wireframe", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--ambient", type=float, default=0.0)
     parser.add_argument("--gamma", type=float, default=1.0)
     parser.add_argument(
@@ -23,18 +24,21 @@ def parse_args() -> argparse.Namespace:
         default="multiple",
     )
     parser.add_argument("--bowl-material", choices=("wood", "mirror"), default="wood")
-    parser.add_argument("--renderer", choices=("cpu", "py_gpu"), default="cpu")
+    parser.add_argument("--renderer", choices=("cpu", "py_gpu"), default="py_gpu")
+    parser.add_argument("--gpu-fast-render", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--cpu-reduced-specs", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--smooth-shading", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--ray-traced-shadows", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--edge-highlight", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--edge-highlight-angle", type=float, default=35.0)
+    parser.add_argument("--max-render-distance", type=float)
     parser.add_argument("--sphere-segments", type=int, default=14)
     parser.add_argument("--sphere-rings", type=int, default=7)
     return parser.parse_args()
 
 
 def main() -> None:
-    args = parse_args()
+    args = apply_cpu_reduced_specs(parse_args())
     if args.fps <= 0:
         raise ValueError("fps must be positive")
     LiveFruitBowlViewer(args).run()

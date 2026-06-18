@@ -226,25 +226,32 @@ def test_edge_highlight_outlines_boundary_edges():
     assert any(pixel == Color(255, 0, 0) for pixel in buffer.pixels)
 
 
-def test_gpu_renderer_scaffold_can_fall_back_to_cpu():
+def test_gpu_renderer_renders_with_accelerated_bridge_or_fallback():
     scene = Scene()
-    scene.add(Sphere((0, 0, 0), 0.7, Material(color=(90, 150, 230))))
+    scene.add(Sphere((0, 0, 0), 0.7, Material(color=(90, 150, 230), emission=(20, 30, 40))))
     scene.add_light(Sun(direction=(0, 0, -1), intensity=1.0))
     camera = Camera(position=(0, 0, -4), target=(0, 0, 0))
     settings = RenderSettings(width=48, height=48, sphere_segments=10, sphere_rings=5)
 
-    cpu = RenderEngine(CPURenderer()).render(scene, camera, settings)
-    gpu_scaffold = RenderEngine(GPURenderer()).render(scene, camera, settings)
+    renderer = GPURenderer()
+    buffer = RenderEngine(renderer).render(scene, camera, settings)
 
-    assert gpu_scaffold.pixels == cpu.pixels
+    assert buffer.width == 48
+    assert buffer.height == 48
+    assert any(pixel != Color(0, 0, 0) for pixel in buffer.pixels)
 
 
-def test_gpu_renderer_scaffold_strict_mode_is_explicit():
+def test_gpu_renderer_strict_mode_is_explicit():
     scene = Scene()
     camera = Camera()
+    renderer = GPURenderer(allow_cpu_fallback=False)
 
-    with pytest.raises(RuntimeError, match="GPU renderer scaffold"):
-        RenderEngine(GPURenderer(allow_cpu_fallback=False)).render(scene, camera, RenderSettings(width=8, height=8))
+    if renderer.is_accelerated:
+        buffer = RenderEngine(renderer).render(scene, camera, RenderSettings(width=8, height=8))
+        assert buffer.width == 8
+    else:
+        with pytest.raises(RuntimeError, match="GPU renderer"):
+            RenderEngine(renderer).render(scene, camera, RenderSettings(width=8, height=8))
 
 
 def test_gpu_scene_batch_flattens_triangle_geometry():
@@ -288,3 +295,20 @@ def test_textured_sphere_renders_from_png_asset():
     colors = {pixel for pixel in buffer.pixels if pixel != Color(0, 0, 0)}
 
     assert len(colors) > 8
+
+
+def test_max_render_distance_culls_far_triangles():
+    near = Material(color=(255, 0, 0), emission=(255, 0, 0))
+    far = Material(color=(0, 0, 255), emission=(0, 0, 255))
+    scene = Scene()
+    scene.add(
+        Triangle((-0.8, -0.6, 0), (0.8, -0.6, 0), (0.0, 0.75, 0), near),
+        Triangle((-4.0, -2.0, 8), (4.0, -2.0, 8), (0.0, 4.0, 8), far),
+    )
+    camera = Camera(position=(0, 0, -4), target=(0, 0, 0))
+
+    unclipped = RenderEngine().render(scene, camera, RenderSettings(width=65, height=65))
+    clipped = RenderEngine().render(scene, camera, RenderSettings(width=65, height=65, max_render_distance=6.0))
+
+    assert any(pixel.b > pixel.r for pixel in unclipped.pixels)
+    assert not any(pixel.b > pixel.r for pixel in clipped.pixels)

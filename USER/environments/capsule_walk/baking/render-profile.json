@@ -1,0 +1,42 @@
+{
+  "environment": "capsule_walk",
+  "updated": "2026-06-18 02:55:37",
+  "rendering_dir": "USER/environments/capsule_walk/renderings",
+  "baking_dir": "USER/environments/capsule_walk/baking",
+  "standard_render_specs": {
+    "gpu": {
+      "renderer": "py_gpu",
+      "width": 480,
+      "height": 270,
+      "fps": 24,
+      "frames_5s": 120,
+      "frames_10s": 240,
+      "sphere_segments": 16,
+      "sphere_rings": 8,
+      "max_render_distance": 7.0
+    },
+    "cpu": {
+      "renderer": "cpu",
+      "width": 320,
+      "height": 180,
+      "fps": 12,
+      "frames_5s": 60,
+      "frames_10s": 120,
+      "sphere_segments": 10,
+      "sphere_rings": 5,
+      "max_render_distance": 6.0
+    }
+  },
+  "system_specs": {
+    "python": "3.14.4",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "cpu": "AMD64 Family 25 Model 80 Stepping 0, AuthenticAMD",
+    "cpu_count": 16,
+    "gpu": "NVIDIA GeForce RTX 4090, 580.97, 24564 MiB"
+  },
+  "status": "metadata-only",
+  "notes": [
+    "This file is the first persistent baking contract for the environment.",
+    "Future passes should add prepared geometry, lightmaps, texture atlases, or static render caches here."
+  ]
+}

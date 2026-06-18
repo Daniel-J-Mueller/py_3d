@@ -56,13 +56,15 @@ def build_gpu_scene_batch(scene: Scene, settings: RenderSettings | None = None) 
 class GPURenderer:
     """Renderer-compatible GPU entry point.
 
-    This is deliberately a scaffold. It keeps the GPU path behind the same
-    ``Renderer`` protocol as the CPU implementation while backend-specific
-    rasterization is still being built.
+    This keeps the GPU path behind the same ``Renderer`` protocol as the CPU
+    implementation. When the optional ``py_gpu`` package is importable it uses
+    that accelerated batch renderer; otherwise it falls back explicitly.
     """
 
     allow_cpu_fallback: bool = True
     fallback_renderer: Renderer | None = None
+    reference_compatible: bool = False
+    prefer_backend: str = "auto"
     name: str = "GPU Renderer Scaffold"
     backend: str = field(init=False, default="gpu")
 
@@ -70,13 +72,16 @@ class GPURenderer:
         if self.fallback_renderer is None:
             self.fallback_renderer = CPURenderer()
         self.detected_backends = detect_gpu_backends()
+        self.backend_renderer = self._make_backend_renderer()
+        if self.backend_renderer is not None:
+            self.name = "py_gpu accelerated renderer"
 
     def prepare(self, scene: Scene, settings: RenderSettings | None = None) -> GPUSceneBatch:
         return build_gpu_scene_batch(scene, settings)
 
     @property
     def is_accelerated(self) -> bool:
-        return False
+        return self.backend_renderer is not None
 
     def render(
         self,
@@ -85,10 +90,20 @@ class GPURenderer:
         settings: RenderSettings,
         target: PixelBuffer | None = None,
     ) -> PixelBuffer:
+        if self.backend_renderer is not None:
+            return self.backend_renderer.render(scene, camera, settings, target)
         if self.allow_cpu_fallback:
             return self.fallback_renderer.render(scene, camera, settings, target)
         backends = ", ".join(self.detected_backends) if self.detected_backends else "none"
         raise RuntimeError(
-            "GPU renderer scaffold is installed, but GPU rasterization is not implemented yet. "
+            "GPU renderer is installed, but no accelerated rasterizer is available. "
             f"Detected optional GPU packages: {backends}."
         )
+
+    def _make_backend_renderer(self):
+        try:
+            from py_gpu.adapters.py3d import Py3DRasterRenderer
+
+            return Py3DRasterRenderer(reference_compatible=self.reference_compatible, prefer_backend=self.prefer_backend)
+        except Exception:
+            return None

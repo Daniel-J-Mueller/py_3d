@@ -1,0 +1,33 @@
+{
+  "profile": "standard",
+  "standard_render_specs": {
+    "gpu": {
+      "renderer": "py_gpu",
+      "width": 480,
+      "height": 270,
+      "fps": 24,
+      "frames_5s": 120,
+      "frames_10s": 240,
+      "sphere_segments": 16,
+      "sphere_rings": 8,
+      "max_render_distance": 7.0
+    },
+    "cpu": {
+      "renderer": "cpu",
+      "width": 320,
+      "height": 180,
+      "fps": 12,
+      "frames_5s": 60,
+      "frames_10s": 120,
+      "sphere_segments": 10,
+      "sphere_rings": 5,
+      "max_render_distance": 6.0
+    }
+  },
+  "notes": [
+    "Live demos should prefer GPU when available.",
+    "CPU-only runs should reduce render dimensions and generated mesh density by default.",
+    "Environment-owned renderings live under USER/environments/<name>/renderings.",
+    "Environment baking data lives under USER/environments/<name>/baking."
+  ]
+}

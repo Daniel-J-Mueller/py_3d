@@ -1,0 +1,34 @@
+{
+  "name": "capsule_walk",
+  "description": "Live capsule controller in a block environment with global, first-person, and third-person cameras.",
+  "rendering_dir": "USER/environments/capsule_walk/renderings",
+  "baking_dir": "USER/environments/capsule_walk/baking",
+  "render_data": "USER/environments/capsule_walk/render-data.json",
+  "live": {
+    "third": [
+      "python",
+      "examples/capsule_walk_demo.py",
+      "--renderer",
+      "py_gpu",
+      "--camera-mode",
+      "third"
+    ],
+    "first": [
+      "python",
+      "examples/capsule_walk_demo.py",
+      "--renderer",
+      "py_gpu",
+      "--camera-mode",
+      "first"
+    ],
+    "global": [
+      "python",
+      "examples/capsule_walk_demo.py",
+      "--renderer",
+      "py_gpu",
+      "--camera-mode",
+      "global"
+    ]
+  },
+  "renders": []
+}

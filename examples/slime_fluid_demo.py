@@ -10,14 +10,14 @@ from fruit_bowl_demo import find_ffmpeg, ffmpeg_missing_message
 from py_3d import Box, Camera, Color, FluidBlob, FluidWorld, Lamp, Material, RenderEngine, RenderSettings, Scene, Sun, TextBulletin
 
 
-OUTPUT_DIR = Path("renderings-tests") / "fluids"
+OUTPUT_DIR = Path("USER") / "environments" / "slime_fluid" / "renderings"
 
 
 def build_world() -> FluidWorld:
     world = FluidWorld(bounds_min=(-2.0, 0.0, -1.5), bounds_max=(2.0, 2.2, 1.5), gravity=(0.0, -6.5, 0.0), heal_distance_factor=0.35)
     slime = Material(color=(58, 205, 154), roughness=0.22, fuzziness=0.12, specular=0.18, shininess=22, light_transmission=0.35)
-    world.add_blob(FluidBlob.from_radius((-0.8, 1.55, 0.0), 0.42, velocity=(2.0, 0.2, 0.35), stretch=(1.6, 0.1, 0.0), stretchiness=0.22, viscosity=0.16, surface_tension=0.72, bounciness=0.18, material=slime))
-    world.add_blob(FluidBlob.from_radius((0.55, 1.05, 0.05), 0.32, velocity=(-0.7, 0.2, -0.15), stretchiness=0.65, viscosity=0.24, surface_tension=0.82, bounciness=0.12, material=slime))
+    world.add_blob(FluidBlob.from_radius((-0.8, 1.55, 0.0), 0.42, velocity=(2.0, 0.2, 0.35), stretch=(1.6, 0.1, 0.0), stretchiness=0.22, viscosity=0.16, surface_tension=0.72, wetting=0.55, stickiness=0.22, bounciness=0.18, material=slime))
+    world.add_blob(FluidBlob.from_radius((0.55, 1.05, 0.05), 0.32, velocity=(-0.7, 0.2, -0.15), stretchiness=0.65, viscosity=0.24, surface_tension=0.82, wetting=0.5, stickiness=0.3, bounciness=0.12, material=slime))
     return world
 
 

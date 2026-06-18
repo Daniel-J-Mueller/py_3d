@@ -46,10 +46,12 @@ def _args_for(
         light_mode=light_mode,
         bowl_material=bowl_material,
         renderer="cpu",
+        gpu_fast_render=False,
         smooth_shading=smooth_shading,
         ray_traced_shadows=ray_traced_shadows,
         edge_highlight=edge_highlight,
         edge_highlight_angle=edge_highlight_angle,
+        max_render_distance=args.max_render_distance,
         sphere_segments=sphere_segments or args.sphere_segments,
         sphere_rings=sphere_rings or args.sphere_rings,
         label=label,
@@ -125,6 +127,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sphere-rings", type=int, default=8)
     parser.add_argument("--ray-sphere-segments", type=int, default=10)
     parser.add_argument("--ray-sphere-rings", type=int, default=5)
+    parser.add_argument("--max-render-distance", type=float)
     parser.add_argument("--edge-angles", type=float, nargs="+", default=[25.0, 55.0])
     args = parser.parse_args()
     if args.fps <= 0 or args.ray_fps <= 0 or args.mirror_fps <= 0:

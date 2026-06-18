@@ -1,0 +1,116 @@
+{
+  "name": "fruit_bowl",
+  "description": "Kinematic fruit bowl scene with wireframe GPU live navigation and full render variants.",
+  "rendering_dir": "USER/environments/fruit_bowl/renderings",
+  "baking_dir": "USER/environments/fruit_bowl/baking",
+  "render_data": "USER/environments/fruit_bowl/render-data.json",
+  "live": {
+    "default": [
+      "python",
+      "examples/fruit_bowl_live.py",
+      "--renderer",
+      "py_gpu",
+      "--width",
+      "480",
+      "--height",
+      "270",
+      "--max-render-distance",
+      "7.0",
+      "--window-width",
+      "960",
+      "--window-height",
+      "540",
+      "--gamma",
+      "1.15"
+    ],
+    "cpu_preview": [
+      "python",
+      "examples/fruit_bowl_live.py",
+      "--renderer",
+      "cpu",
+      "--width",
+      "320",
+      "--height",
+      "180",
+      "--window-width",
+      "960",
+      "--window-height",
+      "540",
+      "--sphere-segments",
+      "10",
+      "--sphere-rings",
+      "5"
+    ]
+  },
+  "renders": [
+    {
+      "name": "pipeline",
+      "seconds": 10,
+      "outputs": [
+        "USER/environments/fruit_bowl/renderings/fruit_bowl_poly.mp4",
+        "USER/environments/fruit_bowl/renderings/fruit_bowl_smooth.mp4",
+        "USER/environments/fruit_bowl/renderings/fruit_bowl_ray_traced.mp4",
+        "USER/environments/fruit_bowl/renderings/fruit_bowl_mirror_prelight.mp4"
+      ],
+      "command": [
+        "python",
+        "examples/render_fruit_bowl_variants.py",
+        "--output-dir",
+        "USER/environments/fruit_bowl/renderings",
+        "--max-render-distance",
+        "7.0"
+      ]
+    },
+    {
+      "name": "fast_gpu_still",
+      "seconds": 0,
+      "outputs": ["USER/environments/fruit_bowl/renderings/fruit_bowl_gpu_fast.png"],
+      "command": [
+        "python",
+        "examples/fruit_bowl_demo.py",
+        "--renderer",
+        "py_gpu",
+        "--gpu-fast-render",
+        "--output",
+        "USER/environments/fruit_bowl/renderings/fruit_bowl_gpu_fast.png",
+        "--width",
+        "480",
+        "--height",
+        "270",
+        "--smooth-shading",
+        "--gamma",
+        "1.15",
+        "--sphere-segments",
+        "16",
+        "--sphere-rings",
+        "8",
+        "--max-render-distance",
+        "7.0"
+      ]
+    },
+    {
+      "name": "live_parity_still",
+      "seconds": 0,
+      "outputs": ["USER/environments/fruit_bowl/renderings/fruit_bowl_live_parity.png"],
+      "command": [
+        "python",
+        "examples/fruit_bowl_demo.py",
+        "--renderer",
+        "py_gpu",
+        "--output",
+        "USER/environments/fruit_bowl/renderings/fruit_bowl_live_parity.png",
+        "--width",
+        "480",
+        "--height",
+        "270",
+        "--smooth-shading",
+        "--gamma",
+        "1.15",
+        "--sphere-segments",
+        "18",
+        "--sphere-rings",
+        "9"
+      ]
+    }
+  ]
+}

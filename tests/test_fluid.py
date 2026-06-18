@@ -1,10 +1,20 @@
-from py_3d import FluidBlob, FluidWorld, Vec3
+from py_3d import BlobSurface, FluidBlob, FluidWorld, Vec3
 
 
 def test_fluid_blob_radius_preserves_volume():
     blob = FluidBlob.from_radius((0, 0, 0), 0.5)
 
     assert blob.radius == 0.5
+    assert isinstance(blob.to_primitive(), BlobSurface)
+
+
+def test_fluid_blob_surface_deforms_from_stretch():
+    relaxed = FluidBlob.from_radius((0, 0, 0), 0.5)
+    stretched = FluidBlob.from_radius((0, 0, 0), 0.5, stretch=(1.2, 0, 0), wetting=0.4, stickiness=0.3)
+
+    assert relaxed.to_primitive().to_triangles(segments=8, rings=4) != stretched.to_primitive().to_triangles(segments=8, rings=4)
+    assert stretched.wetting == 0.4
+    assert stretched.stickiness == 0.3
 
 
 def test_fluid_world_splits_overstretched_blob_and_preserves_volume():

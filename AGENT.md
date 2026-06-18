@@ -59,6 +59,13 @@ behavior while the engine grows.
 - Do not fork scene/camera/material APIs for GPU experiments. Add GPU support as
   an optional `Renderer` implementation and compare it against CPU render output
   on small deterministic scenes first.
+- Preserve the split between reference-compatible GPU mode and fast GPU preview
+  mode. Reference-compatible mode may delegate to CPU rendering for exact visual
+  parity; fast mode may trade material parity for responsive live navigation and
+  benchmark visibility.
+- Prefer packed frame handoff paths for live GPU frames. Avoid reintroducing
+  per-pixel Python object construction in hot paths unless a test explicitly
+  needs pixel-level `Color` objects.
 - Keep offline video export as a consumer of rendered `PixelBuffer` frames.
   ffmpeg integration should be optional, with numbered PNG frames as the
   dependency-free fallback. Remember that `pip install ffmpeg` does not install
@@ -77,6 +84,18 @@ behavior while the engine grows.
   explicit size.
 - Keep generated visual examples in `renderings-tests/` when they document or
   test user-facing rendering behavior.
+- Keep reusable demo environments under `USER/environments/<name>/`. Each
+  environment should own an `environment.json`, `renderings/` output directory,
+  `baking/` directory for precomputed/static render data, and `render-data.json`
+  timing records.
+- Run environment batches through `USER/tests/run_environment.py` when possible.
+  Record new batch render variants and expected outputs there instead of
+  scattering one-off scripts.
+- Keep turnkey user experiences under `USER/demos/`, sorted by filename so live
+  demos, still renders, videos, and feature tests are easy to discover.
+- Preserve `USER/settings.json` as the user-level render profile. GPU paths
+  should use requested specs where possible; CPU-only paths should reduce render
+  dimensions and mesh density by default unless explicitly overridden.
 
 ## Import And Texture Guidance
 
@@ -121,6 +140,13 @@ behavior while the engine grows.
 - Use fixed-step world updates for deterministic examples.
 - Keep units explicit in names and docs when possible.
 - Add examples only when the underlying behavior is test-covered.
+- Treat the current `FluidBlob`/`BlobSurface` implementation as a scaffold, not
+  a solved fluid simulation. Future fluid work should move toward pressure,
+  surface tension, wetting, stickiness, vertex/particle deformation, splitting,
+  and edge healing while keeping fixed volume inspectable.
+- Treat gas and cloth demos as force-field scaffolds. Keep vector-field emitters,
+  dissipation, and cloth-like meshes data-driven so later physics can replace
+  the simple examples without changing scene/render APIs.
 
 ## API Cleanliness
 

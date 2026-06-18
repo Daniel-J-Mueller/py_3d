@@ -14,12 +14,13 @@ from .math3d import Vec3, as_vec3, clamp
 from .noise import FractalNoise3D, SurfacePerturbation, ValueNoise3D
 from .overlays import TextBulletin
 from .physics import KinematicBowl, PhysicsWorld, SphereBody, StaticBox, StaticPlane, World
-from .primitives import Bowl, Box, Capsule, Line3, Mesh, Plane, Point3, Sphere, Triangle
+from .primitives import BlobSurface, Bowl, Box, Capsule, Line3, Mesh, Plane, Point3, Sphere, Triangle
 from .render import CPURenderer, RenderEngine, RenderSettings, Renderer
 from .scene import Scene
 from .textures import planar_project_triangles
 
 __all__ = [
+    "BlobSurface",
     "Box",
     "BoxCollider",
     "Bowl",

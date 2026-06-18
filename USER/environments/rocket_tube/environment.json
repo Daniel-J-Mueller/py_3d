@@ -1,0 +1,49 @@
+{
+  "name": "rocket_tube",
+  "description": "Rocket tube thrust, gas vector field, and cloth flag simulation.",
+  "rendering_dir": "USER/environments/rocket_tube/renderings",
+  "baking_dir": "USER/environments/rocket_tube/baking",
+  "render_data": "USER/environments/rocket_tube/render-data.json",
+  "renders": [
+    {
+      "name": "still",
+      "seconds": 0,
+      "outputs": ["USER/environments/rocket_tube/renderings/rocket_tube.png"],
+      "command": [
+        "python",
+        "examples/rocket_tube_demo.py",
+        "--output",
+        "USER/environments/rocket_tube/renderings/rocket_tube.png",
+        "--width",
+        "480",
+        "--height",
+        "270",
+        "--time",
+        "1.0",
+        "--gamma",
+        "1.12"
+      ]
+    },
+    {
+      "name": "video",
+      "seconds": 5,
+      "outputs": ["USER/environments/rocket_tube/renderings/rocket_tube.mp4"],
+      "command": [
+        "python",
+        "examples/rocket_tube_demo.py",
+        "--video",
+        "USER/environments/rocket_tube/renderings/rocket_tube.mp4",
+        "--frames",
+        "120",
+        "--fps",
+        "24",
+        "--width",
+        "480",
+        "--height",
+        "270",
+        "--gamma",
+        "1.12"
+      ]
+    }
+  ]
+}

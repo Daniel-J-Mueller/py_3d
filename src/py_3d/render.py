@@ -14,7 +14,7 @@ from . import draw
 from .lights import Lamp, Sun
 from .math3d import Vec3, clamp
 from .overlays import TextBulletin
-from .primitives import Bowl, Box, Capsule, Line3, Mesh, Plane, Point3, Sphere, Triangle
+from .primitives import BlobSurface, Bowl, Box, Capsule, Line3, Mesh, Plane, Point3, Sphere, Triangle
 from .scene import Scene
 
 
@@ -37,6 +37,7 @@ class RenderSettings:
     edge_highlight_threshold_degrees: float = 35.0
     edge_highlight_color: Color | tuple[int, int, int] = Color(0, 0, 0)
     edge_highlight_depth_bias: float = 0.002
+    max_render_distance: float | None = None
     sphere_segments: int = 16
     sphere_rings: int = 8
 
@@ -50,6 +51,8 @@ class RenderSettings:
         object.__setattr__(self, "edge_highlight_threshold_degrees", clamp(float(self.edge_highlight_threshold_degrees), 0.0, 180.0))
         object.__setattr__(self, "edge_highlight_color", Color.from_value(self.edge_highlight_color))
         object.__setattr__(self, "edge_highlight_depth_bias", max(0.0, float(self.edge_highlight_depth_bias)))
+        if self.max_render_distance is not None:
+            object.__setattr__(self, "max_render_distance", max(0.0, float(self.max_render_distance)))
 
 
 @runtime_checkable
@@ -130,6 +133,8 @@ class CPURenderer:
             else:
                 triangles = self._prepared_triangles_for(obj, settings)
                 for triangle in triangles:
+                    if _triangle_culled_by_distance(triangle, camera, settings):
+                        continue
                     if settings.wireframe:
                         self._draw_triangle_wireframe(buffer, depth, projector, settings, triangle.triangle)
                     else:
@@ -424,7 +429,7 @@ def _edge(ax: float, ay: float, bx: float, by: float, px: float, py: float) -> f
 
 
 def _cache_key_for(obj, settings: RenderSettings) -> tuple[type, int, int, int] | None:
-    if isinstance(obj, (Bowl, Capsule, Sphere)):
+    if isinstance(obj, (BlobSurface, Bowl, Capsule, Sphere)):
         return (type(obj), id(obj), settings.sphere_segments, settings.sphere_rings)
     if isinstance(obj, (Box, Mesh, Plane)):
         return (type(obj), id(obj), 0, 0)
@@ -436,7 +441,7 @@ def _triangles_for(obj, settings: RenderSettings) -> tuple[Triangle, ...]:
         return (obj,)
     if isinstance(obj, Mesh):
         return obj.to_triangles()
-    if isinstance(obj, (Bowl, Capsule, Sphere)):
+    if isinstance(obj, (BlobSurface, Bowl, Capsule, Sphere)):
         return obj.to_triangles(segments=settings.sphere_segments, rings=settings.sphere_rings)
     to_triangles = getattr(obj, "to_triangles", None)
     if callable(to_triangles):
@@ -528,6 +533,10 @@ def _shadow_max_distance(light, center: Vec3) -> float:
     return float("inf")
 
 
+def _triangle_culled_by_distance(prepared: _PreparedTriangle, camera: Camera, settings: RenderSettings) -> bool:
+    return settings.max_render_distance is not None and prepared.center.distance_to(camera.position) > settings.max_render_distance
+
+
 def _shadow_transmission(
     scene: Scene,
     origin: Vec3,
@@ -536,7 +545,7 @@ def _shadow_transmission(
     settings: RenderSettings,
     source_triangle: Triangle | None,
     shadow_triangles: tuple[Triangle, ...] | None = None,
-) -> bool:
+) -> float:
     ray_origin = origin + direction * settings.shadow_bias
     limit = max_distance - settings.shadow_bias if max_distance != float("inf") else max_distance
     if limit <= settings.shadow_bias:

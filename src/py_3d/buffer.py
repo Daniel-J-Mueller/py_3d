@@ -36,6 +36,16 @@ class PixelBuffer:
         return cls(width=width, height=height, pixels=[color] * (width * height))
 
     @classmethod
+    def from_rgb_bytes(cls, width: int, height: int, data: bytes | bytearray) -> "PixelBuffer":
+        """Create a pixel buffer backed by row-major RGB bytes.
+
+        The RGB payload is decoded lazily when code indexes ``pixels``. This is
+        useful for accelerated renderers that already have packed frame bytes.
+        """
+
+        return cls(width=width, height=height, pixels=_RGBPixelList(width, height, data))
+
+    @classmethod
     def from_png(cls, path: str | Path) -> "PixelBuffer":
         """Read an 8-bit, non-interlaced PNG into a pixel buffer."""
 
@@ -100,6 +110,9 @@ class PixelBuffer:
         return PixelBuffer(width, height, pixels)
 
     def to_rgb_bytes(self) -> bytes:
+        raw_rgb = getattr(self.pixels, "raw_rgb_bytes", None)
+        if callable(raw_rgb):
+            return raw_rgb()
         payload = bytearray(len(self.pixels) * 3)
         offset = 0
         for pixel in self.pixels:
@@ -124,6 +137,26 @@ class PixelBuffer:
         """Write the buffer as a truecolor PNG without extra dependencies."""
 
         target = Path(path)
+        raw_rgb = getattr(self.pixels, "raw_rgb_bytes", None)
+        if callable(raw_rgb):
+            data = raw_rgb()
+            stride = self.width * 3
+            rows = bytearray()
+            for y in range(self.height):
+                rows.append(0)
+                start = y * stride
+                rows.extend(data[start : start + stride])
+            payload = b"".join(
+                [
+                    b"\x89PNG\r\n\x1a\n",
+                    _png_chunk(b"IHDR", pack(">IIBBBBB", self.width, self.height, 8, 2, 0, 0, 0)),
+                    _png_chunk(b"IDAT", compress(bytes(rows))),
+                    _png_chunk(b"IEND", b""),
+                ]
+            )
+            target.write_bytes(payload)
+            return
+
         rows = bytearray()
         for y in range(self.height):
             rows.append(0)
@@ -180,6 +213,74 @@ class DepthBuffer:
             self.values[index] = depth
             return True
         return False
+
+
+class _RGBPixelList:
+    """List-like lazy view over packed RGB bytes."""
+
+    def __init__(self, width: int, height: int, data: bytes | bytearray) -> None:
+        _validate_dimensions(width, height)
+        expected = width * height * 3
+        if len(data) != expected:
+            raise ValueError(f"RGB payload requires {expected} bytes")
+        self.width = width
+        self.height = height
+        self._raw: bytes | None = bytes(data)
+        self._pixels: list[Color] | None = None
+
+    def __len__(self) -> int:
+        return self.width * self.height
+
+    def __iter__(self):
+        if self._pixels is not None:
+            return iter(self._pixels)
+        return (
+            Color(self._raw[index], self._raw[index + 1], self._raw[index + 2])
+            for index in range(0, len(self._raw), 3)
+        )
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return self._materialized()[index]
+        if self._pixels is not None:
+            return self._pixels[index]
+        if index < 0:
+            index += len(self)
+        if index < 0 or index >= len(self):
+            raise IndexError("pixel index out of range")
+        offset = index * 3
+        return Color(self._raw[offset], self._raw[offset + 1], self._raw[offset + 2])
+
+    def __setitem__(self, index, value) -> None:
+        pixels = self._materialized()
+        pixels[index] = value
+
+    def __eq__(self, other) -> bool:
+        if isinstance(other, _RGBPixelList):
+            return self.raw_rgb_bytes() == other.raw_rgb_bytes()
+        return list(self) == list(other)
+
+    def copy(self) -> list[Color]:
+        return self._materialized().copy()
+
+    def raw_rgb_bytes(self) -> bytes:
+        if self._raw is not None:
+            return self._raw
+        payload = bytearray(len(self._pixels) * 3)
+        offset = 0
+        for pixel in self._pixels:
+            payload[offset] = pixel.r
+            payload[offset + 1] = pixel.g
+            payload[offset + 2] = pixel.b
+            offset += 3
+        self._raw = bytes(payload)
+        return self._raw
+
+    def _materialized(self) -> list[Color]:
+        if self._pixels is None:
+            self._pixels = list(self)
+            self._raw = None
+        return self._pixels
 
 
 def _png_chunk(kind: bytes, data: bytes) -> bytes:

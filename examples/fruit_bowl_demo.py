@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 import base64
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from math import cos, pi, radians, sin, tau
 import os
 from pathlib import Path
@@ -39,7 +39,7 @@ from py_3d import (
 
 
 OUTPUT_DIR = Path("renderings-tests")
-FRUIT_BOWL_OUTPUT_DIR = OUTPUT_DIR / "fruit-bowl"
+FRUIT_BOWL_OUTPUT_DIR = Path("USER") / "environments" / "fruit_bowl" / "renderings"
 
 
 @dataclass
@@ -557,12 +557,25 @@ class FruitBowlSimulation:
         return (int(70 + red * 185), int(70 + green * 185), int(70 + blue * 185))
 
 
-def make_engine(renderer: str = "cpu") -> RenderEngine:
+def make_engine(renderer: str = "cpu", *, fast: bool = False) -> RenderEngine:
     if renderer == "py_gpu":
         from py_gpu.adapters.py3d import Py3DRasterRenderer
 
-        return RenderEngine(Py3DRasterRenderer())
+        return RenderEngine(Py3DRasterRenderer(reference_compatible=not fast))
     return RenderEngine(CPURenderer(cache_static_geometry=False))
+
+
+def apply_cpu_reduced_specs(args: argparse.Namespace) -> argparse.Namespace:
+    if getattr(args, "renderer", "cpu") == "cpu" and getattr(args, "cpu_reduced_specs", True):
+        args.width = min(args.width, 320)
+        args.height = min(args.height, 180)
+        if hasattr(args, "fps"):
+            args.fps = min(args.fps, 12)
+        args.sphere_segments = min(args.sphere_segments, 10)
+        args.sphere_rings = min(args.sphere_rings, 5)
+        if getattr(args, "max_render_distance", None) is None:
+            args.max_render_distance = 6.0
+    return args
 
 
 def make_settings(args: argparse.Namespace) -> RenderSettings:
@@ -577,6 +590,7 @@ def make_settings(args: argparse.Namespace) -> RenderSettings:
         ray_traced_shadows=getattr(args, "ray_traced_shadows", False),
         edge_highlight=getattr(args, "edge_highlight", False),
         edge_highlight_threshold_degrees=getattr(args, "edge_highlight_angle", 35.0),
+        max_render_distance=getattr(args, "max_render_distance", None),
         sphere_segments=args.sphere_segments,
         sphere_rings=args.sphere_rings,
     )
@@ -600,7 +614,7 @@ def render_still(args: argparse.Namespace) -> Path:
         simulation.step(1.0 / args.fps)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    make_engine(getattr(args, "renderer", "cpu")).render(
+    make_engine(getattr(args, "renderer", "cpu"), fast=getattr(args, "gpu_fast_render", False)).render(
         simulation.scene(label=getattr(args, "label", "KINEMATIC FRUIT BOWL"), light_mode=args.light_mode),
         make_camera(),
         make_settings(args),
@@ -652,7 +666,7 @@ def render_video(args: argparse.Namespace) -> Path:
     output_path = Path(args.video)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     simulation = FruitBowlSimulation(bowl_material=getattr(args, "bowl_material", "wood"))
-    engine = make_engine(getattr(args, "renderer", "cpu"))
+    engine = make_engine(getattr(args, "renderer", "cpu"), fast=getattr(args, "gpu_fast_render", False))
     settings = make_settings(args)
     ffmpeg = find_ffmpeg(getattr(args, "ffmpeg", None))
     if ffmpeg is None:
@@ -724,7 +738,8 @@ class LiveFruitBowlViewer:
         self.tk = tk
         self.args = args
         self.simulation = FruitBowlSimulation(bowl_material=args.bowl_material)
-        self.engine = make_engine(args.renderer)
+        self.engine = make_engine(args.renderer, fast=getattr(args, "gpu_fast_render", False))
+        self.fast_engine = make_engine(args.renderer, fast=True)
         self.settings = make_settings(args)
         self.yaw = 0.0
         self.pitch = 50.0
@@ -732,6 +747,7 @@ class LiveFruitBowlViewer:
         self.target = Vec3(0.0, -0.28, 0.0)
         self.drag_start: tuple[int, int] | None = None
         self.paused = False
+        self.full_render = not getattr(args, "live_wireframe", True)
         self.base_photo = None
         self.photo = None
         self.window_icon = None
@@ -749,7 +765,7 @@ class LiveFruitBowlViewer:
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
         self.canvas.bind("<MouseWheel>", self.on_mouse_wheel)
         self.canvas.bind("<Configure>", lambda event: self.render_once())
-        for key in ("<Left>", "<Right>", "<Up>", "<Down>", "<w>", "<s>", "<a>", "<d>", "<q>", "<e>", "<p>", "<space>", "<r>"):
+        for key in ("<Left>", "<Right>", "<Up>", "<Down>", "<w>", "<s>", "<a>", "<d>", "<q>", "<e>", "<p>", "<space>", "<r>", "<x>"):
             self.root.bind(key, self.on_key)
 
     def run(self) -> None:
@@ -791,8 +807,8 @@ class LiveFruitBowlViewer:
         if self.drag_start is None:
             return
         last_x, last_y = self.drag_start
-        self.yaw += (event.x - last_x) * 0.35
-        self.pitch += (event.y - last_y) * 0.25
+        self.yaw -= (event.x - last_x) * 0.35
+        self.pitch -= (event.y - last_y) * 0.25
         self.drag_start = (event.x, event.y)
 
     def on_release(self, event) -> None:
@@ -829,10 +845,13 @@ class LiveFruitBowlViewer:
         elif key == "space":
             self.paused = not self.paused
         elif key == "r":
+            self.full_render = not self.full_render
+        elif key == "x":
             self.simulation = FruitBowlSimulation(bowl_material=self.args.bowl_material)
 
     def render_once(self) -> None:
-        output = self.engine.render(self.simulation.scene(light_mode=self.args.light_mode), self.camera(), self.settings)
+        settings = self._active_settings()
+        output = self._active_engine().render(self.simulation.scene(light_mode=self.args.light_mode), self.camera(), settings)
         self.base_photo = self._photo_from_buffer(output)
         self.photo = self.base_photo
         if self.args.fit_window:
@@ -849,8 +868,24 @@ class LiveFruitBowlViewer:
     def save_snapshot(self) -> None:
         OUTPUT_DIR.mkdir(exist_ok=True)
         path = OUTPUT_DIR / "fruit_bowl_live_snapshot.png"
-        self.engine.render(self.simulation.scene(light_mode=self.args.light_mode), self.camera(), self.settings).to_png(path)
+        self._active_engine().render(self.simulation.scene(light_mode=self.args.light_mode), self.camera(), self._active_settings()).to_png(path)
         print(f"Wrote {path}")
+
+    def _active_engine(self) -> RenderEngine:
+        return self.engine if self.full_render else self.fast_engine
+
+    def _active_settings(self) -> RenderSettings:
+        if self.full_render:
+            return self.settings
+        return replace(
+            self.settings,
+            wireframe=True,
+            smooth_shading=False,
+            ray_traced_shadows=False,
+            edge_highlight=False,
+            sphere_segments=max(8, min(self.settings.sphere_segments, 10)),
+            sphere_rings=max(4, min(self.settings.sphere_rings, 5)),
+        )
 
     def _photo_from_buffer(self, buffer):
         ppm = buffer.to_ppm_bytes()
@@ -879,6 +914,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--window-width", type=int, default=960)
     parser.add_argument("--window-height", type=int, default=540)
     parser.add_argument("--fit-window", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--live-wireframe", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
         "--light-mode",
         choices=("multiple", "blinking", "multicolor", "color-shift-blink", "mirror-prelight"),
@@ -886,17 +922,20 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--bowl-material", choices=("wood", "mirror"), default="wood")
     parser.add_argument("--renderer", choices=("cpu", "py_gpu"), default="cpu")
+    parser.add_argument("--gpu-fast-render", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--cpu-reduced-specs", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--smooth-shading", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--ray-traced-shadows", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--edge-highlight", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--edge-highlight-angle", type=float, default=35.0)
+    parser.add_argument("--max-render-distance", type=float)
     parser.add_argument("--sphere-segments", type=int, default=14)
     parser.add_argument("--sphere-rings", type=int, default=7)
     return parser.parse_args()
 
 
 def main() -> None:
-    args = parse_args()
+    args = apply_cpu_reduced_specs(parse_args())
     if args.fps <= 0:
         raise ValueError("fps must be positive")
     if args.frames <= 0:

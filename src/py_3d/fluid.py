@@ -7,7 +7,7 @@ from math import pi
 
 from .materials import Material
 from .math3d import Vec3, as_vec3, clamp
-from .primitives import Sphere
+from .primitives import BlobSurface
 
 
 def _radius_from_volume(volume: float) -> float:
@@ -29,6 +29,8 @@ class FluidBlob:
     stretchiness: float = 0.45
     viscosity: float = 0.22
     surface_tension: float = 0.55
+    wetting: float = 0.0
+    stickiness: float = 0.0
     bounciness: float = 0.12
     material: Material = Material(color=(70, 190, 150), roughness=0.18, fuzziness=0.08, light_transmission=0.18)
 
@@ -41,6 +43,8 @@ class FluidBlob:
         self.stretchiness = clamp(float(self.stretchiness), 0.0, 1.0)
         self.viscosity = clamp(float(self.viscosity), 0.0, 1.0)
         self.surface_tension = clamp(float(self.surface_tension), 0.0, 1.0)
+        self.wetting = clamp(float(self.wetting), 0.0, 1.0)
+        self.stickiness = clamp(float(self.stickiness), 0.0, 1.0)
         self.bounciness = clamp(float(self.bounciness), 0.0, 1.0)
 
     @classmethod
@@ -53,8 +57,8 @@ class FluidBlob:
     def radius(self) -> float:
         return _radius_from_volume(self.volume)
 
-    def to_primitive(self) -> Sphere:
-        return Sphere(self.position, self.radius, self.material)
+    def to_primitive(self) -> BlobSurface:
+        return BlobSurface(self.position, self.radius, self.material, self.stretch, self.surface_tension, self.wetting, self.stickiness)
 
 
 @dataclass
@@ -92,7 +96,8 @@ class FluidWorld:
             self._heal_close_blobs()
 
     def _step_blob(self, blob: FluidBlob, dt: float) -> None:
-        blob.velocity = (blob.velocity + self.gravity * dt) * max(0.0, 1.0 - blob.viscosity * dt)
+        sticky_drag = blob.stickiness * (1.0 if blob.position.y <= self.bounds_min.y + blob.radius * 1.08 else 0.0)
+        blob.velocity = (blob.velocity + self.gravity * dt) * max(0.0, 1.0 - (blob.viscosity + sticky_drag) * dt)
         blob.position = blob.position + blob.velocity * dt
         blob.stretch = (blob.stretch + blob.velocity * dt) * max(0.0, 1.0 - blob.surface_tension * dt)
         radius = blob.radius
@@ -115,15 +120,17 @@ class FluidWorld:
             blob.stretch = blob.stretch * 0.2
             additions.append(
                 FluidBlob(
-                    blob.position + direction * (blob.radius * 0.75),
-                    split_volume,
-                    blob.velocity + direction * 0.45,
-                    -blob.stretch,
-                    blob.stretchiness,
-                    blob.viscosity,
-                    blob.surface_tension,
-                    blob.bounciness,
-                    blob.material,
+                    position=blob.position + direction * (blob.radius * 0.75),
+                    volume=split_volume,
+                    velocity=blob.velocity + direction * 0.45,
+                    stretch=-blob.stretch,
+                    stretchiness=blob.stretchiness,
+                    viscosity=blob.viscosity,
+                    surface_tension=blob.surface_tension,
+                    wetting=blob.wetting,
+                    stickiness=blob.stickiness,
+                    bounciness=blob.bounciness,
+                    material=blob.material,
                 )
             )
         self.blobs.extend(additions)
@@ -141,7 +148,7 @@ class FluidWorld:
                     total_volume = first.volume + second.volume
                     first.position = (first.position * first.volume + second.position * second.volume) / total_volume
                     first.velocity = (first.velocity * first.volume + second.velocity * second.volume) / total_volume
-                    first.stretch = (first.stretch + second.stretch) * 0.25
+                    first.stretch = (first.stretch + second.stretch) * (0.2 + (first.surface_tension + second.surface_tension) * 0.15)
                     first.volume = total_volume
                     del self.blobs[second_index]
                     merged = True

@@ -1,0 +1,115 @@
+{
+  "environment": "slime_fluid",
+  "rendering_dir": "USER/environments/slime_fluid/renderings",
+  "baking_dir": "USER/environments/slime_fluid/baking",
+  "updated": "2026-06-18 02:52:28",
+  "system_specs": {
+    "python": "3.14.4",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "cpu": "AMD64 Family 25 Model 80 Stepping 0, AuthenticAMD",
+    "cpu_count": 16,
+    "gpu": "NVIDIA GeForce RTX 4090, 580.97, 24564 MiB"
+  },
+  "runs": [
+    {
+      "command": [
+        "python",
+        "examples/slime_fluid_demo.py",
+        "--output",
+        "USER/environments/slime_fluid/renderings/slime_fluid.png",
+        "--width",
+        "480",
+        "--height",
+        "270",
+        "--gamma",
+        "1.12",
+        "--warmup",
+        "0.3"
+      ],
+      "seconds": 0.0,
+      "returncode": 0,
+      "dry_run": true,
+      "variant": "still",
+      "expected_seconds": 0,
+      "outputs": [
+        "USER/environments/slime_fluid/renderings/slime_fluid.png"
+      ]
+    },
+    {
+      "command": [
+        "python",
+        "examples/slime_fluid_demo.py",
+        "--video",
+        "USER/environments/slime_fluid/renderings/slime_fluid.mp4",
+        "--frames",
+        "240",
+        "--fps",
+        "24",
+        "--width",
+        "480",
+        "--height",
+        "270",
+        "--gamma",
+        "1.12"
+      ],
+      "seconds": 0.0,
+      "returncode": 0,
+      "dry_run": true,
+      "variant": "video",
+      "expected_seconds": 10,
+      "outputs": [
+        "USER/environments/slime_fluid/renderings/slime_fluid.mp4"
+      ]
+    },
+    {
+      "command": [
+        "python",
+        "examples/slime_fluid_demo.py",
+        "--output",
+        "USER/environments/slime_fluid/renderings/slime_fluid.png",
+        "--width",
+        "480",
+        "--height",
+        "270",
+        "--gamma",
+        "1.12",
+        "--warmup",
+        "0.3"
+      ],
+      "seconds": 0.0,
+      "returncode": 0,
+      "dry_run": true,
+      "variant": "still",
+      "expected_seconds": 0,
+      "outputs": [
+        "USER/environments/slime_fluid/renderings/slime_fluid.png"
+      ]
+    },
+    {
+      "command": [
+        "python",
+        "examples/slime_fluid_demo.py",
+        "--video",
+        "USER/environments/slime_fluid/renderings/slime_fluid.mp4",
+        "--frames",
+        "240",
+        "--fps",
+        "24",
+        "--width",
+        "480",
+        "--height",
+        "270",
+        "--gamma",
+        "1.12"
+      ],
+      "seconds": 0.0,
+      "returncode": 0,
+      "dry_run": true,
+      "variant": "video",
+      "expected_seconds": 10,
+      "outputs": [
+        "USER/environments/slime_fluid/renderings/slime_fluid.mp4"
+      ]
+    }
+  ]
+}

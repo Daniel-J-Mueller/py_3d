@@ -220,6 +220,80 @@ class Sphere:
 
 
 @dataclass(frozen=True)
+class BlobSurface:
+    """A volume-preserving, deformable blob surface."""
+
+    center: Vec3 | tuple[float, float, float]
+    radius: float
+    material: Material = Material()
+    stretch: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
+    surface_tension: float = 0.55
+    wetting: float = 0.0
+    stickiness: float = 0.0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "center", as_vec3(self.center))
+        object.__setattr__(self, "stretch", as_vec3(self.stretch))
+        if self.radius <= 0.0:
+            raise ValueError("blob radius must be positive")
+
+    def to_triangles(self, segments: int = 16, rings: int = 8, **kwargs) -> tuple[Triangle, ...]:
+        del kwargs
+        if segments < 3:
+            raise ValueError("blob segments must be at least 3")
+        if rings < 2:
+            raise ValueError("blob rings must be at least 2")
+        vertices: list[list[Vec3]] = []
+        normals: list[list[Vec3]] = []
+        for ring in range(rings + 1):
+            phi = pi * ring / rings
+            row = []
+            normal_row = []
+            for segment in range(segments):
+                theta = 2.0 * pi * segment / segments
+                normal = Vec3(sin(phi) * cos(theta), cos(phi), sin(phi) * sin(theta))
+                point, vertex_normal = self._deform_normal(normal)
+                row.append(point)
+                normal_row.append(vertex_normal)
+            vertices.append(row)
+            normals.append(normal_row)
+        triangles: list[Triangle] = []
+        for ring in range(rings):
+            for segment in range(segments):
+                next_segment = (segment + 1) % segments
+                top_left = vertices[ring][segment]
+                top_right = vertices[ring][next_segment]
+                bottom_left = vertices[ring + 1][segment]
+                bottom_right = vertices[ring + 1][next_segment]
+                normal_top_left = normals[ring][segment]
+                normal_top_right = normals[ring][next_segment]
+                normal_bottom_left = normals[ring + 1][segment]
+                normal_bottom_right = normals[ring + 1][next_segment]
+                if ring != 0:
+                    triangles.append(Triangle(top_left, bottom_left, top_right, self.material, normal_a=normal_top_left, normal_b=normal_bottom_left, normal_c=normal_top_right))
+                if ring != rings - 1:
+                    triangles.append(Triangle(top_right, bottom_left, bottom_right, self.material, normal_a=normal_top_right, normal_b=normal_bottom_left, normal_c=normal_bottom_right))
+        return tuple(triangles)
+
+    def _deform_normal(self, normal: Vec3) -> tuple[Vec3, Vec3]:
+        stretch_length = self.stretch.length()
+        if stretch_length <= 1e-9:
+            flattened = Vec3(normal.x, normal.y * (1.0 - self.wetting * 0.18), normal.z).normalized(normal)
+            return self.center + flattened * self.radius, flattened
+        axis = self.stretch / stretch_length
+        stretch_amount = min(1.75, stretch_length / max(self.radius, 1e-9))
+        axis_scale = 1.0 + stretch_amount * (0.7 - self.surface_tension * 0.28)
+        cross_scale = max(0.32, 1.0 / (axis_scale**0.5))
+        parallel = axis * normal.dot(axis)
+        perpendicular = normal - parallel
+        deformed = parallel * axis_scale + perpendicular * cross_scale
+        if normal.y < 0.0 and self.wetting > 0.0:
+            deformed = Vec3(deformed.x * (1.0 + self.wetting * 0.35), deformed.y * (1.0 - self.wetting * 0.22), deformed.z * (1.0 + self.wetting * 0.35))
+        vertex_normal = deformed.normalized(normal)
+        return self.center + deformed * self.radius, vertex_normal
+
+
+@dataclass(frozen=True)
 class Bowl:
     """An open-top spherical-cap bowl.
 
