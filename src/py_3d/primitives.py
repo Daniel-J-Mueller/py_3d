@@ -151,14 +151,38 @@ class Sphere:
         for ring in range(rings):
             for segment in range(segments):
                 next_segment = (segment + 1) % segments
+                u = segment / segments
+                next_u = 1.0 if next_segment == 0 else next_segment / segments
+                v = ring / rings
+                next_v = (ring + 1) / rings
                 top_left = vertices[ring][segment]
                 top_right = vertices[ring][next_segment]
                 bottom_left = vertices[ring + 1][segment]
                 bottom_right = vertices[ring + 1][next_segment]
                 if ring != 0:
-                    triangles.append(Triangle(top_left, bottom_left, top_right, self.material))
+                    triangles.append(
+                        Triangle(
+                            top_left,
+                            bottom_left,
+                            top_right,
+                            self.material,
+                            (u, v),
+                            (u, next_v),
+                            (next_u, v),
+                        )
+                    )
                 if ring != rings - 1:
-                    triangles.append(Triangle(top_right, bottom_left, bottom_right, self.material))
+                    triangles.append(
+                        Triangle(
+                            top_right,
+                            bottom_left,
+                            bottom_right,
+                            self.material,
+                            (next_u, v),
+                            (u, next_v),
+                            (next_u, next_v),
+                        )
+                    )
         return tuple(triangles)
 
 

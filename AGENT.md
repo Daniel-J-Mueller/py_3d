@@ -76,6 +76,10 @@ behavior while the engine grows.
   dependency. Add optional faster/wider image support later behind the same
   simple buffer API.
 - Textured rendering should keep the untextured path simple and deterministic.
+- Keep visual material attributes, such as roughness and fuzziness, separate
+  from physics attributes, such as friction and restitution.
+- Use `planar_project_triangles` for simple face-centered texture projection
+  workflows before inventing heavier UV unwrapping abstractions.
 
 ## Collision and Physics Guidance
 

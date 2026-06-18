@@ -262,13 +262,14 @@ class CPURenderer:
                     if use_texture:
                         uv = _interpolate_uv(triangle, w0, w1, w2)
                         texture_color = triangle.material.color_at(uv)
-                        pixels[index] = triangle.material.shade(
+                        shaded = triangle.material.shade(
                             light_channels,
                             ambient=settings.ambient,
                             base_color=texture_color,
                         )
+                        pixels[index] = _apply_surface_attributes(shaded, triangle.material, x, y, z)
                     else:
-                        pixels[index] = color
+                        pixels[index] = _apply_surface_attributes(color, triangle.material, x, y, z)
 
 
 @dataclass(frozen=True)
@@ -354,6 +355,22 @@ def _interpolate_uv(triangle: Triangle, w0: float, w1: float, w2: float) -> tupl
         uv_a[0] * w0 + uv_b[0] * w1 + uv_c[0] * w2,
         uv_a[1] * w0 + uv_b[1] * w1 + uv_c[1] * w2,
     )
+
+
+def _apply_surface_attributes(color: Color, material, x: int, y: int, depth: float) -> Color:
+    factor = 1.0
+    if material.roughness:
+        factor *= 1.0 - material.roughness * 0.18
+    if material.fuzziness:
+        noise = _surface_noise(x, y, depth)
+        factor *= 1.0 + (noise - 0.5) * material.fuzziness * 0.55
+    return color.scale(factor)
+
+
+def _surface_noise(x: int, y: int, depth: float) -> float:
+    value = (x * 73856093) ^ (y * 19349663) ^ (int(depth * 1000.0) * 83492791)
+    value = (value ^ (value >> 13)) * 1274126177
+    return (value & 0xFFFF) / 0xFFFF
 
 
 def _draw_text_bulletin(buffer: PixelBuffer, bulletin: TextBulletin) -> None:

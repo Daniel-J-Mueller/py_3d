@@ -25,9 +25,13 @@ in `renderings-tests/` so visual changes are easy to inspect.
 | --- | --- | --- |
 | ![2D primitives](renderings-tests/2d_primitives.png) | ![lit sphere](renderings-tests/3d_lit_sphere.png) | ![wire box](renderings-tests/3d_wire_box.png) |
 
-| Texture import | Ramp and wall | Floor bounce | Wall bank |
-| --- | --- | --- | --- |
-| ![texture test](renderings-tests/texture_tv_test.png) | ![physics ramp wall](renderings-tests/physics_ramp_wall.png) | ![physics floor bounce](renderings-tests/physics_floor_bounce.png) | ![physics wall bank](renderings-tests/physics_wall_bank.png) |
+| Texture import | Textured sphere | Ramp and wall |
+| --- | --- | --- |
+| ![texture test](renderings-tests/texture_tv_test.png) | ![textured sphere and polygons](renderings-tests/textured_sphere_polygons.png) | ![physics ramp wall](renderings-tests/physics_ramp_wall.png) |
+
+| Floor bounce | Wall bank |
+| --- | --- |
+| ![physics floor bounce](renderings-tests/physics_floor_bounce.png) | ![physics wall bank](renderings-tests/physics_wall_bank.png) |
 
 ## Project Goals
 
@@ -170,10 +174,17 @@ first:
 - `diffuse`: matte response strength.
 - `emission`: optional RGB emission for self-lit objects.
 - `texture`: optional `PixelBuffer` sampled through triangle UV coordinates.
+- `roughness`: visual surface dulling/noise response.
+- `fuzziness`: visual per-pixel surface variation.
 
 Image import currently supports 8-bit, non-interlaced PNG files through
 `PixelBuffer.from_png()`. The `assets/tv-test.png` file is used as the first
 texture import and rendering test.
+
+Visual material attributes are intentionally separate from physics attributes.
+For example, `Material.roughness` changes the rendered surface, while
+`SphereBody.friction` or `StaticPlane.restitution` changes motion and contact
+response.
 
 ### Lights
 
@@ -217,6 +228,8 @@ The first import helpers are deliberately small:
 - `load_stl(path, material=...)`: loads ASCII or binary STL triangles.
 - `PixelBuffer.from_png(path)`: imports PNG images for texture tests and future
   surface texturing.
+- `planar_project_triangles(...)`: assigns UVs by choosing a local center,
+  U/V axes, scale, and offset, then projecting vertices onto that plane.
 
 These helpers are meant to provide practical starting points, not complete
 coverage of every feature in each file format.
@@ -252,6 +265,7 @@ py_3d/
   physics.py       # Bodies, world stepping, constraints over time
   primitives.py    # Drawable and collidable primitive data types
   render.py        # Renderers, depth buffers, rasterization
+  textures.py      # Texture coordinate helpers
   window.py        # Optional interactive window backend
 tests/
 examples/
@@ -262,7 +276,7 @@ split them when a file starts mixing unrelated responsibilities.
 
 Current implemented modules are `buffer`, `camera`, `color`, `draw`,
 `importers`, `lights`, `materials`, `math3d`, `overlays`, `physics`,
-`primitives`, `render`, and `scene`.
+`primitives`, `render`, `scene`, and `textures`.
 
 ## Performance Direction
 
@@ -317,6 +331,17 @@ python examples/texture_demo.py
 
 It maps `assets/tv-test.png` onto two textured 3D triangles and writes
 `renderings-tests/texture_tv_test.png`.
+
+Generate the textured sphere and polygon sample:
+
+```bash
+python examples/textured_sphere_polygons.py
+```
+
+It maps `assets/tv-test.png` onto a sphere using generated spherical UVs, maps
+the same image onto a polygon panel using planar projection, and includes rough
+and fuzzy polygon materials. It writes
+`renderings-tests/textured_sphere_polygons.png`.
 
 Run the live navigation example:
 
@@ -427,6 +452,9 @@ sources.
   metadata. Keep small fixtures in tests.
 - Expand surface texturing beyond affine triangle UVs, including texture
   filtering modes, wrapping modes, and image formats beyond basic PNG.
+- Expand procedural surface attributes such as roughness, fuzziness, grain,
+  normal-like perturbation, and material presets while keeping them independent
+  from physics attributes.
 
 ## Design Principle
 

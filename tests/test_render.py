@@ -107,3 +107,19 @@ def test_textured_triangles_render_from_png_asset():
     colors = {pixel for pixel in buffer.pixels if pixel != Color(0, 0, 0)}
 
     assert len(colors) > 8
+
+
+def test_textured_sphere_renders_from_png_asset():
+    texture = PixelBuffer.from_png("assets/tv-test.png")
+    scene = Scene()
+    scene.add(Sphere((0, 0, 0), 0.8, Material(texture=texture)))
+    camera = Camera(position=(0, 0, -4), target=(0, 0, 0))
+
+    buffer = RenderEngine().render(
+        scene,
+        camera,
+        RenderSettings(width=96, height=72, ambient=1.0, sphere_segments=16, sphere_rings=8),
+    )
+    colors = {pixel for pixel in buffer.pixels if pixel != Color(0, 0, 0)}
+
+    assert len(colors) > 8

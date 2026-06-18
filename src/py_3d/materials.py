@@ -24,12 +24,16 @@ class Material:
     diffuse: float = 1.0
     emission: Color | tuple[int, int, int] = Color(0, 0, 0)
     texture: PixelBuffer | None = None
+    roughness: float = 0.0
+    fuzziness: float = 0.0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "color", Color.from_value(self.color))
         object.__setattr__(self, "absorption", _absorption_tuple(self.absorption))
         object.__setattr__(self, "diffuse", clamp(float(self.diffuse), 0.0, 1.0))
         object.__setattr__(self, "emission", Color.from_value(self.emission))
+        object.__setattr__(self, "roughness", clamp(float(self.roughness), 0.0, 1.0))
+        object.__setattr__(self, "fuzziness", clamp(float(self.fuzziness), 0.0, 1.0))
 
     def color_at(self, uv: tuple[float, float] | None = None) -> Color:
         if uv is not None and self.texture is not None:

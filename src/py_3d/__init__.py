@@ -13,6 +13,7 @@ from .physics import PhysicsWorld, SphereBody, StaticBox, StaticPlane, World
 from .primitives import Box, Line3, Mesh, Plane, Point3, Sphere, Triangle
 from .render import CPURenderer, RenderEngine, RenderSettings, Renderer
 from .scene import Scene
+from .textures import planar_project_triangles
 
 __all__ = [
     "Box",
@@ -48,4 +49,5 @@ __all__ = [
     "draw",
     "load_obj",
     "load_stl",
+    "planar_project_triangles",
 ]
