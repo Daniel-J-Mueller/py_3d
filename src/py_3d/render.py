@@ -226,7 +226,9 @@ class CPURenderer:
         if facing < 0.0:
             normal = -normal
 
-        color = _shade_triangle(scene, settings, triangle, normal, center)
+        light_channels = _light_channels(scene, center, normal)
+        color = triangle.material.shade(light_channels, ambient=settings.ambient)
+        use_texture = triangle.material.texture is not None and triangle.has_texture_coordinates()
         min_x = max(0, floor(min(a.x, b.x, c.x)))
         max_x = min(buffer.width - 1, ceil(max(a.x, b.x, c.x)))
         min_y = max(0, floor(min(a.y, b.y, c.y)))
@@ -257,7 +259,16 @@ class CPURenderer:
                 index = row_index + x
                 if z < depth_values[index]:
                     depth_values[index] = z
-                    pixels[index] = color
+                    if use_texture:
+                        uv = _interpolate_uv(triangle, w0, w1, w2)
+                        texture_color = triangle.material.color_at(uv)
+                        pixels[index] = triangle.material.shade(
+                            light_channels,
+                            ambient=settings.ambient,
+                            base_color=texture_color,
+                        )
+                    else:
+                        pixels[index] = color
 
 
 @dataclass(frozen=True)
@@ -321,13 +332,7 @@ def _prepare_triangles(triangles: tuple[Triangle, ...]) -> tuple[_PreparedTriang
     return tuple(_PreparedTriangle(triangle, triangle.center(), triangle.normal()) for triangle in triangles)
 
 
-def _shade_triangle(
-    scene: Scene,
-    settings: RenderSettings,
-    triangle: Triangle,
-    normal: Vec3,
-    center: Vec3,
-) -> Color:
+def _light_channels(scene: Scene, center: Vec3, normal: Vec3) -> tuple[float, float, float]:
     light_channels = [0.0, 0.0, 0.0]
     for light in scene.lights:
         if not isinstance(light, (Lamp, Sun)) and not hasattr(light, "sample"):
@@ -338,7 +343,17 @@ def _shade_triangle(
         light_channels[0] += lr * strength
         light_channels[1] += lg * strength
         light_channels[2] += lb * strength
-    return triangle.material.shade(tuple(light_channels), ambient=settings.ambient)
+    return (light_channels[0], light_channels[1], light_channels[2])
+
+
+def _interpolate_uv(triangle: Triangle, w0: float, w1: float, w2: float) -> tuple[float, float]:
+    uv_a = triangle.uv_a or (0.0, 0.0)
+    uv_b = triangle.uv_b or (0.0, 0.0)
+    uv_c = triangle.uv_c or (0.0, 0.0)
+    return (
+        uv_a[0] * w0 + uv_b[0] * w1 + uv_c[0] * w2,
+        uv_a[1] * w0 + uv_b[1] * w1 + uv_c[1] * w2,
+    )
 
 
 def _draw_text_bulletin(buffer: PixelBuffer, bulletin: TextBulletin) -> None:

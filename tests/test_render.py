@@ -1,4 +1,4 @@
-from py_3d import Box, CPURenderer, Camera, Color, Lamp, Material, Plane, RenderEngine, RenderSettings, Scene, Sphere, Sun, TextBulletin, Triangle
+from py_3d import Box, CPURenderer, Camera, Color, Lamp, Material, PixelBuffer, Plane, RenderEngine, RenderSettings, Scene, Sphere, Sun, TextBulletin, Triangle
 
 
 def test_cpu_renderer_renders_triangle_offscreen():
@@ -91,3 +91,19 @@ def test_cached_and_uncached_cpu_renderers_match_basic_scene():
     uncached = RenderEngine(CPURenderer(cache_static_geometry=False)).render(scene, camera, settings)
 
     assert cached.pixels == uncached.pixels
+
+
+def test_textured_triangles_render_from_png_asset():
+    texture = PixelBuffer.from_png("assets/tv-test.png")
+    material = Material(texture=texture)
+    scene = Scene()
+    scene.add(
+        Triangle((-1.6, -0.9, 0), (1.6, -0.9, 0), (1.6, 0.9, 0), material, (0, 1), (1, 1), (1, 0)),
+        Triangle((-1.6, -0.9, 0), (1.6, 0.9, 0), (-1.6, 0.9, 0), material, (0, 1), (1, 0), (0, 0)),
+    )
+    camera = Camera(position=(0, 0, -4), target=(0, 0, 0))
+
+    buffer = RenderEngine().render(scene, camera, RenderSettings(width=160, height=90, ambient=1.0))
+    colors = {pixel for pixel in buffer.pixels if pixel != Color(0, 0, 0)}
+
+    assert len(colors) > 8

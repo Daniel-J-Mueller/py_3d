@@ -60,3 +60,18 @@ def test_pixel_buffer_resizes_with_nearest_neighbor():
     assert resized.get_pixel(1, 1) == Color(255, 0, 0)
     assert resized.get_pixel(2, 0) == Color(0, 0, 255)
     assert resized.get_pixel(3, 1) == Color(0, 0, 255)
+
+
+def test_pixel_buffer_reads_png_asset():
+    buffer = PixelBuffer.from_png("assets/tv-test.png")
+
+    assert buffer.width == 800
+    assert buffer.height == 450
+
+    yellow_bar = buffer.get_pixel(220, 60)
+    cyan_bar = buffer.get_pixel(310, 60)
+    blue_bar = buffer.get_pixel(660, 60)
+
+    assert yellow_bar.r > 180 and yellow_bar.g > 180 and yellow_bar.b < 40
+    assert cyan_bar.r < 40 and cyan_bar.g > 150 and cyan_bar.b > 150
+    assert blue_bar.r < 40 and blue_bar.g < 40 and blue_bar.b > 120

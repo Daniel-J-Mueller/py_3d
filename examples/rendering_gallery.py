@@ -121,7 +121,7 @@ def save_github_banner() -> None:
         ),
         TextBulletin(
             "CPU REFERENCE - GPU READY - OFFLINE AND LIVE",
-            position=(42, 190),
+            position=(42, 548),
             color=(120, 220, 190),
             background=None,
             padding=0,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .buffer import PixelBuffer
 from .color import Color
 from .math3d import clamp
 
@@ -22,6 +23,7 @@ class Material:
     absorption: tuple[float, float, float] = (0.0, 0.0, 0.0)
     diffuse: float = 1.0
     emission: Color | tuple[int, int, int] = Color(0, 0, 0)
+    texture: PixelBuffer | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "color", Color.from_value(self.color))
@@ -29,12 +31,18 @@ class Material:
         object.__setattr__(self, "diffuse", clamp(float(self.diffuse), 0.0, 1.0))
         object.__setattr__(self, "emission", Color.from_value(self.emission))
 
+    def color_at(self, uv: tuple[float, float] | None = None) -> Color:
+        if uv is not None and self.texture is not None:
+            return self.texture.sample_nearest(uv[0], uv[1], wrap=False)
+        return self.color
+
     def shade(
         self,
         light: tuple[float, float, float],
         ambient: float = 0.0,
+        base_color: Color | tuple[int, int, int] | None = None,
     ) -> Color:
-        base = self.color.to_floats()
+        base = Color.from_value(base_color).to_floats() if base_color is not None else self.color.to_floats()
         emitted = self.emission.to_floats()
         result = []
         for index, base_channel in enumerate(base):

@@ -41,8 +41,8 @@ class Camera:
 
     def basis(self) -> tuple[Vec3, Vec3, Vec3]:
         forward = (self.target - self.position).normalized(Vec3(0.0, 0.0, 1.0))
-        right = forward.cross(self.up).normalized(Vec3(1.0, 0.0, 0.0))
-        true_up = right.cross(forward).normalized(Vec3(0.0, 1.0, 0.0))
+        right = self.up.cross(forward).normalized(Vec3(1.0, 0.0, 0.0))
+        true_up = forward.cross(right).normalized(Vec3(0.0, 1.0, 0.0))
         return right, true_up, forward
 
     def world_to_camera(self, point: Vec3 | tuple[float, float, float]) -> Vec3:

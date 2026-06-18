@@ -4,6 +4,7 @@ from .buffer import DepthBuffer, PixelBuffer
 from .camera import Camera, ProjectedPoint
 from .color import Color
 from . import draw
+from .importers import load_obj, load_stl
 from .lights import Lamp, LightSample, Sun
 from .materials import Material
 from .math3d import Vec3, as_vec3, clamp
@@ -45,4 +46,6 @@ __all__ = [
     "as_vec3",
     "clamp",
     "draw",
+    "load_obj",
+    "load_stl",
 ]

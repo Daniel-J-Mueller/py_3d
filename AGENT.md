@@ -64,6 +64,18 @@ behavior while the engine grows.
 - Keep live viewing dimensions separate from output render dimensions. A window
   can be 960x540 while the render target is 320x180, 1280x720, or any other
   explicit size.
+- Keep generated visual examples in `renderings-tests/` when they document or
+  test user-facing rendering behavior.
+
+## Import And Texture Guidance
+
+- Keep OBJ/STL importers small, explicit, and test-covered. Do not chase full
+  material-library or CAD coverage before the primitive mesh path is solid.
+- Use `assets/tv-test.png` as the canonical early texture fixture.
+- Texture import should remain usable without a GUI or third-party imaging
+  dependency. Add optional faster/wider image support later behind the same
+  simple buffer API.
+- Textured rendering should keep the untextured path simple and deterministic.
 
 ## Collision and Physics Guidance
 

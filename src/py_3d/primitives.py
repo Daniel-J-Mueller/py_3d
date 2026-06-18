@@ -36,17 +36,29 @@ class Triangle:
     b: Vec3 | tuple[float, float, float]
     c: Vec3 | tuple[float, float, float]
     material: Material = Material()
+    uv_a: tuple[float, float] | None = None
+    uv_b: tuple[float, float] | None = None
+    uv_c: tuple[float, float] | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "a", as_vec3(self.a))
         object.__setattr__(self, "b", as_vec3(self.b))
         object.__setattr__(self, "c", as_vec3(self.c))
+        for name in ("uv_a", "uv_b", "uv_c"):
+            uv = getattr(self, name)
+            if uv is not None:
+                if len(uv) != 2:
+                    raise ValueError("triangle UV coordinates must have two components")
+                object.__setattr__(self, name, (float(uv[0]), float(uv[1])))
 
     def center(self) -> Vec3:
         return (self.a + self.b + self.c) / 3.0
 
     def normal(self) -> Vec3:
         return (self.b - self.a).cross(self.c - self.a).normalized()
+
+    def has_texture_coordinates(self) -> bool:
+        return self.uv_a is not None and self.uv_b is not None and self.uv_c is not None
 
 
 @dataclass(frozen=True)
