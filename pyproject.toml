@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "py3dengine"
-version = "0.0.2"
+version = "0.0.4"
 description = "Primitive 3D pixel drawing, rendering, and simulation foundations for Python."
 readme = "README.md"
 requires-python = ">=3.10"

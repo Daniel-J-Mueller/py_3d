@@ -10,7 +10,7 @@ from textwrap import dedent
 from typing import Any, Callable
 
 
-VERSION = "0.0.2"
+VERSION = "0.0.4"
 DEFAULT_STARTER_DIR = "py3dengine_starter"
 DEFAULT_GAME_DIR = Path("USER-GAMES") / "example-game"
 
