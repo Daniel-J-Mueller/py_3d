@@ -335,6 +335,20 @@ as a parallel scene system. Offline video export should also consume ordinary
 `PixelBuffer` frames so CPU and future GPU renderers can share the same output
 pipeline.
 
+### GPU Rendering Direction
+
+There is not a bundled GPU renderer yet. The intended path is to keep
+`Scene`, `Camera`, `Material`, `Light`, and `RenderSettings` stable, then add an
+optional renderer that implements the existing `Renderer` protocol. Good first
+GPU targets are:
+
+- Upload generated triangles and material data to a backend-managed mesh buffer.
+- Keep CPU `PixelBuffer` output available for screenshots, tests, and video.
+- Match the CPU renderer on small shared scenes before adding backend-specific
+  features.
+- Start with a practical backend such as OpenGL, WebGPU, or a native extension
+  only after profiling shows the current CPU rasterizer is the bottleneck.
+
 ## Development
 
 This project targets modern Python on Windows and Linux.
@@ -411,29 +425,40 @@ python examples/fruit_bowl_demo.py
 ```
 
 It drives a `KinematicBowl` up and down while several dynamic fruit spheres
-bounce inside it and collide with each other. It writes
+bounce inside it and collide with each other. The orange and lemon use visual
+surface perturbation, the watermelon stays smooth, and the banana is a curved
+render mesh over a simple sphere collision boundary. It writes
 `renderings-tests/fruit_bowl.png`.
 
 Run the live fruit bowl viewer:
 
 ```bash
-python examples/fruit_bowl_demo.py --live --width 480 --height 270 --window-width 960 --window-height 540
+python examples/fruit_bowl_live.py
+python examples/fruit_bowl_live.py --width 480 --height 270 --window-width 960 --window-height 540
 ```
 
 Click into the window to focus controls. Drag or use arrow keys to orbit,
 `W/S` to zoom, `A/D` to pan, `Q/E` to move the target up/down, `Space` to pause,
 `R` to reset, and `P` to save a snapshot.
 
-Render a short video path:
+Render a real video file:
 
 ```bash
-python examples/fruit_bowl_demo.py --video renderings-tests/fruit_bowl.mp4 --frames 96 --fps 24
-python examples/fruit_bowl_demo.py --video renderings-tests/fruit_bowl.mov --frames 96 --fps 24
+python examples/render_fruit_bowl_video.py --video renderings-tests/fruit_bowl.mp4 --frames 96 --fps 24
+python examples/render_fruit_bowl_video.py --video renderings-tests/fruit_bowl.mov --frames 96 --fps 24
 ```
 
-If `ffmpeg` is available, the script pipes rendered frames into an MP4 or MOV.
-If it is not available, it writes numbered PNG frames beside the requested video
-path so the offline rendering path is still exercised.
+This requires the FFmpeg command-line executable. `pip install ffmpeg` installs
+a Python module named `ffmpeg`; it does not install `ffmpeg.exe`. Install FFmpeg
+as a command-line tool, pass `--ffmpeg path/to/ffmpeg`, set `FFMPEG_BINARY`, or
+install this package with the optional video extra:
+
+```bash
+python -m pip install -e ".[video]"
+```
+
+The video script uses a real encoder by default. Add `--allow-frame-fallback`
+to write numbered PNG frames when no encoder is available.
 
 Run the live navigation example:
 

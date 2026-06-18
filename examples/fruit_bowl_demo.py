@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import base64
-from math import cos, radians, sin, tau
+from dataclasses import dataclass
+from math import cos, pi, radians, sin, tau
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -15,19 +17,126 @@ from py_3d import (
     KinematicBowl,
     Lamp,
     Material,
+    Mesh,
     PhysicsWorld,
     RenderEngine,
     RenderSettings,
     Scene,
+    Sphere,
     SphereBody,
+    SphereCollider,
     StaticPlane,
     Sun,
+    SurfacePerturbation,
     TextBulletin,
+    Triangle,
     Vec3,
 )
 
 
 OUTPUT_DIR = Path("renderings-tests")
+
+
+@dataclass
+class Fruit:
+    name: str
+    body: SphereBody
+    visual: str = "sphere"
+    banana_yaw: float = 0.0
+
+    def to_primitive(self) -> Sphere | Mesh:
+        if self.visual == "banana":
+            return banana_mesh(
+                self.body.position,
+                self.body.radius,
+                self.body.material,
+                yaw_degrees=self.banana_yaw + self.body.position.x * 35.0,
+            )
+        return self.body.to_primitive()
+
+
+def banana_mesh(
+    center: Vec3,
+    radius: float,
+    material: Material,
+    *,
+    yaw_degrees: float = 0.0,
+    sections: int = 10,
+    sides: int = 8,
+) -> Mesh:
+    """Return a small curved tube mesh suitable for a banana-like fruit."""
+
+    if sections < 2:
+        raise ValueError("banana sections must be at least 2")
+    if sides < 3:
+        raise ValueError("banana sides must be at least 3")
+
+    yaw = radians(yaw_degrees)
+    yaw_cos = cos(yaw)
+    yaw_sin = sin(yaw)
+    curve_radius = radius * 1.55
+    height_scale = 0.42
+    start_angle = -1.12
+    end_angle = 1.12
+    base_y = curve_radius * height_scale * cos(start_angle)
+    rings: list[list[Vec3]] = []
+
+    for section in range(sections + 1):
+        amount = section / sections
+        angle = start_angle + (end_angle - start_angle) * amount
+        centerline = Vec3(
+            curve_radius * sin(angle),
+            curve_radius * height_scale * cos(angle) - base_y,
+            0.0,
+        )
+        tangent = Vec3(curve_radius * cos(angle), -curve_radius * height_scale * sin(angle), 0.0).normalized(Vec3(1.0, 0.0, 0.0))
+        binormal = Vec3(0.0, 0.0, 1.0)
+        normal = binormal.cross(tangent).normalized(Vec3(0.0, 1.0, 0.0))
+        taper = sin(pi * amount) ** 0.5
+        tube_radius = radius * 0.24 * (0.35 + 0.65 * taper)
+        ring = []
+        for side in range(sides):
+            theta = tau * side / sides
+            local = centerline + normal * (cos(theta) * tube_radius) + binormal * (sin(theta) * tube_radius)
+            rotated = Vec3(
+                local.x * yaw_cos - local.z * yaw_sin,
+                local.y - radius * 0.12,
+                local.x * yaw_sin + local.z * yaw_cos,
+            )
+            ring.append(center + rotated)
+        rings.append(ring)
+
+    triangles: list[Triangle] = []
+    for section in range(sections):
+        for side in range(sides):
+            next_side = (side + 1) % sides
+            top_left = rings[section][side]
+            top_right = rings[section][next_side]
+            bottom_left = rings[section + 1][side]
+            bottom_right = rings[section + 1][next_side]
+            u = side / sides
+            next_u = 1.0 if next_side == 0 else next_side / sides
+            v = section / sections
+            next_v = (section + 1) / sections
+            triangles.append(Triangle(top_left, bottom_left, top_right, material, (u, v), (u, next_v), (next_u, v)))
+            triangles.append(Triangle(top_right, bottom_left, bottom_right, material, (next_u, v), (u, next_v), (next_u, next_v)))
+
+    cap_material = Material(color=(112, 82, 34), roughness=0.4)
+    for ring_index, reverse in ((0, True), (-1, False)):
+        cap_center = _ring_center(rings[ring_index])
+        for side in range(sides):
+            next_side = (side + 1) % sides
+            a = rings[ring_index][next_side if reverse else side]
+            b = rings[ring_index][side if reverse else next_side]
+            triangles.append(Triangle(a, b, cap_center, cap_material))
+    return Mesh(triangles)
+
+
+def _ring_center(ring: list[Vec3]) -> Vec3:
+    total = Vec3(0.0, 0.0, 0.0)
+    for point in ring:
+        total = total + point
+    return total / len(ring)
 
 
 class FruitBowlSimulation:
@@ -52,52 +161,74 @@ class FruitBowlSimulation:
             material=Material(color=(52, 89, 92), absorption=(0.14, 0.08, 0.05), roughness=0.55),
             size=6.0,
         )
-        self.fruit = [
-            SphereBody(
-                position=(-0.42, -0.12, 0.08),
-                radius=0.23,
-                velocity=(0.6, 0.0, 0.12),
-                restitution=0.74,
-                friction=0.04,
-                material=Material(color=(225, 55, 48), absorption=(0.02, 0.15, 0.16), roughness=0.22, fuzziness=0.08),
+        self.fruits = [
+            Fruit(
+                "apple",
+                SphereBody(
+                    position=(-0.42, -0.12, 0.08),
+                    radius=0.23,
+                    velocity=(0.6, 0.0, 0.12),
+                    restitution=0.74,
+                    friction=0.04,
+                    material=Material(color=(225, 55, 48), absorption=(0.02, 0.15, 0.16), roughness=0.22, fuzziness=0.08),
+                ),
             ),
-            SphereBody(
-                position=(0.28, -0.2, -0.1),
-                radius=0.27,
-                velocity=(-0.35, 0.12, -0.22),
-                restitution=0.7,
-                friction=0.05,
-                material=Material(color=(238, 135, 42), absorption=(0.02, 0.08, 0.22), roughness=0.32, fuzziness=0.12),
+            Fruit(
+                "orange",
+                SphereBody(
+                    position=(0.28, -0.2, -0.1),
+                    radius=0.27,
+                    velocity=(-0.35, 0.12, -0.22),
+                    restitution=0.7,
+                    friction=0.05,
+                    material=Material(color=(238, 135, 42), absorption=(0.02, 0.08, 0.22), roughness=0.38, fuzziness=0.18),
+                    visual_perturbation=SurfacePerturbation(magnitude=0.035, scale=5.5, seed=31, octaves=4, gain=0.55),
+                    collision_boundary=SphereCollider(radius=0.27),
+                ),
             ),
-            SphereBody(
-                position=(0.0, 0.12, 0.3),
-                radius=0.19,
-                velocity=(0.2, -0.1, -0.3),
-                restitution=0.76,
-                friction=0.03,
-                material=Material(color=(238, 218, 74), absorption=(0.03, 0.03, 0.2), roughness=0.2, fuzziness=0.1),
+            Fruit(
+                "lemon",
+                SphereBody(
+                    position=(0.0, 0.12, 0.3),
+                    radius=0.19,
+                    velocity=(0.2, -0.1, -0.3),
+                    restitution=0.76,
+                    friction=0.03,
+                    material=Material(color=(238, 218, 74), absorption=(0.03, 0.03, 0.2), roughness=0.32, fuzziness=0.16),
+                    visual_perturbation=SurfacePerturbation(magnitude=0.025, scale=6.4, seed=44, octaves=4, gain=0.55),
+                    collision_boundary=SphereCollider(radius=0.19),
+                ),
             ),
-            SphereBody(
-                position=(-0.05, 0.22, -0.36),
-                radius=0.21,
-                velocity=(-0.18, 0.0, 0.38),
-                restitution=0.72,
-                friction=0.04,
-                material=Material(color=(91, 172, 82), absorption=(0.18, 0.04, 0.16), roughness=0.28, fuzziness=0.1),
+            Fruit(
+                "watermelon",
+                SphereBody(
+                    position=(-0.05, 0.22, -0.36),
+                    radius=0.21,
+                    velocity=(-0.18, 0.0, 0.38),
+                    restitution=0.72,
+                    friction=0.04,
+                    material=Material(color=(50, 142, 78), absorption=(0.16, 0.03, 0.14), roughness=0.04, fuzziness=0.0),
+                ),
             ),
-            SphereBody(
-                position=(0.52, 0.06, 0.24),
-                radius=0.17,
-                velocity=(-0.52, 0.06, -0.28),
-                restitution=0.78,
-                friction=0.03,
-                material=Material(color=(96, 62, 164), absorption=(0.12, 0.18, 0.04), roughness=0.24, fuzziness=0.08),
+            Fruit(
+                "banana",
+                SphereBody(
+                    position=(0.52, 0.06, 0.24),
+                    radius=0.27,
+                    velocity=(-0.52, 0.06, -0.28),
+                    restitution=0.78,
+                    friction=0.03,
+                    material=Material(color=(244, 214, 78), absorption=(0.02, 0.04, 0.2), roughness=0.18, fuzziness=0.04),
+                    collision_boundary=SphereCollider(radius=0.27),
+                ),
+                visual="banana",
+                banana_yaw=26.0,
             ),
         ]
         self.world.add_bowl(self.bowl)
         self.world.add_plane(self.floor)
-        for fruit in self.fruit:
-            self.world.add_sphere(fruit)
+        for fruit in self.fruits:
+            self.world.add_sphere(fruit.body)
 
     def step(self, dt: float, substeps: int = 3) -> None:
         if dt <= 0.0:
@@ -119,7 +250,7 @@ class FruitBowlSimulation:
     def scene(self, *, label: str = "KINEMATIC FRUIT BOWL") -> Scene:
         scene = Scene()
         scene.add(self.floor.to_primitive(), self.bowl.to_primitive())
-        for fruit in self.fruit:
+        for fruit in self.fruits:
             scene.add(fruit.to_primitive())
         scene.add_light(Sun(direction=(-0.35, -0.8, -1.0), color=(255, 245, 224), intensity=0.72))
         scene.add_light(Lamp(position=(-1.8, 2.4, -2.2), color=(95, 145, 255), intensity=3.2))
@@ -176,26 +307,70 @@ def render_still(args: argparse.Namespace) -> Path:
     return output_path
 
 
+def find_ffmpeg(explicit_path: str | Path | None = None) -> str | None:
+    if explicit_path is not None:
+        explicit = str(explicit_path)
+        path = Path(explicit)
+        if path.exists():
+            return str(path)
+        found = shutil.which(explicit)
+        if found is not None:
+            return found
+
+    env_path = os.environ.get("FFMPEG_BINARY")
+    if env_path:
+        path = Path(env_path)
+        if path.exists():
+            return str(path)
+        found = shutil.which(env_path)
+        if found is not None:
+            return found
+
+    found = shutil.which("ffmpeg")
+    if found is not None:
+        return found
+
+    try:
+        import imageio_ffmpeg
+
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return None
+
+
+def ffmpeg_missing_message() -> str:
+    return (
+        "ffmpeg executable not found. `pip install ffmpeg` installs a Python module, "
+        "not ffmpeg.exe. Install the FFmpeg command-line binary, install optional "
+        "`imageio-ffmpeg`, set FFMPEG_BINARY, or pass --ffmpeg C:\\path\\to\\ffmpeg.exe."
+    )
+
+
 def render_video(args: argparse.Namespace) -> Path:
     output_path = Path(args.video)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     simulation = FruitBowlSimulation()
     engine = make_engine()
     settings = make_settings(args)
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = find_ffmpeg(getattr(args, "ffmpeg", None))
     if ffmpeg is None:
+        message = ffmpeg_missing_message()
+        if getattr(args, "require_ffmpeg", False):
+            raise RuntimeError(message)
         frames_dir = output_path.with_suffix("") if output_path.suffix else output_path
         frames_dir.mkdir(parents=True, exist_ok=True)
         for frame in range(args.frames):
             simulation.step(1.0 / args.fps)
             buffer = engine.render(simulation.scene(label=f"FRUIT BOWL FRAME {frame:03d}"), make_camera(), settings)
             buffer.to_png(frames_dir / f"frame_{frame:04d}.png")
-        print(f"ffmpeg not found; wrote PNG frames to {frames_dir}")
+        print(f"{message} Wrote PNG frames to {frames_dir}.")
         return frames_dir
 
     command = [
         ffmpeg,
         "-y",
+        "-loglevel",
+        "warning",
         "-f",
         "image2pipe",
         "-framerate",
@@ -204,6 +379,8 @@ def render_video(args: argparse.Namespace) -> Path:
         "ppm",
         "-i",
         "-",
+        "-vf",
+        "pad=ceil(iw/2)*2:ceil(ih/2)*2",
         "-an",
         "-vcodec",
         "libx264",
@@ -376,16 +553,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--output", type=Path, default=OUTPUT_DIR / "fruit_bowl.png")
     parser.add_argument("--video", type=Path)
+    parser.add_argument("--ffmpeg", type=Path)
+    parser.add_argument("--require-ffmpeg", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--write-still", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--frames", type=int, default=96)
     parser.add_argument("--fps", type=int, default=24)
     parser.add_argument("--warmup", type=float, default=1.25)
-    parser.add_argument("--width", type=int, default=480)
-    parser.add_argument("--height", type=int, default=270)
+    parser.add_argument("--width", type=int, default=360)
+    parser.add_argument("--height", type=int, default=204)
     parser.add_argument("--window-width", type=int, default=960)
     parser.add_argument("--window-height", type=int, default=540)
     parser.add_argument("--fit-window", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--sphere-segments", type=int, default=18)
-    parser.add_argument("--sphere-rings", type=int, default=9)
+    parser.add_argument("--sphere-segments", type=int, default=14)
+    parser.add_argument("--sphere-rings", type=int, default=7)
     return parser.parse_args()
 
 
@@ -398,9 +578,12 @@ def main() -> None:
     if args.live:
         LiveFruitBowlViewer(args).run()
         return
-    render_still(args)
     if args.video is not None:
+        if args.write_still:
+            render_still(args)
         render_video(args)
+        return
+    render_still(args)
 
 
 if __name__ == "__main__":

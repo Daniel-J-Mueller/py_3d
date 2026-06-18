@@ -53,9 +53,14 @@ behavior while the engine grows.
 - Keep acceleration behind the `Renderer` protocol. The pure-Python CPU renderer
   is the correctness reference; optional NumPy, Numba, Cython, OpenGL, Vulkan,
   WebGPU, or platform compute backends should match its behavior.
+- Do not fork scene/camera/material APIs for GPU experiments. Add GPU support as
+  an optional `Renderer` implementation and compare it against CPU render output
+  on small deterministic scenes first.
 - Keep offline video export as a consumer of rendered `PixelBuffer` frames.
   ffmpeg integration should be optional, with numbered PNG frames as the
-  dependency-free fallback.
+  dependency-free fallback. Remember that `pip install ffmpeg` does not install
+  the FFmpeg executable; prefer the `video` extra or an explicit executable path
+  when testing encoded video output.
 - Profile before optimizing. Prefer improvements that keep the reference path
   understandable, such as cached projection constants, cached static geometry,
   prepared triangle data, and tight buffer writes.
