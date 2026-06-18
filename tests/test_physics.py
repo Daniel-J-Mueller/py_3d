@@ -222,6 +222,18 @@ def test_dampening_alias_sets_damping():
     assert body.dampening == 0.35
 
 
+def test_bounciness_alias_sets_restitution():
+    body = SphereBody(position=(0, 0, 0), radius=0.5, bounciness=0.82)
+    floor = StaticPlane(point=(0, 0, 0), normal=(0, 1, 0), bounciness=0.5)
+    wall = StaticBox(center=(0, 0, 0), size=(1, 1, 1), bounciness=0.25)
+    bowl = KinematicBowl(center=(0, 0, 0), radius=1.0, bounciness=0.35)
+
+    assert body.restitution == 0.82
+    assert floor.restitution == 0.5
+    assert wall.restitution == 0.25
+    assert bowl.restitution == 0.35
+
+
 def test_floor_contact_adds_rolling_angular_velocity():
     body = SphereBody(
         position=(0, 0.2, 0),

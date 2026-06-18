@@ -13,6 +13,7 @@ import subprocess
 
 from py_3d import (
     Camera,
+    Color,
     CompoundSphereCollider,
     CPURenderer,
     KinematicBowl,
@@ -21,6 +22,7 @@ from py_3d import (
     Material,
     Mesh,
     PhysicsWorld,
+    PixelBuffer,
     RenderEngine,
     RenderSettings,
     Scene,
@@ -37,6 +39,7 @@ from py_3d import (
 
 
 OUTPUT_DIR = Path("renderings-tests")
+FRUIT_BOWL_OUTPUT_DIR = OUTPUT_DIR / "fruit-bowl"
 
 
 @dataclass
@@ -198,12 +201,90 @@ def _ring_center(ring: list[Vec3]) -> Vec3:
     return total / len(ring)
 
 
+_WOOD_TEXTURE: PixelBuffer | None = None
+_WATERMELON_TEXTURE: PixelBuffer | None = None
+
+
+def _bowl_style(name: str) -> tuple[Material, SurfacePerturbation | None]:
+    style = name.lower().replace("_", "-")
+    if style == "mirror":
+        return (
+            Material(
+                color=(218, 224, 230),
+                absorption=(0.02, 0.02, 0.02),
+                diffuse=0.28,
+                roughness=0.015,
+                fuzziness=0.0,
+                specular=1.0,
+                shininess=120.0,
+                reflectivity=1.0,
+            ),
+            None,
+        )
+    return (
+        Material(
+            color=(132, 82, 42),
+            texture=wood_grain_texture(),
+            absorption=(0.08, 0.12, 0.18),
+            roughness=0.72,
+            fuzziness=0.24,
+            specular=0.08,
+            shininess=14.0,
+            reflectivity=0.0,
+        ),
+        SurfacePerturbation(magnitude=0.032, scale=8.0, seed=91, octaves=4, gain=0.5),
+    )
+
+
+def wood_grain_texture(width: int = 128, height: int = 64) -> PixelBuffer:
+    global _WOOD_TEXTURE
+    if _WOOD_TEXTURE is not None and _WOOD_TEXTURE.width == width and _WOOD_TEXTURE.height == height:
+        return _WOOD_TEXTURE
+    pixels: list[Color] = []
+    for y in range(height):
+        v = y / max(1, height - 1)
+        for x in range(width):
+            u = x / max(1, width - 1)
+            broad = 0.5 + 0.5 * sin((u * 8.0 + 0.36 * sin(v * tau * 2.1)) * tau)
+            fine = 0.5 + 0.5 * sin((u * 38.0 + v * 2.7 + 0.18 * sin(v * tau * 5.0)) * tau)
+            knot = 0.5 + 0.5 * sin(((u - 0.18) ** 2 * 38.0 + (v - 0.52) ** 2 * 95.0) * tau)
+            grain = 0.52 * broad + 0.34 * fine + 0.14 * knot
+            r = 100 + grain * 72
+            g = 58 + grain * 42
+            b = 27 + grain * 24
+            pixels.append(Color(r, g, b))
+    _WOOD_TEXTURE = PixelBuffer(width, height, pixels)
+    return _WOOD_TEXTURE
+
+
+def watermelon_texture(width: int = 96, height: int = 48) -> PixelBuffer:
+    global _WATERMELON_TEXTURE
+    if _WATERMELON_TEXTURE is not None and _WATERMELON_TEXTURE.width == width and _WATERMELON_TEXTURE.height == height:
+        return _WATERMELON_TEXTURE
+    pixels: list[Color] = []
+    for y in range(height):
+        v = y / max(1, height - 1)
+        for x in range(width):
+            u = x / max(1, width - 1)
+            stripe = 0.5 + 0.5 * sin((u * 7.0 + 0.18 * sin(v * tau * 2.0)) * tau)
+            fine = 0.5 + 0.5 * sin((u * 31.0 + v * 3.0) * tau)
+            dark = stripe > 0.62
+            r = 28 + fine * 16
+            g = (92 if dark else 142) + fine * (18 if dark else 28)
+            b = (45 if dark else 72) + fine * 12
+            pixels.append(Color(r, g, b))
+    _WATERMELON_TEXTURE = PixelBuffer(width, height, pixels)
+    return _WATERMELON_TEXTURE
+
+
 class FruitBowlSimulation:
     """Small coordinated scene: driven bowl, dynamic fruit."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, bowl_material: str = "wood") -> None:
         self.time = 0.0
         self.world = PhysicsWorld(gravity=(0.0, -9.81, 0.0))
+        self.bowl_material = bowl_material
+        bowl_style = _bowl_style(bowl_material)
         self.bowl = KinematicBowl(
             center=self._driven_center(0.0),
             radius=1.35,
@@ -212,15 +293,9 @@ class FruitBowlSimulation:
             friction=0.48,
             squishiness=0.08,
             damping=0.16,
-            material=Material(
-                color=(132, 82, 42),
-                absorption=(0.08, 0.12, 0.18),
-                roughness=0.62,
-                fuzziness=0.18,
-                specular=0.12,
-                shininess=18.0,
-            ),
-            visual_perturbation=SurfacePerturbation(magnitude=0.028, scale=8.0, seed=91, octaves=4, gain=0.5),
+            material=bowl_style[0],
+            visual_perturbation=bowl_style[1],
+            visual_thickness=0.075,
         )
         self.floor = StaticPlane(
             point=(0.0, -1.75, 0.0),
@@ -298,7 +373,16 @@ class FruitBowlSimulation:
                     kinetic_friction=0.18,
                     squishiness=0.26,
                     damping=0.22,
-                    material=Material(color=(50, 142, 78), absorption=(0.16, 0.03, 0.14), roughness=0.04, fuzziness=0.0, specular=0.52, shininess=64.0, reflectivity=0.12),
+                    material=Material(
+                        texture=watermelon_texture(),
+                        color=(50, 142, 78),
+                        absorption=(0.14, 0.03, 0.12),
+                        roughness=0.18,
+                        fuzziness=0.03,
+                        specular=0.12,
+                        shininess=28.0,
+                        reflectivity=0.02,
+                    ),
                 ),
                 marker_color=(18, 55, 34),
             ),
@@ -403,28 +487,35 @@ class FruitBowlSimulation:
                 markers.append(
                     Sphere(
                         light.position,
-                        0.055,
-                        Material(color=light.color, emission=light.color, diffuse=0.35, specular=0.8, shininess=80.0),
+                        0.075,
+                        Material(color=light.color, emission=(255, 255, 255), diffuse=0.2, specular=1.0, shininess=100.0),
                     )
                 )
             elif isinstance(light, Sun):
                 direction = (-light.direction).normalized(Vec3(0.0, 1.0, 0.0))
                 start = Vec3(-2.15, 2.0, -2.2)
                 end = start + direction * 0.42
-                markers.append(Line3(start, end, Material(color=light.color, emission=light.color)))
-                markers.append(Sphere(start, 0.035, Material(color=light.color, emission=light.color, diffuse=0.1)))
+                markers.append(Line3(start, end, Material(color=light.color, emission=(255, 255, 255))))
+                markers.append(Sphere(start, 0.045, Material(color=light.color, emission=(255, 255, 255), diffuse=0.1)))
         return tuple(markers)
 
     def _lights_for_mode(self, light_mode: str) -> tuple[Sun | Lamp, ...]:
         mode = light_mode.lower().replace("_", "-")
-        if mode not in {"multiple", "blinking", "multicolor", "color-shift-blink"}:
+        if mode not in {"multiple", "blinking", "multicolor", "color-shift-blink", "mirror-prelight"}:
             mode = "multiple"
+        if mode == "mirror-prelight":
+            pulse = 0.75 + 0.25 * self._blink(1.25, 0.0)
+            return (
+                Sun(direction=(-0.2, -0.7, -1.0), color=(225, 235, 255), intensity=0.22),
+                Lamp(position=(-0.15, 1.15, -1.0), color=(255, 246, 226), intensity=5.8 * pulse),
+                Lamp(position=(0.95, 0.62, -0.55), color=(120, 180, 255), intensity=2.1),
+            )
         if mode == "multiple":
             return (
-                Sun(direction=(-0.35, -0.8, -1.0), color=(255, 245, 224), intensity=0.72),
-                Lamp(position=(-1.8, 2.4, -2.2), color=(95, 145, 255), intensity=3.2),
-                Lamp(position=(1.6, 1.3, -1.3), color=(255, 120, 88), intensity=2.1),
-                Lamp(position=(0.2, 2.1, 1.6), color=(110, 255, 170), intensity=1.35),
+                Sun(direction=(-0.35, -0.8, -1.0), color=(255, 245, 224), intensity=1.0),
+                Lamp(position=(-1.8, 2.4, -2.2), color=(95, 145, 255), intensity=4.6),
+                Lamp(position=(1.6, 1.3, -1.3), color=(255, 120, 88), intensity=3.0),
+                Lamp(position=(0.2, 2.1, 1.6), color=(110, 255, 170), intensity=2.1),
             )
         if mode == "blinking":
             blink_a = self._blink(1.9, 0.0)
@@ -466,7 +557,11 @@ class FruitBowlSimulation:
         return (int(70 + red * 185), int(70 + green * 185), int(70 + blue * 185))
 
 
-def make_engine() -> RenderEngine:
+def make_engine(renderer: str = "cpu") -> RenderEngine:
+    if renderer == "py_gpu":
+        from py_gpu.adapters.py3d import Py3DRasterRenderer
+
+        return RenderEngine(Py3DRasterRenderer())
     return RenderEngine(CPURenderer(cache_static_geometry=False))
 
 
@@ -475,8 +570,13 @@ def make_settings(args: argparse.Namespace) -> RenderSettings:
         width=args.width,
         height=args.height,
         background=(8, 11, 15),
-        ambient=0.09,
+        ambient=getattr(args, "ambient", 0.0),
+        gamma=getattr(args, "gamma", 1.0),
         smooth_shading=args.smooth_shading,
+        two_sided_lighting=False,
+        ray_traced_shadows=getattr(args, "ray_traced_shadows", False),
+        edge_highlight=getattr(args, "edge_highlight", False),
+        edge_highlight_threshold_degrees=getattr(args, "edge_highlight_angle", 35.0),
         sphere_segments=args.sphere_segments,
         sphere_rings=args.sphere_rings,
     )
@@ -495,12 +595,16 @@ def make_camera(yaw_degrees: float = 0.0, pitch_degrees: float = 50.0, distance:
 
 
 def render_still(args: argparse.Namespace) -> Path:
-    simulation = FruitBowlSimulation()
+    simulation = FruitBowlSimulation(bowl_material=getattr(args, "bowl_material", "wood"))
     for _ in range(max(0, int(args.warmup * args.fps))):
         simulation.step(1.0 / args.fps)
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    make_engine().render(simulation.scene(light_mode=args.light_mode), make_camera(), make_settings(args)).to_png(output_path)
+    make_engine(getattr(args, "renderer", "cpu")).render(
+        simulation.scene(label=getattr(args, "label", "KINEMATIC FRUIT BOWL"), light_mode=args.light_mode),
+        make_camera(),
+        make_settings(args),
+    ).to_png(output_path)
     print(f"Wrote {output_path}")
     return output_path
 
@@ -547,8 +651,8 @@ def ffmpeg_missing_message() -> str:
 def render_video(args: argparse.Namespace) -> Path:
     output_path = Path(args.video)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    simulation = FruitBowlSimulation()
-    engine = make_engine()
+    simulation = FruitBowlSimulation(bowl_material=getattr(args, "bowl_material", "wood"))
+    engine = make_engine(getattr(args, "renderer", "cpu"))
     settings = make_settings(args)
     ffmpeg = find_ffmpeg(getattr(args, "ffmpeg", None))
     if ffmpeg is None:
@@ -559,8 +663,9 @@ def render_video(args: argparse.Namespace) -> Path:
         frames_dir.mkdir(parents=True, exist_ok=True)
         for frame in range(args.frames):
             simulation.step(1.0 / args.fps)
+            label = getattr(args, "label", "FRUIT BOWL")
             buffer = engine.render(
-                simulation.scene(label=f"FRUIT BOWL FRAME {frame:03d}", light_mode=args.light_mode),
+                simulation.scene(label=f"{label} FRAME {frame:03d}", light_mode=args.light_mode),
                 make_camera(),
                 settings,
             )
@@ -596,8 +701,9 @@ def render_video(args: argparse.Namespace) -> Path:
     try:
         for frame in range(args.frames):
             simulation.step(1.0 / args.fps)
+            label = getattr(args, "label", "FRUIT BOWL")
             buffer = engine.render(
-                simulation.scene(label=f"FRUIT BOWL FRAME {frame:03d}", light_mode=args.light_mode),
+                simulation.scene(label=f"{label} FRAME {frame:03d}", light_mode=args.light_mode),
                 make_camera(),
                 settings,
             )
@@ -617,8 +723,8 @@ class LiveFruitBowlViewer:
 
         self.tk = tk
         self.args = args
-        self.simulation = FruitBowlSimulation()
-        self.engine = make_engine()
+        self.simulation = FruitBowlSimulation(bowl_material=args.bowl_material)
+        self.engine = make_engine(args.renderer)
         self.settings = make_settings(args)
         self.yaw = 0.0
         self.pitch = 50.0
@@ -723,7 +829,7 @@ class LiveFruitBowlViewer:
         elif key == "space":
             self.paused = not self.paused
         elif key == "r":
-            self.simulation = FruitBowlSimulation()
+            self.simulation = FruitBowlSimulation(bowl_material=self.args.bowl_material)
 
     def render_once(self) -> None:
         output = self.engine.render(self.simulation.scene(light_mode=self.args.light_mode), self.camera(), self.settings)
@@ -762,9 +868,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ffmpeg", type=Path)
     parser.add_argument("--require-ffmpeg", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--write-still", action=argparse.BooleanOptionalAction, default=None)
-    parser.add_argument("--frames", type=int, default=96)
+    parser.add_argument("--frames", type=int, default=240)
     parser.add_argument("--fps", type=int, default=24)
     parser.add_argument("--warmup", type=float, default=1.25)
+    parser.add_argument("--ambient", type=float, default=0.0)
+    parser.add_argument("--gamma", type=float, default=1.0)
+    parser.add_argument("--label", default="KINEMATIC FRUIT BOWL")
     parser.add_argument("--width", type=int, default=360)
     parser.add_argument("--height", type=int, default=204)
     parser.add_argument("--window-width", type=int, default=960)
@@ -772,10 +881,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fit-window", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument(
         "--light-mode",
-        choices=("multiple", "blinking", "multicolor", "color-shift-blink"),
+        choices=("multiple", "blinking", "multicolor", "color-shift-blink", "mirror-prelight"),
         default="multiple",
     )
-    parser.add_argument("--smooth-shading", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--bowl-material", choices=("wood", "mirror"), default="wood")
+    parser.add_argument("--renderer", choices=("cpu", "py_gpu"), default="cpu")
+    parser.add_argument("--smooth-shading", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--ray-traced-shadows", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--edge-highlight", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--edge-highlight-angle", type=float, default=35.0)
     parser.add_argument("--sphere-segments", type=int, default=14)
     parser.add_argument("--sphere-rings", type=int, default=7)
     return parser.parse_args()

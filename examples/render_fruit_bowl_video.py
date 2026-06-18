@@ -13,16 +13,24 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--video", type=Path, default=OUTPUT_DIR / "fruit_bowl.mp4")
     parser.add_argument("--ffmpeg", type=Path)
     parser.add_argument("--allow-frame-fallback", action="store_true")
-    parser.add_argument("--frames", type=int, default=96)
+    parser.add_argument("--frames", type=int, default=240)
     parser.add_argument("--fps", type=int, default=24)
+    parser.add_argument("--ambient", type=float, default=0.0)
+    parser.add_argument("--gamma", type=float, default=1.0)
+    parser.add_argument("--label", default="FRUIT BOWL")
     parser.add_argument("--width", type=int, default=360)
     parser.add_argument("--height", type=int, default=204)
     parser.add_argument(
         "--light-mode",
-        choices=("multiple", "blinking", "multicolor", "color-shift-blink"),
+        choices=("multiple", "blinking", "multicolor", "color-shift-blink", "mirror-prelight"),
         default="multiple",
     )
-    parser.add_argument("--smooth-shading", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--bowl-material", choices=("wood", "mirror"), default="wood")
+    parser.add_argument("--renderer", choices=("cpu", "py_gpu"), default="cpu")
+    parser.add_argument("--smooth-shading", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--ray-traced-shadows", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--edge-highlight", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--edge-highlight-angle", type=float, default=35.0)
     parser.add_argument("--sphere-segments", type=int, default=14)
     parser.add_argument("--sphere-rings", type=int, default=7)
     args = parser.parse_args()

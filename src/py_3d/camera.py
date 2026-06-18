@@ -45,6 +45,38 @@ class Camera:
         true_up = forward.cross(right).normalized(Vec3(0.0, 1.0, 0.0))
         return right, true_up, forward
 
+    @classmethod
+    def first_person(
+        cls,
+        position: Vec3 | tuple[float, float, float],
+        forward: Vec3 | tuple[float, float, float],
+        *,
+        eye_height: float = 1.55,
+        up: Vec3 | tuple[float, float, float] = Vec3(0.0, 1.0, 0.0),
+        fov_degrees: float = 68.0,
+    ) -> "Camera":
+        eye = as_vec3(position) + as_vec3(up).normalized(Vec3(0.0, 1.0, 0.0)) * eye_height
+        direction = as_vec3(forward).normalized(Vec3(0.0, 0.0, 1.0))
+        return cls(position=eye, target=eye + direction, up=up, fov_degrees=fov_degrees)
+
+    @classmethod
+    def third_person(
+        cls,
+        position: Vec3 | tuple[float, float, float],
+        forward: Vec3 | tuple[float, float, float],
+        *,
+        distance: float = 4.0,
+        height: float = 1.5,
+        up: Vec3 | tuple[float, float, float] = Vec3(0.0, 1.0, 0.0),
+        fov_degrees: float = 60.0,
+    ) -> "Camera":
+        subject = as_vec3(position)
+        up_vec = as_vec3(up).normalized(Vec3(0.0, 1.0, 0.0))
+        direction = as_vec3(forward).normalized(Vec3(0.0, 0.0, 1.0))
+        camera_position = subject - direction * max(0.0, distance) + up_vec * height
+        target = subject + up_vec * min(height, 1.2) + direction * 0.4
+        return cls(position=camera_position, target=target, up=up_vec, fov_degrees=fov_degrees)
+
     def world_to_camera(self, point: Vec3 | tuple[float, float, float]) -> Vec3:
         right, true_up, forward = self.basis()
         relative = as_vec3(point) - self.position

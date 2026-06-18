@@ -12,3 +12,9 @@ def test_material_absorption_reduces_channels():
 
     assert shaded.r < shaded.g
     assert shaded.b == 0
+
+
+def test_material_light_transmission_is_clamped():
+    material = Material(light_transmission=3.0)
+
+    assert material.light_transmission == 1.0

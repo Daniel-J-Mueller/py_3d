@@ -4,6 +4,7 @@ from .buffer import DepthBuffer, PixelBuffer
 from .camera import Camera, ProjectedPoint
 from .collision import BowlCollider, BoxCollider, CompoundSphereCollider, PlaneCollider, SphereCollider
 from .color import Color
+from .fluid import FluidBlob, FluidWorld
 from . import draw
 from .gpu import GPURenderer, GPUSceneBatch, build_gpu_scene_batch, detect_gpu_backends
 from .importers import load_obj, load_stl
@@ -13,7 +14,7 @@ from .math3d import Vec3, as_vec3, clamp
 from .noise import FractalNoise3D, SurfacePerturbation, ValueNoise3D
 from .overlays import TextBulletin
 from .physics import KinematicBowl, PhysicsWorld, SphereBody, StaticBox, StaticPlane, World
-from .primitives import Bowl, Box, Line3, Mesh, Plane, Point3, Sphere, Triangle
+from .primitives import Bowl, Box, Capsule, Line3, Mesh, Plane, Point3, Sphere, Triangle
 from .render import CPURenderer, RenderEngine, RenderSettings, Renderer
 from .scene import Scene
 from .textures import planar_project_triangles
@@ -26,8 +27,11 @@ __all__ = [
     "CompoundSphereCollider",
     "CPURenderer",
     "Camera",
+    "Capsule",
     "Color",
     "DepthBuffer",
+    "FluidBlob",
+    "FluidWorld",
     "GPURenderer",
     "GPUSceneBatch",
     "Lamp",

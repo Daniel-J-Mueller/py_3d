@@ -233,6 +233,7 @@ class Bowl:
     material: Material = Material()
     depth: float = 1.0
     perturbation: SurfacePerturbation | None = None
+    thickness: float = 0.0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "center", as_vec3(self.center))
@@ -240,6 +241,8 @@ class Bowl:
             raise ValueError("bowl radius must be positive")
         if self.depth <= 0.0 or self.depth > 1.0:
             raise ValueError("bowl depth must be in the range (0, 1]")
+        if self.thickness < 0.0:
+            raise ValueError("bowl thickness must be non-negative")
 
     def to_triangles(self, segments: int = 24, rings: int = 8, **kwargs) -> tuple[Triangle, ...]:
         del kwargs
@@ -264,7 +267,7 @@ class Bowl:
                     sin(phi) * sin(theta),
                 )
                 row.append(self.center + normal * self._radius_at(normal))
-                normal_row.append(normal)
+                normal_row.append(-normal)
             vertices.append(row)
             normals.append(normal_row)
 
@@ -332,12 +335,100 @@ class Bowl:
                         (next_u, bottom_v),
                         (u, bottom_v),
                         (0.5, bottom_v),
-                        Vec3(0.0, -1.0, 0.0),
-                        Vec3(0.0, -1.0, 0.0),
-                        Vec3(0.0, -1.0, 0.0),
+                        Vec3(0.0, 1.0, 0.0),
+                        Vec3(0.0, 1.0, 0.0),
+                        Vec3(0.0, 1.0, 0.0),
                     )
                 )
+        if self.thickness > 0.0:
+            triangles.extend(self._thickness_triangles(vertices, normals, segments, rings, end_phi))
         return tuple(triangles)
+
+    def _thickness_triangles(
+        self,
+        inner_vertices: list[list[Vec3]],
+        inner_normals: list[list[Vec3]],
+        segments: int,
+        rings: int,
+        end_phi: float,
+    ) -> list[Triangle]:
+        del inner_normals
+        outer_vertices: list[list[Vec3]] = []
+        outer_normals: list[list[Vec3]] = []
+        outer_radius = self.radius + self.thickness
+        for ring in range(rings + 1):
+            amount = ring / rings
+            phi = pi / 2.0 + (end_phi - pi / 2.0) * amount
+            row = []
+            normal_row = []
+            for segment in range(segments):
+                theta = 2.0 * pi * segment / segments
+                normal = Vec3(
+                    sin(phi) * cos(theta),
+                    cos(phi),
+                    sin(phi) * sin(theta),
+                )
+                row.append(self.center + normal * outer_radius)
+                normal_row.append(normal)
+            outer_vertices.append(row)
+            outer_normals.append(normal_row)
+
+        triangles: list[Triangle] = []
+        for ring in range(rings):
+            for segment in range(segments):
+                next_segment = (segment + 1) % segments
+                u = segment / segments
+                next_u = 1.0 if next_segment == 0 else next_segment / segments
+                v = ring / rings
+                next_v = (ring + 1) / rings
+                top_left = outer_vertices[ring][segment]
+                top_right = outer_vertices[ring][next_segment]
+                bottom_left = outer_vertices[ring + 1][segment]
+                bottom_right = outer_vertices[ring + 1][next_segment]
+                normal_top_left = outer_normals[ring][segment]
+                normal_top_right = outer_normals[ring][next_segment]
+                normal_bottom_left = outer_normals[ring + 1][segment]
+                normal_bottom_right = outer_normals[ring + 1][next_segment]
+                triangles.append(
+                    Triangle(
+                        top_left,
+                        top_right,
+                        bottom_left,
+                        self.material,
+                        (u, v),
+                        (next_u, v),
+                        (u, next_v),
+                        normal_top_left,
+                        normal_top_right,
+                        normal_bottom_left,
+                    )
+                )
+                if ring != rings - 1 or self.depth < 1.0:
+                    triangles.append(
+                        Triangle(
+                            top_right,
+                            bottom_right,
+                            bottom_left,
+                            self.material,
+                            (next_u, v),
+                            (next_u, next_v),
+                            (u, next_v),
+                            normal_top_right,
+                            normal_bottom_right,
+                            normal_bottom_left,
+                        )
+                    )
+
+        rim_normal = Vec3(0.0, 1.0, 0.0)
+        for segment in range(segments):
+            next_segment = (segment + 1) % segments
+            inner_left = inner_vertices[0][segment]
+            inner_right = inner_vertices[0][next_segment]
+            outer_left = outer_vertices[0][segment]
+            outer_right = outer_vertices[0][next_segment]
+            triangles.append(Triangle(inner_right, inner_left, outer_left, self.material, normal_a=rim_normal, normal_b=rim_normal, normal_c=rim_normal))
+            triangles.append(Triangle(inner_right, outer_left, outer_right, self.material, normal_a=rim_normal, normal_b=rim_normal, normal_c=rim_normal))
+        return triangles
 
     def _radius_at(self, normal: Vec3) -> float:
         if self.perturbation is None:
@@ -346,17 +437,95 @@ class Bowl:
 
 
 @dataclass(frozen=True)
+class Capsule:
+    """A vertical capsule primitive with hemispherical ends."""
+
+    center: Vec3 | tuple[float, float, float]
+    radius: float
+    height: float
+    material: Material = Material()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "center", as_vec3(self.center))
+        if self.radius <= 0.0:
+            raise ValueError("capsule radius must be positive")
+        if self.height < self.radius * 2.0:
+            raise ValueError("capsule height must be at least twice the radius")
+
+    def to_triangles(self, segments: int = 16, rings: int = 8, **kwargs) -> tuple[Triangle, ...]:
+        del kwargs
+        if segments < 3:
+            raise ValueError("capsule segments must be at least 3")
+        if rings < 2:
+            raise ValueError("capsule rings must be at least 2")
+
+        cylinder_half = max(0.0, self.height * 0.5 - self.radius)
+        hemisphere_rings = max(2, rings // 2)
+        ring_specs: list[tuple[float, float, Vec3]] = []
+        for index in range(hemisphere_rings + 1):
+            amount = index / hemisphere_rings
+            phi = pi - amount * pi / 2.0
+            ring_radius = sin(phi) * self.radius
+            y = -cylinder_half + cos(phi) * self.radius
+            normal_y = cos(phi)
+            ring_specs.append((ring_radius, y, Vec3(0.0, normal_y, 0.0)))
+        if cylinder_half > 1e-9:
+            ring_specs.append((self.radius, cylinder_half, Vec3(0.0, 0.0, 0.0)))
+        for index in range(1, hemisphere_rings + 1):
+            amount = index / hemisphere_rings
+            phi = pi / 2.0 - amount * pi / 2.0
+            ring_radius = sin(phi) * self.radius
+            y = cylinder_half + cos(phi) * self.radius
+            normal_y = cos(phi)
+            ring_specs.append((ring_radius, y, Vec3(0.0, normal_y, 0.0)))
+
+        vertices: list[list[Vec3]] = []
+        normals: list[list[Vec3]] = []
+        for ring_radius, y, normal_template in ring_specs:
+            row = []
+            normal_row = []
+            for segment in range(segments):
+                theta = 2.0 * pi * segment / segments
+                horizontal = Vec3(cos(theta), 0.0, sin(theta))
+                point = self.center + Vec3(horizontal.x * ring_radius, y, horizontal.z * ring_radius)
+                normal = Vec3(horizontal.x * max(0.0, 1.0 - abs(normal_template.y)), normal_template.y, horizontal.z * max(0.0, 1.0 - abs(normal_template.y))).normalized(horizontal)
+                row.append(point)
+                normal_row.append(normal)
+            vertices.append(row)
+            normals.append(normal_row)
+
+        triangles: list[Triangle] = []
+        for ring in range(len(vertices) - 1):
+            for segment in range(segments):
+                next_segment = (segment + 1) % segments
+                top_left = vertices[ring][segment]
+                top_right = vertices[ring][next_segment]
+                bottom_left = vertices[ring + 1][segment]
+                bottom_right = vertices[ring + 1][next_segment]
+                normal_top_left = normals[ring][segment]
+                normal_top_right = normals[ring][next_segment]
+                normal_bottom_left = normals[ring + 1][segment]
+                normal_bottom_right = normals[ring + 1][next_segment]
+                triangles.append(Triangle(top_left, bottom_left, top_right, self.material, normal_a=normal_top_left, normal_b=normal_bottom_left, normal_c=normal_top_right))
+                triangles.append(Triangle(top_right, bottom_left, bottom_right, self.material, normal_a=normal_top_right, normal_b=normal_bottom_left, normal_c=normal_bottom_right))
+        return tuple(triangles)
+
+
+@dataclass(frozen=True)
 class Plane:
     point: Vec3 | tuple[float, float, float]
     normal: Vec3 | tuple[float, float, float]
     material: Material = Material()
     size: float | None = None
+    thickness: float = 0.0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "point", as_vec3(self.point))
         object.__setattr__(self, "normal", as_vec3(self.normal).normalized(Vec3(0.0, 1.0, 0.0)))
         if self.size is not None and self.size <= 0.0:
             raise ValueError("plane size must be positive when provided")
+        if self.thickness < 0.0:
+            raise ValueError("plane thickness must be non-negative")
 
     def to_triangles(self, **kwargs) -> tuple[Triangle, ...]:
         del kwargs
@@ -367,11 +536,38 @@ class Plane:
             tangent = self.normal.cross(Vec3(1.0, 0.0, 0.0)).normalized(Vec3(1.0, 0.0, 0.0))
         bitangent = self.normal.cross(tangent).normalized()
         half = self.size * 0.5
-        a = self.point - tangent * half - bitangent * half
-        b = self.point + tangent * half - bitangent * half
-        c = self.point + tangent * half + bitangent * half
-        d = self.point - tangent * half + bitangent * half
-        return (Triangle(a, b, c, self.material), Triangle(a, c, d, self.material))
+        offset = self.normal * (self.thickness * 0.5)
+        a = self.point - tangent * half - bitangent * half + offset
+        b = self.point + tangent * half - bitangent * half + offset
+        c = self.point + tangent * half + bitangent * half + offset
+        d = self.point - tangent * half + bitangent * half + offset
+        if self.thickness <= 0.0:
+            return (
+                Triangle(a, b, c, self.material, normal_a=self.normal, normal_b=self.normal, normal_c=self.normal),
+                Triangle(a, c, d, self.material, normal_a=self.normal, normal_b=self.normal, normal_c=self.normal),
+            )
+
+        bottom_offset = -offset
+        e = self.point - tangent * half - bitangent * half + bottom_offset
+        f = self.point + tangent * half - bitangent * half + bottom_offset
+        g = self.point + tangent * half + bitangent * half + bottom_offset
+        h = self.point - tangent * half + bitangent * half + bottom_offset
+        bottom_normal = -self.normal
+        side_normals = (tangent, bitangent, -tangent, -bitangent)
+        return (
+            Triangle(a, b, c, self.material, normal_a=self.normal, normal_b=self.normal, normal_c=self.normal),
+            Triangle(a, c, d, self.material, normal_a=self.normal, normal_b=self.normal, normal_c=self.normal),
+            Triangle(e, g, f, self.material, normal_a=bottom_normal, normal_b=bottom_normal, normal_c=bottom_normal),
+            Triangle(e, h, g, self.material, normal_a=bottom_normal, normal_b=bottom_normal, normal_c=bottom_normal),
+            Triangle(a, e, f, self.material, normal_a=side_normals[3], normal_b=side_normals[3], normal_c=side_normals[3]),
+            Triangle(a, f, b, self.material, normal_a=side_normals[3], normal_b=side_normals[3], normal_c=side_normals[3]),
+            Triangle(b, f, g, self.material, normal_a=side_normals[0], normal_b=side_normals[0], normal_c=side_normals[0]),
+            Triangle(b, g, c, self.material, normal_a=side_normals[0], normal_b=side_normals[0], normal_c=side_normals[0]),
+            Triangle(c, g, h, self.material, normal_a=side_normals[1], normal_b=side_normals[1], normal_c=side_normals[1]),
+            Triangle(c, h, d, self.material, normal_a=side_normals[1], normal_b=side_normals[1], normal_c=side_normals[1]),
+            Triangle(d, h, e, self.material, normal_a=side_normals[2], normal_b=side_normals[2], normal_c=side_normals[2]),
+            Triangle(d, e, a, self.material, normal_a=side_normals[2], normal_b=side_normals[2], normal_c=side_normals[2]),
+        )
 
 
 def _rotate_euler(value: Vec3, rotation: Vec3) -> Vec3:

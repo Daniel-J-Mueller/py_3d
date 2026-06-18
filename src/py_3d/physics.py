@@ -21,6 +21,7 @@ class SphereBody:
     velocity: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
     mass: float = 1.0
     restitution: float = 0.35
+    bounciness: float | None = None
     friction: float = 0.2
     material: Material = Material()
     visual_perturbation: SurfacePerturbation | None = None
@@ -48,7 +49,8 @@ class SphereBody:
             self.moment_of_inertia = 0.4 * self.mass * self.radius * self.radius
         elif self.moment_of_inertia <= 0.0:
             raise ValueError("moment of inertia must be positive")
-        self.restitution = clamp(float(self.restitution), 0.0, 1.0)
+        self.restitution = _coefficient_with_alias(self.restitution, self.bounciness)
+        self.bounciness = self.restitution
         self.friction = clamp(float(self.friction), 0.0, 1.0)
         if self.static_friction is None:
             self.static_friction = _auto_static_friction(self.friction, self.material)
@@ -111,6 +113,7 @@ class StaticPlane:
     normal: Vec3 | tuple[float, float, float]
     friction: float = 0.2
     restitution: float = 0.2
+    bounciness: float | None = None
     material: Material = Material()
     size: float | None = None
     collision_boundary: PlaneCollider | None = None
@@ -122,7 +125,9 @@ class StaticPlane:
         object.__setattr__(self, "point", as_vec3(self.point))
         object.__setattr__(self, "normal", as_vec3(self.normal).normalized(Vec3(0.0, 1.0, 0.0)))
         object.__setattr__(self, "friction", clamp(float(self.friction), 0.0, 1.0))
-        object.__setattr__(self, "restitution", clamp(float(self.restitution), 0.0, 1.0))
+        restitution = _coefficient_with_alias(self.restitution, self.bounciness)
+        object.__setattr__(self, "restitution", restitution)
+        object.__setattr__(self, "bounciness", restitution)
         object.__setattr__(self, "squishiness", clamp(float(self.squishiness), 0.0, 1.0))
         damping = self.dampening if self.dampening is not None else self.damping
         object.__setattr__(self, "damping", clamp(float(damping), 0.0, 1.0))
@@ -153,6 +158,7 @@ class StaticBox:
     size: Vec3 | tuple[float, float, float]
     friction: float = 0.3
     restitution: float = 0.25
+    bounciness: float | None = None
     material: Material = Material()
     collision_boundary: BoxCollider | None = None
     squishiness: float = 0.0
@@ -165,7 +171,9 @@ class StaticBox:
         if self.size.x <= 0.0 or self.size.y <= 0.0 or self.size.z <= 0.0:
             raise ValueError("static box size components must be positive")
         object.__setattr__(self, "friction", clamp(float(self.friction), 0.0, 1.0))
-        object.__setattr__(self, "restitution", clamp(float(self.restitution), 0.0, 1.0))
+        restitution = _coefficient_with_alias(self.restitution, self.bounciness)
+        object.__setattr__(self, "restitution", restitution)
+        object.__setattr__(self, "bounciness", restitution)
         object.__setattr__(self, "squishiness", clamp(float(self.squishiness), 0.0, 1.0))
         damping = self.dampening if self.dampening is not None else self.damping
         object.__setattr__(self, "damping", clamp(float(damping), 0.0, 1.0))
@@ -205,6 +213,7 @@ class KinematicBowl:
     velocity: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
     friction: float = 0.2
     restitution: float = 0.45
+    bounciness: float | None = None
     material: Material = Material()
     depth: float = 1.0
     collision_boundary: BowlCollider | None = None
@@ -212,6 +221,7 @@ class KinematicBowl:
     damping: float = 0.0
     dampening: float | None = None
     visual_perturbation: SurfacePerturbation | None = None
+    visual_thickness: float = 0.0
     angular_velocity: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
 
     def __post_init__(self) -> None:
@@ -223,10 +233,12 @@ class KinematicBowl:
         if self.depth <= 0.0 or self.depth > 1.0:
             raise ValueError("kinematic bowl depth must be in the range (0, 1]")
         self.friction = clamp(float(self.friction), 0.0, 1.0)
-        self.restitution = clamp(float(self.restitution), 0.0, 1.0)
+        self.restitution = _coefficient_with_alias(self.restitution, self.bounciness)
+        self.bounciness = self.restitution
         self.squishiness = clamp(float(self.squishiness), 0.0, 1.0)
         self.damping = clamp(float(self.dampening if self.dampening is not None else self.damping), 0.0, 1.0)
         self.dampening = self.damping
+        self.visual_thickness = max(0.0, float(self.visual_thickness))
 
     def set_center(self, center: Vec3 | tuple[float, float, float], dt: float | None = None) -> None:
         next_center = as_vec3(center)
@@ -241,7 +253,7 @@ class KinematicBowl:
         return self.velocity + self.angular_velocity.cross(as_vec3(point) - self.center)
 
     def to_primitive(self) -> Bowl:
-        return Bowl(self.center, self.radius, self.material, self.depth, self.visual_perturbation)
+        return Bowl(self.center, self.radius, self.material, self.depth, self.visual_perturbation, self.visual_thickness)
 
     def synced_collision_boundary(self) -> BowlCollider:
         return BowlCollider.from_bowl(self.to_primitive(), owner_position=self.center)
@@ -311,6 +323,10 @@ class PhysicsWorld:
 
 
 World = PhysicsWorld
+
+
+def _coefficient_with_alias(value: float, alias: float | None) -> float:
+    return clamp(float(value if alias is None else alias), 0.0, 1.0)
 
 
 def _auto_static_friction(friction: float, material: Material) -> float:

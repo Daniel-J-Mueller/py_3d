@@ -29,6 +29,7 @@ class Material:
     specular: float = 0.0
     shininess: float = 32.0
     reflectivity: float = 0.0
+    light_transmission: float = 0.0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "color", Color.from_value(self.color))
@@ -40,6 +41,7 @@ class Material:
         object.__setattr__(self, "specular", clamp(float(self.specular), 0.0, 1.0))
         object.__setattr__(self, "shininess", max(1.0, float(self.shininess)))
         object.__setattr__(self, "reflectivity", clamp(float(self.reflectivity), 0.0, 1.0))
+        object.__setattr__(self, "light_transmission", clamp(float(self.light_transmission), 0.0, 1.0))
 
     def color_at(self, uv: tuple[float, float] | None = None) -> Color:
         if uv is not None and self.texture is not None:

@@ -1,4 +1,4 @@
-from py_3d import Bowl, Material, Sphere, SurfacePerturbation, Triangle, ValueNoise3D, planar_project_triangles
+from py_3d import Bowl, Capsule, Material, Plane, Sphere, SurfacePerturbation, Triangle, ValueNoise3D, planar_project_triangles
 
 
 def test_sphere_generates_texture_coordinates():
@@ -80,3 +80,26 @@ def test_surface_perturbation_changes_bowl_geometry():
     bumpy_distances = sorted(round(vertex.length(), 4) for triangle in bumpy.to_triangles(segments=12, rings=5) for vertex in (triangle.a, triangle.b, triangle.c))
 
     assert plain_distances != bumpy_distances
+
+
+def test_bowl_thickness_adds_outer_shell_and_rim_triangles():
+    thin = Bowl((0, 0, 0), 1.0, depth=0.85)
+    thick = Bowl((0, 0, 0), 1.0, depth=0.85, thickness=0.08)
+
+    assert len(thick.to_triangles(segments=12, rings=4)) > len(thin.to_triangles(segments=12, rings=4))
+
+
+def test_capsule_generates_renderable_triangles():
+    capsule = Capsule((0, 0, 0), radius=0.25, height=1.4)
+    triangles = capsule.to_triangles(segments=10, rings=6)
+
+    assert len(triangles) > 0
+    assert all(triangle.has_vertex_normals() for triangle in triangles)
+
+
+def test_sized_plane_thickness_creates_sealed_slab():
+    flat = Plane((0, 0, 0), (0, 1, 0), size=1.0)
+    slab = Plane((0, 0, 0), (0, 1, 0), size=1.0, thickness=0.1)
+
+    assert len(flat.to_triangles()) == 2
+    assert len(slab.to_triangles()) == 12

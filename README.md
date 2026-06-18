@@ -43,13 +43,35 @@ in `renderings-tests/` so visual changes are easy to inspect.
 | --- |
 | ![collision boundary override](renderings-tests/collision_boundary_override.png) |
 
-| Kinematic fruit bowl |
-| --- |
-| ![kinematic fruit bowl](renderings-tests/fruit_bowl.png) |
+| Live py_gpu parity | Slime fluid |
+| --- | --- |
+| ![live py_gpu fruit bowl parity](renderings-tests/live-renders/py_3d_fruit_bowl_render_test.png) | ![slime fluid blobs](renderings-tests/fluids/slime_fluid.png) |
 
-<video src="renderings-tests/fruit_bowl.mp4" controls width="640"></video>
+### Fruit Bowl Render Modes
 
-[View the fruit bowl MP4](renderings-tests/fruit_bowl.mp4)
+The fruit bowl variants are organized under `renderings-tests/fruit-bowl/`.
+They use the same driven physics scene with different render settings.
+
+| Poly shaded | Smoothed wood | Ray-traced shadows |
+| --- | --- | --- |
+| ![fruit bowl poly](renderings-tests/fruit-bowl/fruit_bowl_poly.png) | ![fruit bowl smooth](renderings-tests/fruit-bowl/fruit_bowl_smooth.png) | ![fruit bowl ray traced shadows](renderings-tests/fruit-bowl/fruit_bowl_ray_traced.png) |
+
+[Poly MP4](renderings-tests/fruit-bowl/fruit_bowl_poly.mp4) |
+[Smoothed MP4](renderings-tests/fruit-bowl/fruit_bowl_smooth.mp4) |
+[Ray-traced shadows MP4](renderings-tests/fruit-bowl/fruit_bowl_ray_traced.mp4)
+
+| Mirror prelight | Edge threshold 25 deg | Edge threshold 55 deg |
+| --- | --- | --- |
+| ![mirror bowl prelight](renderings-tests/fruit-bowl/fruit_bowl_mirror_prelight.png) | ![fruit bowl edges 25 degrees](renderings-tests/fruit-bowl/fruit_bowl_edges_25deg.png) | ![fruit bowl edges 55 degrees](renderings-tests/fruit-bowl/fruit_bowl_edges_55deg.png) |
+
+[Mirror prelight MP4](renderings-tests/fruit-bowl/fruit_bowl_mirror_prelight.mp4)
+
+The poly render preserves the faceted primitive look. The smoothed render keeps
+the same collision setup but interpolates vertex normals for fruit and bowl
+geometry. The ray-traced shadow render casts direct-light shadow rays at face
+scale, which is slower but catches occlusion that simple direct lighting misses.
+The edge-highlight stills use angle thresholds to outline boundary and sharp
+normal changes, making the bowl lip and hard polygon seams easier to inspect.
 
 | Multiple lights | Blinking lights |
 | --- | --- |
@@ -191,9 +213,11 @@ Useful initial primitives:
 - `Triangle`
 - `Box`
 - `Sphere`
+- `Capsule`
 - `Bowl`
 - `Plane`
 - `Mesh`
+- `FluidBlob`
 - `VoxelGrid`
 
 ### Materials
@@ -205,18 +229,27 @@ first:
 - `absorption`: per-channel light absorption.
 - `diffuse`: matte response strength.
 - `emission`: optional RGB emission for self-lit objects.
-- `texture`: optional `PixelBuffer` sampled through triangle UV coordinates.
+- `texture`: optional custom `PixelBuffer` sampled through triangle UV
+  coordinates.
+- `light_transmission`: fraction of direct light allowed through the material
+  during ray-traced shadow checks. `0.0` is opaque; `1.0` fully transmits.
 - `roughness`: visual surface dulling/noise response.
 - `fuzziness`: visual per-pixel surface variation.
 - `specular`: strength of direct light highlights for shiny surfaces.
 - `shininess`: highlight tightness. Higher values make smaller, sharper
   highlights.
-- `reflectivity`: early reflection-like boost for bright highlights. This is
-  not full ray-traced reflection yet.
+- `reflectivity`: reflection-like boost for bright highlights. Mirror-style
+  materials use low roughness, high specular response, high shininess, and high
+  reflectivity. The current CPU renderer produces direct-light mirror
+  highlights; recursive scene reflections are a future ray-tracing extension.
 
 Image import currently supports 8-bit, non-interlaced PNG files through
 `PixelBuffer.from_png()`. The `assets/tv-test.png` file is used as the first
 texture import and rendering test.
+
+Examples can also build procedural textures directly as `PixelBuffer` objects.
+The fruit bowl demo uses this for wood grain and watermelon striping, which is
+the same path a user would take for imported or generated surface textures.
 
 Visual material attributes are intentionally separate from physics attributes.
 For example, `Material.roughness` changes the rendered surface, while
@@ -241,6 +274,11 @@ Lambert-style model than a large physically based system that is hard to extend.
 The CPU reference renderer now includes a simple specular highlight term, so
 materials can range from matte to shiny while preserving the same light-source
 model.
+`RenderSettings(ray_traced_shadows=True)` enables an experimental direct-light
+shadow ray test. It is slower and intended for offline inspection, but it helps
+catch cases where a face receives light that should be occluded by nearby
+geometry. Shadow rays respect `Material.light_transmission`, so an object can
+partially pass direct light instead of acting as a fully opaque blocker.
 
 ### Rendering
 
@@ -253,6 +291,9 @@ The first renderer should prioritize correctness and clarity:
 - Optional wireframe and debug-depth modes.
 - Optional smoothed vertex lighting for generated primitives while collision
   boundaries remain explicit and unchanged.
+- Explicit zero ambient by default, with `RenderSettings(ambient=...)` and
+  `RenderSettings(gamma=...)` available when a scene needs fill or display
+  correction.
 
 Performance matters, but early optimization should not make the architecture
 opaque. When speed work is needed, prefer isolated accelerated paths behind a
@@ -267,6 +308,17 @@ backend using shared scenes and image/depth expectations.
 generated primitives such as `Sphere` and `Bowl`. This is a visual-only render
 choice: collision still uses the active collider, which may be synced from the
 render geometry or overridden independently.
+
+Finite surfaces can be rendered with thickness where supported. `Bowl(...,
+thickness=...)` creates an outer shell and sealed rim, while `Plane(...,
+size=..., thickness=...)` creates a sealed slab. This keeps presentation
+geometry from looking like infinitely thin paper without changing physics
+unless a matching collision boundary is selected.
+
+`RenderSettings(edge_highlight=True, edge_highlight_threshold_degrees=35)`
+draws an overlay for boundary edges and adjacent faces whose normals differ by
+at least the threshold angle. This is useful for presentation outlines and for
+debugging where a smoothed render is hiding important polygon boundaries.
 
 Rendering is not limited to real-time windows. Offline rendering is a first
 class path: callers can render a `Scene` into a `PixelBuffer`, write it to disk,
@@ -295,6 +347,7 @@ The collision system should start with simple shapes and simple guarantees:
 - Narrow phase: sphere, plane, box, and triangle interactions.
 - Body types: static, dynamic, and kinematic.
 - Forces: gravity, impulses, friction, and restitution.
+- `bounciness` aliases restitution for examples and user-facing APIs.
 - Deterministic fixed-step simulation support.
 
 The system should be good enough for educational demos and basic simulation
@@ -334,6 +387,8 @@ Dynamic bodies now expose early rigid-body controls:
 - `static_friction` and `kinetic_friction`: explicit coefficients. The older
   `friction` field remains as a simple default for both.
 - `rolling_resistance`: small damping for angular velocity.
+- `bounciness`: intuitive alias for restitution. Internally both names resolve
+  to the same clamped coefficient.
 - `squishiness`: contact softness. Higher values allow more temporary give
   before positional correction.
 - `damping` / `dampening`: contact-energy loss. This is coupled with
@@ -346,6 +401,12 @@ simple educational model, not a full rigid-body solver.
 geometry, so visual texture coordinates and procedural bumps roll with the
 physics body by default.
 
+The first fluid scaffold is `FluidWorld` with `FluidBlob` particles. Each blob
+has fixed volume, stretch, stretchiness, viscosity, surface tension, and
+bounciness. Overstretched blobs split while conserving volume; nearby blobs can
+heal back together. This is intentionally slime-like bounded-blob physics, not
+yet grid-based fluid dynamics.
+
 ## Proposed Package Layout
 
 ```text
@@ -356,6 +417,7 @@ py_3d/
   color.py         # RGB color helpers
   collision.py     # Shape intersection and contact generation
   draw.py          # Immediate-mode primitive drawing helpers
+  fluid.py         # Bounded blob fluid primitives
   gpu.py           # Optional GPU renderer scaffold
   importers.py     # OBJ and STL loading helpers
   lights.py        # Lamp, Sun, and lighting utilities
@@ -504,7 +566,7 @@ python examples/fruit_bowl_demo.py --light-mode multicolor --output renderings-t
 python examples/fruit_bowl_demo.py --light-mode color-shift-blink --output renderings-tests/fruit_bowl_color_shift_blink.png
 ```
 
-It drives a `KinematicBowl` with repeatable sharp toss pulses while several
+It drives a `KinematicBowl` with small vertical tosses and angular jostle while several
 dynamic fruit bodies bounce inside it and collide with each other. The orange
 and lemon use visual
 surface perturbation, the watermelon stays smooth, and the banana is a curved
@@ -514,12 +576,49 @@ so collisions read more like soft produce than hard billiard balls. It writes
 `renderings-tests/fruit_bowl.png`.
 The bowl is wood-colored, visually perturbed, and uses higher friction/lower
 restitution so it behaves more like a wooden bowl than a hard plastic shell.
+The bowl render uses inward smooth normals and disables two-sided lighting so
+the inner panels shade more like a concave surface instead of camera-facing
+cards.
+
+Render the organized fruit bowl showcase set:
+
+```bash
+python examples/render_fruit_bowl_variants.py
+```
+
+That writes these named outputs under `renderings-tests/fruit-bowl/`:
+
+- `fruit_bowl_poly.png` and `fruit_bowl_poly.mp4`
+- `fruit_bowl_smooth.png` and `fruit_bowl_smooth.mp4`
+- `fruit_bowl_ray_traced.png` and `fruit_bowl_ray_traced.mp4`
+- `fruit_bowl_mirror_prelight.png` and `fruit_bowl_mirror_prelight.mp4`
+- `fruit_bowl_edges_25deg.png` and `fruit_bowl_edges_55deg.png`
+
+Useful one-off render options:
+
+```bash
+python examples/fruit_bowl_demo.py --no-smooth-shading --output renderings-tests/fruit-bowl/fruit_bowl_poly.png
+python examples/fruit_bowl_demo.py --smooth-shading --output renderings-tests/fruit-bowl/fruit_bowl_smooth.png
+python examples/fruit_bowl_demo.py --ray-traced-shadows --no-smooth-shading --output renderings-tests/fruit-bowl/fruit_bowl_ray_traced.png
+python examples/fruit_bowl_demo.py --bowl-material mirror --light-mode mirror-prelight --output renderings-tests/fruit-bowl/fruit_bowl_mirror_prelight.png
+python examples/fruit_bowl_demo.py --edge-highlight --edge-highlight-angle 35 --output renderings-tests/fruit-bowl/fruit_bowl_edges_35deg.png
+```
+
+The default bowl material uses a procedural wood-grain texture, high matte
+roughness, light fuzziness, subtle geometric perturbation, and a small sealed
+rim thickness. The mirror bowl uses the same collision behavior but swaps in a
+low-roughness, high-reflectivity visual material and a strong prelight lamp
+aimed into the bowl before the fruit motion develops. Renderings default to
+zero ambient light; add `--ambient` only when intentionally debugging with fill.
+Use `--gamma` for display correction without changing the light model.
 
 Run the live fruit bowl viewer:
 
 ```bash
 python examples/fruit_bowl_live.py
 python examples/fruit_bowl_live.py --width 480 --height 270 --window-width 960 --window-height 540
+python examples/fruit_bowl_live.py --renderer py_gpu --width 480 --height 270 --window-width 960 --window-height 540
+python examples/fruit_bowl_live.py --bowl-material mirror --light-mode mirror-prelight
 ```
 
 Click into the window to focus controls. Drag or use arrow keys to orbit,
@@ -529,10 +628,13 @@ Click into the window to focus controls. Drag or use arrow keys to orbit,
 Render a real video file:
 
 ```bash
-python examples/render_fruit_bowl_video.py --video renderings-tests/fruit_bowl.mp4 --frames 96 --fps 24
-python examples/render_fruit_bowl_video.py --video renderings-tests/fruit_bowl.mov --frames 96 --fps 24
-python examples/render_fruit_bowl_video.py --light-mode color-shift-blink --video renderings-tests/fruit_bowl_color_shift_blink.mp4 --frames 48 --fps 24
+python examples/render_fruit_bowl_video.py --video renderings-tests/fruit_bowl.mp4
+python examples/render_fruit_bowl_video.py --video renderings-tests/fruit_bowl.mov
+python examples/render_fruit_bowl_video.py --light-mode color-shift-blink --video renderings-tests/fruit_bowl_color_shift_blink.mp4
 ```
+
+Video examples now default to 10 seconds. Override `--frames` and `--fps` when a
+short preview is needed.
 
 This requires the FFmpeg command-line executable. `pip install ffmpeg` installs
 a Python module named `ffmpeg`; it does not install `ffmpeg.exe`. Install FFmpeg
@@ -563,6 +665,29 @@ For sharper realtime viewing, raise the render target, for example
 sluggish on a given machine.
 
 The live Tk window uses `assets/py_3d_logo.png` as its window icon.
+
+Run the live capsule walking demo:
+
+```bash
+python examples/capsule_walk_demo.py --renderer py_gpu --camera-mode third
+python examples/capsule_walk_demo.py --renderer py_gpu --camera-mode first
+python examples/capsule_walk_demo.py --renderer py_gpu --camera-mode global
+```
+
+Click into the window, use `W/A/S/D` to move, arrow keys to turn, `Space` to
+jump, and `V` to cycle global, third-person, and first-person cameras. The
+`py_gpu` path currently defaults to reference-compatible py_3d rendering so the
+live view matches the fully shaded render outputs.
+
+Generate the slime-fluid sample:
+
+```bash
+python examples/slime_fluid_demo.py --output renderings-tests/fluids/slime_fluid.png
+python examples/slime_fluid_demo.py --video renderings-tests/fluids/slime_fluid.mp4
+```
+
+It uses bounded `FluidBlob` primitives with fixed volume, stretch-based
+splitting, viscosity, surface tension, and healing between nearby blobs.
 
 Run the physics interaction example:
 
@@ -607,9 +732,12 @@ python examples/gpu_render_benchmark.py --renderer scaffold --frames 30 --width 
 renderer-core work now belongs in the sibling `py_gpu` package. That package
 owns reusable batch contracts, backend selection, optional NumPy acceleration,
 and ModernGL/WebGPU/OpenGL experiments. `py_gpu.adapters.py3d.Py3DRasterRenderer`
-is the first bridge back into `py_3d` scenes. It is currently a flat-color batch
-adapter; full lit/material parity and persistent geometry uploads are the next
-step before this bridge should replace the reference renderer for normal demos.
+is the first bridge back into `py_3d` scenes. It defaults to a
+reference-compatible path for normal demos so live windows match the CPU
+renderer's lighting, textures, bulletins, and material attributes. Its
+experimental flat batch GPU path remains available for benchmarks; full
+lit/material parity and persistent geometry uploads are still the next
+acceleration milestone.
 
 ## Testing Expectations
 

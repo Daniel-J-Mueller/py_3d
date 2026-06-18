@@ -1,6 +1,9 @@
+import weakref
+
 import pytest
 
-from py_3d import Bowl, Box, CPURenderer, Camera, Color, GPURenderer, Lamp, Material, PixelBuffer, Plane, RenderEngine, RenderSettings, Scene, Sphere, Sun, TextBulletin, Triangle, build_gpu_scene_batch
+from py_3d import Bowl, Box, CPURenderer, Camera, Color, GPURenderer, Lamp, Material, PixelBuffer, Plane, RenderEngine, RenderSettings, Scene, Sphere, Sun, TextBulletin, Triangle, Vec3, build_gpu_scene_batch
+from py_3d.render import _lighting_channels
 
 
 def test_cpu_renderer_renders_triangle_offscreen():
@@ -13,7 +16,7 @@ def test_cpu_renderer_renders_triangle_offscreen():
             Material(color=(200, 80, 40)),
         )
     )
-    scene.add_light(Sun(direction=(0, 0, -1), intensity=1.0))
+    scene.add_light(Sun(direction=(0, 0, 1), intensity=1.0))
     camera = Camera(position=(0, 0, -4), target=(0, 0, 0))
 
     buffer = RenderEngine().render(scene, camera, RenderSettings(width=64, height=64))
@@ -149,6 +152,78 @@ def test_cached_and_uncached_cpu_renderers_match_basic_scene():
     uncached = RenderEngine(CPURenderer(cache_static_geometry=False)).render(scene, camera, settings)
 
     assert cached.pixels == uncached.pixels
+
+
+def test_cpu_renderer_cache_verifies_object_identity_before_reuse():
+    renderer = CPURenderer(cache_static_geometry=True)
+    settings = RenderSettings(width=32, height=32, sphere_segments=8, sphere_rings=4)
+    old_sphere = Sphere((0, 0, 0), 0.5)
+    old_triangles = renderer._prepared_triangles_for(old_sphere, settings)
+    new_sphere = Sphere((2, 0, 0), 0.5)
+    key = (type(new_sphere), id(new_sphere), settings.sphere_segments, settings.sphere_rings)
+    renderer._triangle_cache[key] = (weakref.ref(old_sphere), old_triangles)
+
+    new_triangles = renderer._prepared_triangles_for(new_sphere, settings)
+
+    assert new_triangles is not old_triangles
+    assert new_triangles[0].center.x > 1.0
+
+
+def test_ray_traced_shadow_option_blocks_direct_light():
+    material = Material(color=(255, 255, 255))
+    settings = RenderSettings(width=32, height=32, ray_traced_shadows=True)
+    scene = Scene()
+    scene.add(Triangle((-1, -1, -1), (1, -1, -1), (0, 1, -1), Material()))
+    scene.add_light(Lamp(position=(0, 0, -2), color=(255, 255, 255), intensity=3.0))
+
+    shadowed = _lighting_channels(scene, Vec3(0, 0, 0), Vec3(0, 0, -1), Vec3(0, 0, -1), material, settings)
+
+    assert shadowed.diffuse == (0.0, 0.0, 0.0)
+
+
+def test_ray_traced_shadow_respects_material_light_transmission():
+    material = Material(color=(255, 255, 255))
+    blocker = Material(light_transmission=0.5)
+    settings = RenderSettings(width=32, height=32, ray_traced_shadows=True)
+    scene = Scene()
+    scene.add(Triangle((-1, -1, -1), (1, -1, -1), (0, 1, -1), blocker))
+    scene.add_light(Lamp(position=(0, 0, -2), color=(255, 255, 255), intensity=3.0))
+
+    transmitted = _lighting_channels(scene, Vec3(0, 0, 0), Vec3(0, 0, -1), Vec3(0, 0, -1), material, settings)
+
+    assert transmitted.diffuse[0] > 0.0
+    assert transmitted.diffuse[0] < 3.0
+
+
+def test_gamma_brightens_midtones_when_greater_than_one():
+    scene = Scene()
+    scene.add(Triangle((-1, -1, 0), (1, -1, 0), (0, 1, 0), Material(color=(128, 128, 128), emission=(128, 128, 128))))
+    camera = Camera(position=(0, 0, -4), target=(0, 0, 0))
+
+    linear = RenderEngine().render(scene, camera, RenderSettings(width=65, height=65, gamma=1.0)).get_pixel(32, 32)
+    corrected = RenderEngine().render(scene, camera, RenderSettings(width=65, height=65, gamma=2.2)).get_pixel(32, 32)
+
+    assert corrected.r > linear.r
+
+
+def test_edge_highlight_outlines_boundary_edges():
+    scene = Scene()
+    scene.add(Triangle((-0.8, -0.55, 0), (0.8, -0.55, 0), (0.0, 0.75, 0), Material(color=(70, 100, 190), emission=(20, 20, 30))))
+    camera = Camera(position=(0, 0, -3.0), target=(0, 0, 0))
+
+    buffer = RenderEngine().render(
+        scene,
+        camera,
+        RenderSettings(
+            width=80,
+            height=60,
+            edge_highlight=True,
+            edge_highlight_color=(255, 0, 0),
+            edge_highlight_depth_bias=0.01,
+        ),
+    )
+
+    assert any(pixel == Color(255, 0, 0) for pixel in buffer.pixels)
 
 
 def test_gpu_renderer_scaffold_can_fall_back_to_cpu():
