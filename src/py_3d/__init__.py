@@ -2,6 +2,7 @@
 
 from .buffer import DepthBuffer, PixelBuffer
 from .camera import Camera, ProjectedPoint
+from .collision import BoxCollider, PlaneCollider, SphereCollider
 from .color import Color
 from . import draw
 from .importers import load_obj, load_stl
@@ -18,6 +19,7 @@ from .textures import planar_project_triangles
 
 __all__ = [
     "Box",
+    "BoxCollider",
     "CPURenderer",
     "Camera",
     "Color",
@@ -29,6 +31,7 @@ __all__ = [
     "Mesh",
     "PixelBuffer",
     "Plane",
+    "PlaneCollider",
     "Point3",
     "ProjectedPoint",
     "PhysicsWorld",
@@ -37,6 +40,7 @@ __all__ = [
     "Renderer",
     "Scene",
     "Sphere",
+    "SphereCollider",
     "SphereBody",
     "StaticBox",
     "StaticPlane",

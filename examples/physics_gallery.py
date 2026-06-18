@@ -15,6 +15,7 @@ from py_3d import (
     RenderSettings,
     Scene,
     SphereBody,
+    SphereCollider,
     StaticBox,
     StaticPlane,
     Sun,
@@ -152,6 +153,7 @@ def save_bumpy_ball() -> None:
         friction=0.05,
         material=Material(color=(230, 95, 70), roughness=0.35, fuzziness=0.4),
         visual_perturbation=SurfacePerturbation(magnitude=0.08, scale=3.2, seed=22, octaves=4),
+        collision_boundary=SphereCollider(radius=0.34),
     )
     ramp = StaticPlane(
         point=(0.0, 0.0, 0.0),

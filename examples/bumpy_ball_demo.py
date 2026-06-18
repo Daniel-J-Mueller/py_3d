@@ -13,6 +13,7 @@ from py_3d import (
     RenderEngine,
     RenderSettings,
     SphereBody,
+    SphereCollider,
     StaticBox,
     StaticPlane,
     Sun,
@@ -39,6 +40,7 @@ def main() -> None:
         friction=0.05,
         material=ball_material,
         visual_perturbation=perturbation,
+        collision_boundary=SphereCollider(radius=0.34),
     )
     ramp = StaticPlane(
         point=(0.0, 0.0, 0.0),

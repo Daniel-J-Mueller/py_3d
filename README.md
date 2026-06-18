@@ -33,6 +33,10 @@ in `renderings-tests/` so visual changes are easy to inspect.
 | --- | --- | --- |
 | ![physics floor bounce](renderings-tests/physics_floor_bounce.png) | ![physics wall bank](renderings-tests/physics_wall_bank.png) | ![bumpy ball physics](renderings-tests/bumpy_ball_physics.png) |
 
+| Collision override |
+| --- |
+| ![collision boundary override](renderings-tests/collision_boundary_override.png) |
+
 ## Project Goals
 
 - Provide a clean Python API for 3D pixel drawing on Windows and Linux.
@@ -253,6 +257,21 @@ The collision system should start with simple shapes and simple guarantees:
 The system should be good enough for educational demos and basic simulation
 prototypes before it tries to handle advanced rigid-body behavior.
 
+Physics collision boundaries are explicit and may be separate from render
+geometry:
+
+- `SphereCollider(radius, offset=...)`
+- `BoxCollider(size, offset=...)`
+- `PlaneCollider(point, normal)`
+
+Dynamic and static bodies derive collision boundaries from their render geometry
+by default. For example, a `SphereBody` with no `collision_boundary` uses the
+render sphere radius. If the render sphere has `SurfacePerturbation`, the synced
+collider includes that perturbation magnitude as a conservative boundary.
+Supplying `collision_boundary=...` overrides this. Use
+`sync_collision_boundary(force=True)` to intentionally replace an override with
+the current render-derived boundary.
+
 ## Proposed Package Layout
 
 ```text
@@ -281,7 +300,7 @@ examples/
 This layout is a starting point, not a requirement. Keep modules small and
 split them when a file starts mixing unrelated responsibilities.
 
-Current implemented modules are `buffer`, `camera`, `color`, `draw`,
+Current implemented modules are `buffer`, `camera`, `collision`, `color`, `draw`,
 `importers`, `lights`, `materials`, `math3d`, `overlays`, `physics`,
 `noise`, `primitives`, `render`, `scene`, and `textures`.
 
@@ -359,6 +378,16 @@ python examples/bumpy_ball_demo.py
 It renders a TV-textured high-poly sphere with `SurfacePerturbation` noise while
 using the current sphere collision model for motion. It writes
 `renderings-tests/bumpy_ball_physics.png`.
+
+Generate the collision-boundary override sample:
+
+```bash
+python examples/collision_boundary_demo.py
+```
+
+It renders bumpy visual geometry with a separate active collision sphere and
+shows the difference between synced and overridden collision boundaries. It
+writes `renderings-tests/collision_boundary_override.png`.
 
 Run the live navigation example:
 
@@ -476,6 +505,8 @@ sources.
 - Add collision modes that can optionally account for perturbed geometry or
   sampled height fields. Keep simple sphere/box/plane collision fast and
   available as the default.
+- Expand collision debug rendering so active boundaries can be drawn as
+  wireframes or translucent overlays once per-object render modes exist.
 
 ## Design Principle
 

@@ -81,14 +81,18 @@ behavior while the engine grows.
 - Use `planar_project_triangles` for simple face-centered texture projection
   workflows before inventing heavier UV unwrapping abstractions.
 - Treat `SurfacePerturbation` as generated geometry. It can make a sphere look
-  bumpy, but it should not silently change physics collision behavior. Add
-  explicit collision modes later for perturbed meshes or height fields.
+  bumpy. The default synced sphere collider should conservatively include the
+  perturbation magnitude, while explicit overrides can keep collision simpler.
+  Add explicit collision modes later for perturbed meshes or height fields.
 
 ## Collision and Physics Guidance
 
 - Start with simple, robust primitives: sphere, plane, axis-aligned box, oriented
   box, triangle, and ray.
 - Keep collision detection separate from time integration.
+- Keep collision boundaries separate from render geometry. Render geometry
+  should drive the default collider via sync helpers, and explicit collider
+  overrides should be easy to inspect.
 - Use fixed-step world updates for deterministic examples.
 - Keep units explicit in names and docs when possible.
 - Add examples only when the underlying behavior is test-covered.
