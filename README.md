@@ -7,8 +7,9 @@ running live demo experiences.
 
 The project is intentionally direct: scenes are Python objects, render settings
 are explicit, and the CPU renderer remains a readable correctness reference.
-Live demos can use the OpenGL-oriented path when available, and the optional
-`py_gpu` bridge is prepared as a separate package for GPU backend work.
+Live demos can use the built-in native `PixelWindow` presenter for simple
+windows, and the optional `py_gpu` bridge is prepared as a separate package for
+GPU backend work.
 
 Install the engine:
 
@@ -34,6 +35,7 @@ The PyPI distribution name is `py3dengine`; the Python import package is
 - [Quick Start](#quick-start)
 - [Visual Showcase](#visual-showcase)
 - [Demo Menu](#demo-menu)
+- [Portal Game Example](#portal-game-example)
 - [Rendering Examples](#rendering-examples)
 - [Textures And Materials](#textures-and-materials)
 - [Physics Examples](#physics-examples)
@@ -64,6 +66,8 @@ The PyPI distribution name is `py3dengine`; the Python import package is
   vector-particle fluid behavior.
 - HUD overlay primitives for text, rectangles, images, opacity, and simple
   animations over live scenes.
+- Native portal surfaces, linked portal pairs, simple inventory slots, and
+  inventory-backed cube placement for small games.
 - A reusable sky prefab with sun angle, day/night time, cycle length, cloud
   toggles, star toggles, and directional sun light derived from the sky state.
 - Import helpers for OBJ, STL, prepared `*.py3dmesh.json` assets, PNG textures,
@@ -217,6 +221,13 @@ python -m pip install -e .
 py3dengine --help
 ```
 
+If Windows installed `py3dengine.exe` outside `PATH`, use either:
+
+```powershell
+python -m py_3d.cli --help
+python init_example_game.py
+```
+
 Use the CLI to pull editable prefab JSON docs or create a starter two-cube
 scene with an environment file, object file, and runnable Python file:
 
@@ -224,6 +235,14 @@ scene with an environment file, object file, and runnable Python file:
 py3dengine --write-prefab-docs USER/prefab-docs
 py3dengine init --output USER/projects/starter-cubes
 python USER/projects/starter-cubes/main.py
+```
+
+Generate a complete beginner game project with JSON config and a runner:
+
+```powershell
+python init_example_game.py
+python USER-GAMES/example-game/run_game.py --render-preview
+python USER-GAMES/example-game/run_game.py
 ```
 
 List the experiences without opening a window:
@@ -260,11 +279,36 @@ Current menu entries:
 | `13_live_fruit_bowl_poly_lamp.py` | Low-poly wood bowl, hanging lamp primitive, and baked sign text. |
 | `14_render_sea_lion_asset.py` | Prepared mesh asset render with preserved UVs and procedural skin texture. |
 | `15_render_fan_cloth_water.py` | Fan, spring cloth, vector-fluid water, and bowl interaction. |
+| `16_live_fruit_bowl_rgb_bulbs.py` | Fruit bowl live variant with standalone R/G/B bulbs blinking through eight states. |
+| `17_render_hud_demo.py` | Renders FPS and third-person HUD example PNGs. |
 | `20_render_feature_previews.py` | Batch still-image feature previews. |
 | `30_render_environment_videos.py` | Batch environment video renders. |
 | `40_run_feature_tests.py` | User-facing test runner for demos and environments. |
 
 More detail lives in [docs/live-demos.md](docs/live-demos.md).
+
+## Portal Game Example
+
+The sibling `portal-python` repo is a thin game shell that calls `py_3d` and
+`py_gpu`. The engine owns the native `PortalSurface`, `PortalPair`, `Inventory`,
+cube placement helpers, and native `PixelWindow` display path; the game mostly
+loads JSON and runs a single level without an external game-window package.
+
+From PowerShell:
+
+```powershell
+cd C:\Users\Danie\OneDrive\Desktop\portal-python
+python -m pip install -e ..\py_3d
+python -m pip install -e ..\py_gpu
+python run_game.py --render-preview --place-cube
+python run_game.py
+```
+
+If you want to force the reference renderer while testing:
+
+```powershell
+python run_game.py --renderer cpu --render-preview --place-cube
+```
 
 ## Rendering Examples
 
@@ -451,30 +495,37 @@ panels, text can be scaled, images can be drawn from `PixelBuffer`, and
 live demos. Options can be grouped into tabs:
 
 ```python
-from py_3d.live import LiveMenu, LiveMenuOption
+from py_3d.live import LiveMenu, LiveMenuOption, LiveMenuTheme
 
 menu = LiveMenu(
     "Graphics Settings",
     (
         LiveMenuOption("quality", "Quality: High", "Render scale and mesh density", "Graphics"),
         LiveMenuOption("reflection_up", "Reflections +", "Raise reflection bounce budget", "Graphics"),
+        LiveMenuOption("reflection_down", "Reflections -", "Lower reflection bounce budget", "Graphics"),
         LiveMenuOption("sky_cycle", "Day/Night Cycle", "Toggle animated sky clock", "Sky"),
         LiveMenuOption("done", "Done"),
         LiveMenuOption("apply", "Apply"),
         LiveMenuOption("cancel", "Exit Menu"),
     ),
+    theme=LiveMenuTheme(panel=(0, 0, 0, 238)),
 )
 ```
 
 The menu supports mouse hover, mouse click, mouse wheel scrolling, keyboard tab
-navigation, Apply/Done/Exit buttons, and footer actions.
+navigation, Apply/Done/Exit buttons, footer actions, optional background blur,
+custom themes, and paired `*_up`/`*_down` options rendered as compact `-`/`+`
+buttons beside one setting row.
 
 ## GPU Bridge
 
 `py3dengine` exposes two GPU-related paths:
 
-- `py_3d.live.ModernGLLiveRenderer` for interactive OpenGL presentation in live
-  demos.
+- `py_3d.PixelWindow` for simple live app windows without external game-window
+  packages.
+- `py_3d.live.ModernGLLiveRenderer`, which now chooses a direct GLFW/ModernGL
+  window and swapchain when available, with persistent GPU buffers, shader-side
+  lighting/materials, texture arrays, and a native pixel presenter fallback.
 - `py_gpu`, a separate optional package/repository, which exposes
   `py_gpu.adapters.py3d.Py3DRasterRenderer`.
 
@@ -567,7 +618,9 @@ python examples/fruit_bowl_demo.py --smooth-shading --width 640 --height 360 --o
 python examples/fruit_bowl_demo.py --ray-traced-shadows --reflection-bounces 2 --shadow-samples 4 --shadow-softness 0.12 --no-smooth-shading --width 480 --height 270 --sphere-segments 12 --sphere-rings 6 --output USER/environments/fruit_bowl/renderings/fruit_bowl_ray_traced.png --label "FRUIT BOWL RAY SHADOWS"
 python examples/fruit_bowl_demo.py --bowl-material mirror --light-mode mirror-prelight --smooth-shading --width 640 --height 360 --output USER/environments/fruit_bowl/renderings/fruit_bowl_mirror_prelight.png --label "MIRROR BOWL PRELIGHT"
 python examples/fruit_bowl_demo.py --edge-highlight --edge-highlight-angle 35 --smooth-shading --width 640 --height 360 --output USER/environments/fruit_bowl/renderings/fruit_bowl_edges_35deg.png --label "FRUIT BOWL EDGES 35 DEG"
+python examples/fruit_bowl_rgb_bulbs_live.py --renderer py_gpu
 python examples/fan_cloth_water_demo.py --quality fast --width 640 --height 360 --output USER/environments/fan_cloth_water/renderings/fan_cloth_water.png
+python examples/hud_demo.py --output-dir renderings-tests
 python examples/sea_lion_asset_demo.py --width 640 --height 420 --output USER/environments/sea_lion/renderings/sea_lion_asset.png
 python examples/slime_fluid_demo.py --output USER/environments/slime_fluid/renderings/slime_fluid.png
 python examples/rocket_tube_demo.py --width 640 --height 360 --output USER/environments/rocket_tube/renderings/rocket_tube.png

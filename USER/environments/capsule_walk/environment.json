@@ -5,13 +5,13 @@
   "baking_dir": "USER/environments/capsule_walk/baking",
   "render_data": "USER/environments/capsule_walk/render-data.json",
   "live": {
-    "third": [
+    "default": [
       "python",
       "examples/capsule_walk_demo.py",
       "--renderer",
       "py_gpu",
       "--camera-mode",
-      "third"
+      "first"
     ],
     "first": [
       "python",
@@ -20,6 +20,14 @@
       "py_gpu",
       "--camera-mode",
       "first"
+    ],
+    "third": [
+      "python",
+      "examples/capsule_walk_demo.py",
+      "--renderer",
+      "py_gpu",
+      "--camera-mode",
+      "third"
     ],
     "global": [
       "python",

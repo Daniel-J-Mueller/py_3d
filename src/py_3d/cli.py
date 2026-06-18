@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 VERSION = "0.0.2"
 DEFAULT_STARTER_DIR = "py3dengine_starter"
+DEFAULT_GAME_DIR = Path("USER-GAMES") / "example-game"
 
 
 ENVIRONMENT_OPTION_DOC: dict[str, Any] = {
@@ -364,6 +365,31 @@ def scaffold_starter(
     }
 
 
+def scaffold_example_game(output_dir: str | Path = DEFAULT_GAME_DIR, *, force: bool = False) -> dict[str, Path]:
+    """Write a beginner-friendly example game project with a runner."""
+
+    target = Path(output_dir)
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "assets").mkdir(exist_ok=True)
+    (target / "output").mkdir(exist_ok=True)
+
+    files = {
+        "readme": target / "README.md",
+        "environment": target / "environment.json",
+        "objects": target / "objects.json",
+        "settings": target / "settings.json",
+        "game": target / "game.py",
+        "runner": target / "run_game.py",
+    }
+    _write_text(files["readme"], example_game_readme(), force=force)
+    _write_json(files["environment"], example_game_environment(), force=force)
+    _write_json(files["objects"], example_game_objects(), force=force)
+    _write_json(files["settings"], example_game_settings(), force=force)
+    _write_text(files["game"], example_game_source(), force=force)
+    _write_text(files["runner"], example_game_runner_source(), force=force)
+    return files
+
+
 def starter_python_source() -> str:
     """Return the generated starter Python source."""
 
@@ -456,6 +482,318 @@ def starter_python_source() -> str:
     )
 
 
+def example_game_environment() -> dict[str, Any]:
+    return {
+        "schema": "py3dengine.example-game.environment.v1",
+        "name": "example-game",
+        "render_settings": {
+            "width": 480,
+            "height": 270,
+            "background": [10, 12, 16],
+            "ambient": 0.18,
+            "gamma": 1.12,
+            "light_wrap": 0.12,
+            "bounce_light": 0.12,
+            "tone_mapping": True,
+            "smooth_shading": True,
+            "sphere_segments": 16,
+            "sphere_rings": 8,
+            "texture_size": 256,
+        },
+        "camera": {
+            "mode": "follow",
+            "offset": [0.0, 2.15, -4.2],
+            "target_offset": [0.0, 0.45, 0.7],
+            "fov_degrees": 58.0,
+        },
+        "lights": [
+            {"type": "sun", "direction": [-0.45, -0.8, -0.45], "color": [255, 246, 226], "intensity": 0.9},
+            {"type": "lamp", "position": [2.8, 2.4, -2.5], "color": [180, 210, 255], "intensity": 2.4},
+        ],
+        "player": {
+            "name": "player",
+            "start": [0.0, 0.3, -1.6],
+            "size": [0.36, 0.6, 0.36],
+            "speed": 2.2,
+            "color": [92, 186, 255],
+        },
+        "goal": {
+            "name": "goal",
+            "position": [1.65, 0.35, 1.45],
+            "radius": 0.42,
+            "color": [255, 216, 92],
+        },
+        "output": "output/preview.png",
+    }
+
+
+def example_game_objects() -> dict[str, Any]:
+    return {
+        "schema": "py3dengine.example-game.objects.v1",
+        "objects": [
+            {
+                "type": "box",
+                "name": "floor",
+                "center": [0.0, -0.05, 0.0],
+                "size": [5.8, 0.1, 5.8],
+                "material": {"color": [66, 74, 72], "roughness": 0.65, "specular": 0.05},
+            },
+            {
+                "type": "box",
+                "name": "low_wall",
+                "center": [-1.25, 0.24, 0.55],
+                "size": [1.25, 0.48, 0.34],
+                "material": {"color": [144, 118, 84], "roughness": 0.58, "specular": 0.08},
+            },
+            {
+                "type": "box",
+                "name": "tall_wall",
+                "center": [1.05, 0.45, -0.25],
+                "size": [0.42, 0.9, 1.25],
+                "material": {"color": [116, 138, 152], "roughness": 0.5, "specular": 0.12},
+            },
+        ],
+    }
+
+
+def example_game_settings() -> dict[str, Any]:
+    return {
+        "schema": "py3dengine.example-game.settings.v1",
+        "window": {"scale": 2, "title": "py_3d"},
+        "controls": {
+            "move": ["W", "A", "S", "D"],
+            "render_preview": "P",
+            "reset": "R",
+            "quit": "Escape",
+        },
+        "hud": {
+            "show_help": True,
+            "health": 100,
+            "level": 1,
+        },
+    }
+
+
+def example_game_runner_source() -> str:
+    return dedent(
+        '''\
+        """Run the generated py3dengine example game."""
+
+        from game import main
+
+
+        if __name__ == "__main__":
+            main()
+        '''
+    )
+
+
+def example_game_readme() -> str:
+    return dedent(
+        '''\
+        # py_3d example-game
+
+        This is a tiny generated starter game. It uses JSON files for the
+        environment, objects, player, goal, and render settings so new projects
+        have obvious places to start editing.
+
+        Run it:
+
+        ```powershell
+        python run_game.py
+        ```
+
+        Render one still frame without opening the live window:
+
+        ```powershell
+        python run_game.py --render-preview
+        ```
+
+        Edit `environment.json` for camera, lighting, player, and render
+        settings. Edit `objects.json` for level geometry.
+        '''
+    )
+
+
+def example_game_source() -> str:
+    return dedent(
+        '''\
+        """A small generated py3dengine game starter."""
+
+        from __future__ import annotations
+
+        import argparse
+        import json
+        from pathlib import Path
+        import sys
+        import time
+
+        REPO_ROOT = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(REPO_ROOT / "src"))
+
+        from py_3d import Box, Camera, Color, Lamp, Material, PixelWindow, RenderEngine, RenderSettings, Scene, Sphere, Sun, TextBulletin, Vec3
+
+
+        ROOT = Path(__file__).resolve().parent
+
+
+        def read_json(name: str) -> dict:
+            return json.loads((ROOT / name).read_text(encoding="utf-8"))
+
+
+        def material_from_json(config: dict) -> Material:
+            return Material(
+                color=config.get("color", [255, 255, 255]),
+                roughness=config.get("roughness", 0.35),
+                specular=config.get("specular", 0.0),
+                shininess=config.get("shininess", 24.0),
+                reflectivity=config.get("reflectivity", 0.0),
+            )
+
+
+        def object_from_json(config: dict):
+            if config.get("type") == "box":
+                return Box(config["center"], config["size"], material_from_json(config.get("material", {})))
+            raise ValueError(f"Unsupported object type: {config.get('type')}")
+
+
+        def light_from_json(config: dict):
+            if config.get("type") == "sun":
+                return Sun(config["direction"], color=config.get("color", [255, 255, 255]), intensity=config.get("intensity", 1.0))
+            if config.get("type") == "lamp":
+                return Lamp(config["position"], color=config.get("color", [255, 255, 255]), intensity=config.get("intensity", 1.0))
+            raise ValueError(f"Unsupported light type: {config.get('type')}")
+
+
+        class ExampleGame:
+            def __init__(self) -> None:
+                self.environment = read_json("environment.json")
+                self.objects = read_json("objects.json")
+                self.settings_doc = read_json("settings.json")
+                player = self.environment["player"]
+                self.player_position = Vec3(*player["start"])
+                self.player_size = Vec3(*player["size"])
+                self.player_speed = float(player.get("speed", 2.0))
+                self.keys: set[str] = set()
+                self.health = int(self.settings_doc.get("hud", {}).get("health", 100))
+                self.level = int(self.settings_doc.get("hud", {}).get("level", 1))
+                self.engine = RenderEngine()
+                self.settings = RenderSettings(**self.environment.get("render_settings", {}))
+
+            def scene(self) -> Scene:
+                player_color = self.environment["player"].get("color", [92, 186, 255])
+                goal = self.environment["goal"]
+                scene = Scene(background=self.settings.background)
+                scene.add(*(object_from_json(item) for item in self.objects.get("objects", [])))
+                scene.add(Box(self.player_position, self.player_size, Material(color=player_color, roughness=0.32, specular=0.24, shininess=32.0)))
+                scene.add(Sphere(goal["position"], goal.get("radius", 0.4), Material(color=goal.get("color", [255, 220, 90]), emission=(18, 14, 4), roughness=0.25, specular=0.25)))
+                scene.add_light(*(light_from_json(item) for item in self.environment.get("lights", [])))
+                scene.add_bulletin(TextBulletin(self.hud_text(), (10, 10), color=(245, 248, 255), background=(0, 0, 0), padding=5, scale=1))
+                return scene
+
+            def hud_text(self) -> str:
+                speed = self.current_speed()
+                return f"EXAMPLE GAME  LEVEL {self.level}\\nHEALTH {self.health:03d}  SPEED {speed:0.1f}\\nWASD MOVE  P PREVIEW  R RESET"
+
+            def current_speed(self) -> float:
+                moving = sum(1 for key in ("w", "a", "s", "d") if key in self.keys)
+                return self.player_speed if moving else 0.0
+
+            def camera(self) -> Camera:
+                camera_doc = self.environment["camera"]
+                offset = Vec3(*camera_doc.get("offset", [0.0, 2.0, -4.0]))
+                target_offset = Vec3(*camera_doc.get("target_offset", [0.0, 0.45, 0.7]))
+                return Camera(
+                    position=self.player_position + offset,
+                    target=self.player_position + target_offset,
+                    fov_degrees=camera_doc.get("fov_degrees", 58.0),
+                )
+
+            def step(self, dt: float) -> None:
+                move = Vec3(0.0, 0.0, 0.0)
+                if "w" in self.keys:
+                    move += Vec3(0.0, 0.0, 1.0)
+                if "s" in self.keys:
+                    move += Vec3(0.0, 0.0, -1.0)
+                if "a" in self.keys:
+                    move += Vec3(-1.0, 0.0, 0.0)
+                if "d" in self.keys:
+                    move += Vec3(1.0, 0.0, 0.0)
+                if move.length_squared() > 0.0:
+                    self.player_position += move.normalized() * (self.player_speed * dt)
+                    self.player_position = Vec3(
+                        max(-2.55, min(2.55, self.player_position.x)),
+                        self.player_position.y,
+                        max(-2.55, min(2.55, self.player_position.z)),
+                    )
+
+            def render(self):
+                return self.engine.render(self.scene(), self.camera(), self.settings)
+
+            def render_preview(self) -> Path:
+                output = ROOT / self.environment.get("output", "output/preview.png")
+                output.parent.mkdir(parents=True, exist_ok=True)
+                self.render().to_png(output)
+                print(f"Wrote {output}")
+                return output
+
+            def reset(self) -> None:
+                self.player_position = Vec3(*self.environment["player"]["start"])
+                self.health = int(self.settings_doc.get("hud", {}).get("health", 100))
+
+            def run(self) -> None:
+                scale = max(1, int(self.settings_doc.get("window", {}).get("scale", 2)))
+                window = PixelWindow(
+                    self.settings.width * scale,
+                    self.settings.height * scale,
+                    title=self.settings_doc.get("window", {}).get("title", "py_3d"),
+                    fit_window=True,
+                )
+                last_tick = time.perf_counter()
+                target_dt = 1.0 / 60.0
+
+                while not window.closed:
+                    now = time.perf_counter()
+                    dt = max(1.0 / 120.0, min(0.05, now - last_tick))
+                    last_tick = now
+                    for event in window.poll_events():
+                        if event.kind == "quit":
+                            window.close()
+                        elif event.kind == "key_down":
+                            if event.key == "escape":
+                                window.close()
+                            elif event.key == "p":
+                                self.render_preview()
+                            elif event.key == "r":
+                                self.reset()
+                            else:
+                                self.keys.add(event.key)
+                        elif event.kind == "key_up":
+                            self.keys.discard(event.key)
+                    self.step(dt)
+                    window.show(self.render())
+                    elapsed = time.perf_counter() - now
+                    if elapsed < target_dt:
+                        time.sleep(target_dt - elapsed)
+
+
+        def main() -> None:
+            parser = argparse.ArgumentParser(description="Run the generated py3dengine example game.")
+            parser.add_argument("--render-preview", action="store_true", help="Write one PNG frame and exit.")
+            args = parser.parse_args()
+            game = ExampleGame()
+            if args.render_preview:
+                game.render_preview()
+            else:
+                game.run()
+
+
+        if __name__ == "__main__":
+            main()
+        '''
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="py3dengine",
@@ -467,6 +805,7 @@ def build_parser() -> argparse.ArgumentParser:
               py3dengine docs --output USER/prefab-docs
               py3dengine init --output USER/projects/starter-cubes
               py3dengine init --defaults --output starter-cubes
+              py3dengine game --output USER-GAMES/example-game
             """
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -493,6 +832,10 @@ def build_parser() -> argparse.ArgumentParser:
     init.add_argument("--name", default="starter_cubes", help="Scene name written into environment.json.")
     init.add_argument("--defaults", action="store_true", help="Use documented default options without prompting.")
     init.add_argument("--force", action="store_true", help="Overwrite existing generated files.")
+
+    game = subparsers.add_parser("game", help="Generate a turnkey USER-GAMES/example-game project.")
+    game.add_argument("--output", "-o", default=str(DEFAULT_GAME_DIR), help="Directory to receive the generated game.")
+    game.add_argument("--force", action="store_true", help="Overwrite existing generated files.")
     return parser
 
 
@@ -521,6 +864,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Wrote {paths['objects']}")
         print(f"Wrote {paths['main']}")
         print(f"Run: python {paths['main']}")
+        return 0
+
+    if args.command == "game":
+        paths = scaffold_example_game(args.output, force=args.force)
+        print(f"Wrote {paths['readme']}")
+        print(f"Wrote {paths['environment']}")
+        print(f"Wrote {paths['objects']}")
+        print(f"Wrote {paths['settings']}")
+        print(f"Wrote {paths['game']}")
+        print(f"Wrote {paths['runner']}")
+        print(f"Run: python {paths['runner']}")
         return 0
 
     parser.print_help()
@@ -598,6 +952,7 @@ __all__ = [
     "default_environment_selections",
     "environment_from_selections",
     "scaffold_starter",
+    "scaffold_example_game",
     "select_environment_options",
     "starter_python_source",
     "two_cube_objects",

@@ -17,6 +17,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fit-window", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--vsync", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--live-wireframe", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--menu-blur", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--quality", help="Render quality preset from USER/settings.json.")
     parser.add_argument("--ambient", type=float, default=0.0)
     parser.add_argument("--gamma", type=float, default=1.0)
@@ -26,7 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--label", default="KINEMATIC FRUIT BOWL")
     parser.add_argument(
         "--light-mode",
-        choices=("multiple", "blinking", "multicolor", "color-shift-blink", "mirror-prelight", "poly-lamp", "hanging-lamp"),
+        choices=("multiple", "blinking", "multicolor", "color-shift-blink", "mirror-prelight", "poly-lamp", "hanging-lamp", "rgb-bulbs"),
         default="multiple",
     )
     parser.add_argument("--bowl-material", choices=("wood", "mirror"), default="wood")
@@ -56,9 +57,9 @@ def main() -> None:
             GLFruitBowlViewer(args).run()
             return
         except Exception as exc:
-            print(f"OpenGL live renderer unavailable, falling back to Tk PixelBuffer path: {exc}")
+            print(f"py_3d live renderer unavailable, falling back to native PixelWindow path: {exc}")
     if args.fps == 0:
-        raise ValueError("fps must be positive for the Tk PixelBuffer fallback")
+        raise ValueError("fps must be positive for the native PixelWindow fallback")
     LiveFruitBowlViewer(args).run()
 
 

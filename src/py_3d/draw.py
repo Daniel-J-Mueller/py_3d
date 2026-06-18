@@ -12,9 +12,13 @@ FONT_5X7: dict[str, tuple[str, ...]] = {
     ".": ("00000", "00000", "00000", "00000", "00000", "01100", "01100"),
     ",": ("00000", "00000", "00000", "00000", "01100", "00100", "01000"),
     "-": ("00000", "00000", "00000", "11111", "00000", "00000", "00000"),
+    "+": ("00000", "00100", "00100", "11111", "00100", "00100", "00000"),
     "_": ("00000", "00000", "00000", "00000", "00000", "00000", "11111"),
     ":": ("00000", "01100", "01100", "00000", "01100", "01100", "00000"),
+    "'": ("00100", "00100", "01000", "00000", "00000", "00000", "00000"),
+    '"': ("01010", "01010", "01010", "00000", "00000", "00000", "00000"),
     "/": ("00001", "00010", "00100", "01000", "10000", "00000", "00000"),
+    "<": ("00001", "00010", "00100", "01000", "00100", "00010", "00001"),
     ">": ("10000", "01000", "00100", "00010", "00100", "01000", "10000"),
     "(": ("00010", "00100", "01000", "01000", "01000", "00100", "00010"),
     ")": ("01000", "00100", "00010", "00010", "00010", "00100", "01000"),
@@ -57,6 +61,41 @@ FONT_5X7: dict[str, tuple[str, ...]] = {
     "Z": ("11111", "00001", "00010", "00100", "01000", "10000", "11111"),
 }
 
+_GLYPH_RUNS: dict[str, tuple[tuple[int, int, int], ...]] = {}
+
+
+def _column_width(columns: int, *, scale: int = 1, spacing: int = 1) -> int:
+    if columns <= 0:
+        return 0
+    return columns * 5 * scale + (columns - 1) * spacing * scale
+
+
+def _max_columns_for_width(width: int, *, scale: int = 1, spacing: int = 1) -> int:
+    if width <= 0:
+        return 0
+    return max(0, (int(width) + spacing * scale) // ((5 + spacing) * scale))
+
+
+def _glyph_runs(char: str) -> tuple[tuple[int, int, int], ...]:
+    cached = _GLYPH_RUNS.get(char)
+    if cached is not None:
+        return cached
+    glyph = FONT_5X7.get(char, FONT_5X7["?"])
+    runs: list[tuple[int, int, int]] = []
+    for gy, row in enumerate(glyph):
+        run_start: int | None = None
+        for gx, mark in enumerate(row + "0"):
+            if mark == "1" and run_start is None:
+                run_start = gx
+                continue
+            if mark == "1" or run_start is None:
+                continue
+            runs.append((gy, run_start, gx - run_start))
+            run_start = None
+    cached = tuple(runs)
+    _GLYPH_RUNS[char] = cached
+    return cached
+
 
 def point(buffer: PixelBuffer, position: tuple[int, int], color: Color | tuple[int, int, int]) -> None:
     x, y = position
@@ -73,6 +112,14 @@ def line(
 
     x0, y0 = int(start[0]), int(start[1])
     x1, y1 = int(end[0]), int(end[1])
+    if y0 == y1:
+        left = min(x0, x1)
+        buffer.fill_rect((left, y0), (abs(x1 - x0) + 1, 1), color)
+        return
+    if x0 == x1:
+        top = min(y0, y1)
+        buffer.fill_rect((x0, top), (1, abs(y1 - y0) + 1), color)
+        return
     dx = abs(x1 - x0)
     dy = -abs(y1 - y0)
     sx = 1 if x0 < x1 else -1
@@ -106,9 +153,7 @@ def rect(
         raise ValueError("rectangle size must be positive")
 
     if fill:
-        for yy in range(y, y + height):
-            for xx in range(x, x + width):
-                buffer.set_pixel(xx, yy, color)
+        buffer.fill_rect((x, y), (width, height), color)
         return
 
     line(buffer, (x, y), (x + width - 1, y), color)
@@ -165,9 +210,51 @@ def text_size(text: str, *, scale: int = 1, spacing: int = 1, line_spacing: int 
         raise ValueError("text scale must be positive")
     lines = text.splitlines() or [""]
     max_columns = max((len(line) for line in lines), default=0)
-    width = 0 if max_columns == 0 else max_columns * 5 * scale + (max_columns - 1) * spacing * scale
+    width = _column_width(max_columns, scale=scale, spacing=spacing)
     height = len(lines) * 7 * scale + (len(lines) - 1) * line_spacing * scale
     return width, height
+
+
+def fit_text(value: str, max_width: int, *, scale: int = 1, spacing: int = 1, suffix: str = "..") -> str:
+    """Return text shortened to fit within ``max_width`` pixels."""
+
+    text_value = " ".join(str(value).split())
+    if _column_width(len(text_value), scale=scale, spacing=spacing) <= max_width:
+        return text_value
+    suffix_width = _column_width(len(suffix), scale=scale, spacing=spacing)
+    if suffix_width > max_width:
+        return ""
+    max_columns = _max_columns_for_width(max_width, scale=scale, spacing=spacing)
+    result = text_value[: max(0, max_columns - len(suffix))].rstrip()
+    return result + suffix if result else suffix
+
+
+def wrap_text(
+    value: str,
+    max_width: int,
+    *,
+    scale: int = 1,
+    spacing: int = 1,
+    max_lines: int = 4,
+) -> list[str]:
+    """Wrap text by rendered pixel width."""
+
+    words = str(value).split()
+    lines: list[str] = []
+    current = ""
+    for word in words:
+        candidate = word if not current else f"{current} {word}"
+        if text_size(candidate, scale=scale, spacing=spacing)[0] <= max_width:
+            current = candidate
+            continue
+        if current:
+            lines.append(current)
+            if len(lines) >= max_lines:
+                return [fit_text(line, max_width, scale=scale, spacing=spacing) for line in lines[:max_lines]]
+        current = fit_text(word, max_width, scale=scale, spacing=spacing) if text_size(word, scale=scale, spacing=spacing)[0] > max_width else word
+    if current and len(lines) < max_lines:
+        lines.append(current)
+    return [fit_text(line, max_width, scale=scale, spacing=spacing) for line in lines[:max_lines]]
 
 
 def text(
@@ -189,16 +276,11 @@ def text(
     for line_index, raw_line in enumerate(value.splitlines() or [""]):
         y_offset = line_index * (7 + line_spacing) * scale
         for char_index, raw_char in enumerate(raw_line.upper()):
-            glyph = FONT_5X7.get(raw_char, FONT_5X7["?"])
+            runs = _glyph_runs(raw_char)
             x_offset = char_index * (5 + spacing) * scale
-            for gy, row in enumerate(glyph):
-                for gx, mark in enumerate(row):
-                    if mark != "1":
-                        continue
-                    for sy in range(scale):
-                        for sx in range(scale):
-                            buffer.set_pixel(
-                                start_x + x_offset + gx * scale + sx,
-                                start_y + y_offset + gy * scale + sy,
-                                draw_color,
-                            )
+            for gy, run_start, run_width in runs:
+                buffer.fill_rect(
+                    (start_x + x_offset + run_start * scale, start_y + y_offset + gy * scale),
+                    (run_width * scale, scale),
+                    draw_color,
+                )

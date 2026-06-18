@@ -31,7 +31,7 @@ py3dengine = "py_3d.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
-gpu = ["py_gpu>=0.0.1"]
+gpu = ["py_gpu>=0.0.1", "moderngl>=5.12", "glfw>=2.10"]
 video = ["imageio-ffmpeg>=0.5"]
 
 [tool.setuptools.packages.find]

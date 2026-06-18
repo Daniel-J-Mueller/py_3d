@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sphere-rings", type=int, default=10)
     parser.add_argument("--renderer", choices=("scaffold", "py_gpu"), default="py_gpu")
     parser.add_argument("--reference-compatible", action="store_true", help="benchmark py_gpu's py_3d parity path instead of the accelerated batch path")
+    parser.add_argument("--fast-materials", action=argparse.BooleanOptionalAction, default=True, help="skip per-triangle lighting in the accelerated benchmark path")
     parser.add_argument("--strict", action="store_true", help="fail if no accelerated GPU rasterizer is available")
     return parser.parse_args()
 
@@ -46,7 +47,7 @@ def main() -> None:
         try:
             from py_gpu.adapters.py3d import Py3DRasterRenderer
 
-            renderer = Py3DRasterRenderer(reference_compatible=args.reference_compatible)
+            renderer = Py3DRasterRenderer(reference_compatible=args.reference_compatible, fast_materials=args.fast_materials and not args.reference_compatible)
         except Exception as exc:
             if args.strict:
                 raise RuntimeError("py_gpu renderer bridge is not available") from exc

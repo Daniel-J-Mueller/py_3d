@@ -62,6 +62,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--window-height", type=int, default=630)
     parser.add_argument("--fps", type=int, default=60)
     parser.add_argument("--vsync", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--menu-blur", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--ambient", type=float, default=0.02)
     parser.add_argument("--gamma", type=float, default=1.12)
     return parser.parse_args()
@@ -69,10 +70,8 @@ def parse_args() -> argparse.Namespace:
 
 class GLSeaLionAssetViewer:
     def __init__(self, args: argparse.Namespace, settings: RenderSettings) -> None:
-        import pygame
         from py_3d.live import LiveFlyCamera, LiveMenu, LiveMenuOption, ModernGLLiveRenderer
 
-        self.pygame = pygame
         self.args = args
         self.settings = settings
         self.sky = SkyPrefab(time_of_day=15.0, cycle_enabled=False, stars_enabled=True, clouds_enabled=True)
@@ -86,7 +85,7 @@ class GLSeaLionAssetViewer:
         self.renderer = ModernGLLiveRenderer(
             args.window_width,
             args.window_height,
-            title="py_3d sea lion asset - OpenGL live",
+            title="py_3d sea lion asset - live",
             vsync=getattr(args, "vsync", True),
         )
         self.renderer.menu = LiveMenu(
@@ -101,34 +100,36 @@ class GLSeaLionAssetViewer:
                 LiveMenuOption("snapshot", "Save snapshot"),
                 LiveMenuOption("quit", "Quit demo"),
             ),
+            background_blur=getattr(args, "menu_blur", False),
         )
         self._refresh_menu_options()
         self.renderer.set_mouse_captured(True)
         self._last_title_update = 0
 
     def run(self) -> None:
-        clock = self.pygame.time.Clock()
+        clock = self.renderer.frame_clock()
         dt = 1.0 / self.args.fps
         running = True
         try:
             while running:
-                for event in self.pygame.event.get():
-                    if event.type == self.pygame.QUIT:
+                for event in self.renderer.events():
+                    if self.renderer.is_quit_event(event):
                         running = False
                     elif self.renderer.handle_resize_event(event):
                         continue
-                    elif self.renderer.menu.visible and event.type in (self.pygame.MOUSEMOTION, self.pygame.MOUSEBUTTONDOWN, self.pygame.MOUSEWHEEL):
-                        menu_action = self.renderer.menu.handle_mouse_event(event, self.pygame)
+                    elif self.renderer.menu.visible and self.renderer.is_menu_pointer_event(event):
+                        menu_action = self.renderer.handle_menu_mouse_event(event)
                         if menu_action is not None:
                             running = self._handle_menu_action(menu_action)
-                    elif event.type == self.pygame.MOUSEBUTTONDOWN and not self.renderer.menu.visible:
+                    elif self.renderer.is_mouse_button_down_event(event) and not self.renderer.menu.visible:
                         self.renderer.set_mouse_captured(True)
-                    elif event.type == self.pygame.MOUSEMOTION and self.renderer.mouse_captured:
-                        self.camera_controller.look(event.rel[0], event.rel[1])
-                    elif event.type == self.pygame.KEYDOWN:
-                        running = self.on_key_down(event.key)
-                    elif event.type == self.pygame.KEYUP:
-                        self.on_key_up(event.key)
+                    elif self.renderer.is_mouse_motion_event(event) and self.renderer.mouse_captured:
+                        rel = self.renderer.event_mouse_rel(event)
+                        self.camera_controller.look(rel[0], rel[1])
+                    elif self.renderer.is_key_down_event(event):
+                        running = self.on_key_down(self.renderer.event_key(event))
+                    elif self.renderer.is_key_up_event(event):
+                        self.on_key_up(self.renderer.event_key(event))
 
                 self.camera_controller.move(self.keys, dt)
                 self.sky.step(dt)
@@ -148,14 +149,13 @@ class GLSeaLionAssetViewer:
         return scene
 
     def on_key_down(self, key: int) -> bool:
-        pygame = self.pygame
-        menu_action = self.renderer.menu.handle_key(key, pygame)
+        menu_action = self.renderer.handle_menu_key(key)
         if menu_action is not None:
             return self._handle_menu_action(menu_action)
         movement_key = self._movement_key(key)
         if movement_key is not None:
             self.keys.add(movement_key)
-        elif key == pygame.K_p:
+        elif self.renderer.key_matches(key, "p"):
             self.save_snapshot()
         return True
 
@@ -165,20 +165,19 @@ class GLSeaLionAssetViewer:
             self.keys.discard(movement_key)
 
     def _movement_key(self, key: int) -> str | None:
-        pygame = self.pygame
-        if key == pygame.K_w:
+        if self.renderer.key_matches(key, "w"):
             return "w"
-        if key == pygame.K_a:
+        if self.renderer.key_matches(key, "a"):
             return "a"
-        if key == pygame.K_s:
+        if self.renderer.key_matches(key, "s"):
             return "s"
-        if key == pygame.K_d:
+        if self.renderer.key_matches(key, "d"):
             return "d"
-        if key == pygame.K_SPACE:
+        if self.renderer.key_matches(key, "space"):
             return "space"
-        if key in (pygame.K_LSHIFT, pygame.K_RSHIFT):
+        if self.renderer.key_matches(key, "lshift", "rshift"):
             return "shift"
-        if key in (pygame.K_LCTRL, pygame.K_RCTRL):
+        if self.renderer.key_matches(key, "lctrl", "rctrl"):
             return "ctrl"
         return None
 
@@ -242,12 +241,12 @@ class GLSeaLionAssetViewer:
         )
 
     def _update_title(self, stats) -> None:
-        ticks = self.pygame.time.get_ticks()
+        ticks = self.renderer.ticks()
         if ticks - self._last_title_update < 400:
             return
         self._last_title_update = ticks
         self.renderer.set_title(
-            f"py_3d sea lion asset - OpenGL live - {stats.approx_fps:0.1f} fps "
+            f"py_3d sea lion asset - live - {stats.approx_fps:0.1f} fps "
             f"({stats.build_seconds * 1000:0.1f} ms build, {stats.draw_seconds * 1000:0.1f} ms draw)"
         )
 

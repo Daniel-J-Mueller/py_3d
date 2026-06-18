@@ -1,19 +1,13 @@
-"""Live CPU rendering example with clicked-in camera navigation.
-
-This example uses only the Python standard library. It renders into an
-off-screen buffer at ``--render-width`` x ``--render-height`` and displays that
-buffer in a separately sized Tk window.
-"""
+"""Live CPU rendering example with native py_3d camera navigation."""
 
 from __future__ import annotations
 
 import argparse
-import base64
-from math import radians, sin, cos
+from math import cos, radians, sin
 from pathlib import Path
-import tkinter as tk
+from time import sleep
 
-from py_3d import Box, Camera, Lamp, Material, RenderEngine, RenderSettings, Scene, Sphere, Sun, TextBulletin, Vec3
+from py_3d import Box, Camera, Lamp, Material, PixelWindow, RenderEngine, RenderSettings, Scene, Sphere, Sun, TextBulletin, Vec3
 
 
 def make_scene() -> Scene:
@@ -35,7 +29,7 @@ def make_scene() -> Scene:
     scene.add_light(Lamp(position=(2.0, 1.2, -1.2), color=(255, 90, 120), intensity=1.8))
     scene.add_bulletin(
         TextBulletin(
-            "CLICK TO NAVIGATE\nDRAG/ARROWS ORBIT  W/S ZOOM\nA/D PAN  Q/E LIFT  P SAVE",
+            "DRAG/ARROWS ORBIT  W/S ZOOM\nA/D PAN  Q/E LIFT  P SAVE",
             position=(8, 8),
             color=(245, 248, 255),
             background=(5, 7, 11),
@@ -60,31 +54,12 @@ class LiveViewer:
             sphere_segments=args.sphere_segments,
             sphere_rings=args.sphere_rings,
         )
-
         self.target = Vec3(0.0, 0.0, 0.0)
         self.distance = 4.0
         self.yaw = 0.0
         self.pitch = 12.0
         self.drag_start: tuple[int, int] | None = None
-        self.base_photo: tk.PhotoImage | None = None
-        self.photo: tk.PhotoImage | None = None
-        self.window_icon: tk.PhotoImage | None = None
-
-        self.root = tk.Tk()
-        self.root.title("py_3d live navigation")
-        self.root.geometry(f"{args.window_width}x{args.window_height}")
-        self.set_window_icon()
-        self.canvas = tk.Canvas(self.root, bg="#07090e", highlightthickness=0)
-        self.canvas.pack(fill=tk.BOTH, expand=True)
-        self.image_item = self.canvas.create_image(0, 0, anchor=tk.NW)
-
-        self.canvas.bind("<Button-1>", self.on_click)
-        self.canvas.bind("<B1-Motion>", self.on_drag)
-        self.canvas.bind("<ButtonRelease-1>", self.on_release)
-        self.canvas.bind("<MouseWheel>", self.on_mouse_wheel)
-        self.canvas.bind("<Configure>", lambda event: self.render_once())
-        for key in ("<Left>", "<Right>", "<Up>", "<Down>", "<w>", "<s>", "<a>", "<d>", "<q>", "<e>", "<p>"):
-            self.root.bind(key, self.on_key)
+        self.window = PixelWindow(args.window_width, args.window_height, title="py_3d live navigation", fit_window=args.fit_window)
 
     def camera(self) -> Camera:
         yaw = radians(self.yaw)
@@ -97,42 +72,39 @@ class LiveViewer:
         return Camera(position=self.target + offset, target=self.target, fov_degrees=52)
 
     def run(self) -> None:
-        self.render_once()
-        self.root.mainloop()
+        while not self.window.closed:
+            changed = False
+            for event in self.window.poll_events():
+                if event.kind == "quit":
+                    self.window.close()
+                elif event.kind == "key_down":
+                    if event.key == "escape":
+                        self.window.close()
+                    else:
+                        changed = self.on_key(event.key) or changed
+                elif event.kind == "button" and event.button == 1:
+                    self.drag_start = event.pos
+                elif event.kind == "button_up" and event.button == 1:
+                    self.drag_start = None
+                elif event.kind == "motion" and self.drag_start is not None:
+                    self.on_drag(event.pos)
+                    changed = True
+                elif event.kind == "wheel":
+                    self.distance = max(1.3, self.distance * (0.9 if event.y > 0 else 1.1))
+                    changed = True
+            if changed or self.drag_start is None:
+                self.render_once()
+            sleep(1.0 / 60.0)
 
-    def set_window_icon(self) -> None:
-        icon_path = Path(__file__).resolve().parents[1] / "assets" / "py_3d_logo.png"
-        if not icon_path.exists():
-            return
-        try:
-            self.window_icon = tk.PhotoImage(file=str(icon_path))
-            self.root.iconphoto(True, self.window_icon)
-        except tk.TclError as exc:
-            print(f"Could not load window icon {icon_path}: {exc}")
-
-    def on_click(self, event) -> None:
-        self.canvas.focus_set()
-        self.drag_start = (event.x, event.y)
-
-    def on_drag(self, event) -> None:
+    def on_drag(self, position: tuple[int, int]) -> None:
         if self.drag_start is None:
             return
         last_x, last_y = self.drag_start
-        self.yaw += (event.x - last_x) * 0.35
-        self.pitch += (event.y - last_y) * 0.25
-        self.drag_start = (event.x, event.y)
-        self.render_once()
+        self.yaw += (position[0] - last_x) * 0.35
+        self.pitch += (position[1] - last_y) * 0.25
+        self.drag_start = position
 
-    def on_release(self, event) -> None:
-        del event
-        self.drag_start = None
-
-    def on_mouse_wheel(self, event) -> None:
-        self.distance = max(1.3, self.distance * (0.9 if event.delta > 0 else 1.1))
-        self.render_once()
-
-    def on_key(self, event) -> None:
-        key = event.keysym.lower()
+    def on_key(self, key: str) -> bool:
         if key == "left":
             self.yaw -= 5.0
         elif key == "right":
@@ -155,27 +127,12 @@ class LiveViewer:
             self.target = self.target + Vec3(0.0, -0.15, 0.0)
         elif key == "p":
             self.save_snapshot()
-        self.render_once()
+        else:
+            return False
+        return True
 
     def render_once(self) -> None:
-        output = self.engine.render(self.scene, self.camera(), self.settings)
-        self.base_photo = self._photo_from_buffer(output)
-        self.photo = self.base_photo
-        if self.args.fit_window:
-            width = max(1, self.canvas.winfo_width())
-            height = max(1, self.canvas.winfo_height())
-            scale_x = width // output.width
-            scale_y = height // output.height
-            if (
-                scale_x >= 1
-                and scale_y >= 1
-                and output.width * scale_x == width
-                and output.height * scale_y == height
-            ):
-                self.photo = self.base_photo.zoom(scale_x, scale_y)
-            else:
-                self.photo = self._photo_from_buffer(output.resized_nearest(width, height))
-        self.canvas.itemconfigure(self.image_item, image=self.photo)
+        self.window.show(self.engine.render(self.scene, self.camera(), self.settings))
 
     def save_snapshot(self) -> None:
         output_dir = Path("renderings-tests")
@@ -183,14 +140,6 @@ class LiveViewer:
         path = output_dir / "live_navigation_snapshot.png"
         self.engine.render(self.scene, self.camera(), self.settings).to_png(path)
         print(f"Wrote {path}")
-
-    @staticmethod
-    def _photo_from_buffer(buffer):
-        ppm = buffer.to_ppm_bytes()
-        try:
-            return tk.PhotoImage(data=ppm, format="PPM")
-        except tk.TclError:
-            return tk.PhotoImage(data=base64.b64encode(ppm).decode("ascii"), format="PPM")
 
 
 def parse_args() -> argparse.Namespace:

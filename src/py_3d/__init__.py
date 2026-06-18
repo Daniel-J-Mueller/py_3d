@@ -10,6 +10,7 @@ from . import draw
 from .gpu import GPURenderer, GPUSceneBatch, build_gpu_scene_batch, detect_gpu_backends
 from .hud import HUDAnimation, HUDImage, HUDRect, HUDText, LiveHUD
 from .importers import load_obj, load_stl
+from .inventory import CubePlacer, Inventory, InventorySlot, place_cube_from_inventory
 from .lights import Lamp, LightSample, Sun
 from .materials import Material
 from .math3d import Vec3, as_vec3, clamp
@@ -17,11 +18,13 @@ from .noise import FractalNoise3D, SurfacePerturbation, ValueNoise3D
 from .overlays import FloatingTextBulletin, TextBulletin
 from .player import PlayerModel
 from .physics import KinematicBowl, PhysicsWorld, SphereBody, StaticBox, StaticPlane, World
+from .portal import PortalPair, PortalSurface, portal_camera_for, scene_with_portal_textures
 from .primitives import BlobSurface, Bowl, Box, Capsule, HangingConeLampPrimitive, LampPrimitive, Line3, Mesh, Plane, Point3, Sphere, Triangle
 from .render import CPURenderer, RenderEngine, RenderSettings, Renderer
 from .scene import Scene
 from .sky import SkyPrefab
 from .textures import planar_project_triangles
+from .window import PixelWindow, WindowEvent
 
 __all__ = [
     "BlobSurface",
@@ -34,6 +37,7 @@ __all__ = [
     "Camera",
     "Capsule",
     "Color",
+    "CubePlacer",
     "DepthBuffer",
     "FluidBlob",
     "FluidWorld",
@@ -45,6 +49,8 @@ __all__ = [
     "HUDImage",
     "HUDRect",
     "HUDText",
+    "Inventory",
+    "InventorySlot",
     "Lamp",
     "LampPrimitive",
     "LightSample",
@@ -59,6 +65,8 @@ __all__ = [
     "PlaneCollider",
     "Point3",
     "PlayerModel",
+    "PortalPair",
+    "PortalSurface",
     "ProjectedPoint",
     "PhysicsWorld",
     "RenderEngine",
@@ -76,10 +84,12 @@ __all__ = [
     "Sun",
     "TextBulletin",
     "Triangle",
+    "PixelWindow",
     "ValueNoise3D",
     "Vec3",
     "VectorFluidParticle",
     "VectorFluidWorld",
+    "WindowEvent",
     "World",
     "as_vec3",
     "build_gpu_scene_batch",
@@ -91,4 +101,7 @@ __all__ = [
     "load_stl",
     "mesh_asset_metadata",
     "planar_project_triangles",
+    "place_cube_from_inventory",
+    "portal_camera_for",
+    "scene_with_portal_textures",
 ]

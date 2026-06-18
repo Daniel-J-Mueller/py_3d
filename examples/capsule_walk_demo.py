@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import argparse
-import base64
 from dataclasses import dataclass
 from math import cos, radians, sin
 from pathlib import Path
 
-from py_3d import Box, Camera, Color, HUDRect, HUDText, Lamp, Material, PlayerModel, RenderEngine, RenderSettings, Scene, SkyPrefab, Sun, TextBulletin, Vec3
+from py_3d import Box, Camera, Color, HUDRect, HUDText, Lamp, Material, PixelWindow, PlayerModel, RenderEngine, RenderSettings, Scene, SkyPrefab, Sun, TextBulletin, Vec3
 
 
 OUTPUT_DIR = Path("renderings-tests") / "live-renders"
@@ -112,9 +111,6 @@ class CapsuleController:
 
 class CapsuleWalkViewer:
     def __init__(self, args: argparse.Namespace) -> None:
-        import tkinter as tk
-
-        self.tk = tk
         self.args = args
         self.controller = CapsuleController()
         self.keys: set[str] = set()
@@ -131,34 +127,36 @@ class CapsuleWalkViewer:
             sphere_rings=9,
         )
         self.blocks = make_blocks()
-        self.root = tk.Tk()
-        self.root.title("py_3d capsule walk")
-        self.root.geometry(f"{args.window_width}x{args.window_height}")
-        self.canvas = tk.Canvas(self.root, bg="#07090d", highlightthickness=0)
-        self.canvas.pack(fill=tk.BOTH, expand=True)
-        self.image_item = self.canvas.create_image(0, 0, anchor=tk.NW)
-        self.photo = None
-        self.canvas.bind("<Button-1>", lambda event: self.canvas.focus_set())
-        self.root.bind("<KeyPress>", self.on_key_down)
-        self.root.bind("<KeyRelease>", self.on_key_up)
+        self.window = PixelWindow(args.window_width, args.window_height, title="py_3d capsule walk", fit_window=args.fit_window)
 
     def run(self) -> None:
-        self.render_once()
-        self.root.after(max(1, int(1000 / self.args.fps)), self.tick)
-        self.root.mainloop()
+        from time import sleep
+
+        frame_time = 1.0 / max(1, self.args.fps)
+        while not self.window.closed:
+            for event in self.window.poll_events():
+                if event.kind == "quit":
+                    self.window.close()
+                elif event.kind == "key_down":
+                    if event.key == "escape":
+                        self.window.close()
+                    else:
+                        self.on_key_down(event.key)
+                elif event.kind == "key_up":
+                    self.on_key_up(event.key)
+            self.tick()
+            sleep(frame_time)
 
     def tick(self) -> None:
         self.controller.step(1.0 / self.args.fps, self.keys, self.blocks)
         self.render_once()
-        self.root.after(max(1, int(1000 / self.args.fps)), self.tick)
 
-    def on_key_down(self, event) -> None:
-        key = event.keysym.lower()
+    def on_key_down(self, key: str) -> None:
         if key == "v":
             self.camera_mode = {"global": "third", "third": "first", "first": "global"}[self.camera_mode]
-        elif key in {"shift_l", "shift_r"}:
+        elif key in {"shift", "lshift", "rshift"}:
             self.keys.add("sprint")
-        elif key in {"control_l", "control_r", "c"}:
+        elif key in {"ctrl", "lctrl", "rctrl", "c"}:
             self.keys.add("crouch")
         elif key == "left":
             self.controller.yaw_degrees -= 5.0
@@ -167,11 +165,10 @@ class CapsuleWalkViewer:
         else:
             self.keys.add(key)
 
-    def on_key_up(self, event) -> None:
-        key = event.keysym.lower()
-        if key in {"shift_l", "shift_r"}:
+    def on_key_up(self, key: str) -> None:
+        if key in {"shift", "lshift", "rshift"}:
             self.keys.discard("sprint")
-        elif key in {"control_l", "control_r", "c"}:
+        elif key in {"ctrl", "lctrl", "rctrl", "c"}:
             self.keys.discard("crouch")
         else:
             self.keys.discard(key)
@@ -203,32 +200,18 @@ class CapsuleWalkViewer:
 
     def render_once(self) -> None:
         buffer = self.engine.render(self.scene(), self.camera(), self.settings)
-        image = buffer
-        if self.args.fit_window:
-            width = max(1, self.canvas.winfo_width())
-            height = max(1, self.canvas.winfo_height())
-            image = buffer.resized_nearest(width, height)
-        self.photo = self._photo_from_buffer(image)
-        self.canvas.itemconfigure(self.image_item, image=self.photo)
-
-    def _photo_from_buffer(self, buffer):
-        ppm = buffer.to_ppm_bytes()
-        try:
-            return self.tk.PhotoImage(data=ppm, format="PPM")
-        except self.tk.TclError:
-            return self.tk.PhotoImage(data=base64.b64encode(ppm).decode("ascii"), format="PPM")
+        self.window.show(buffer)
 
 
 class GLCapsuleWalkViewer:
     def __init__(self, args: argparse.Namespace) -> None:
-        import pygame
         from py_3d.live import LiveFlyCamera, LiveMenu, LiveMenuOption, ModernGLLiveRenderer
 
-        self.pygame = pygame
         self.args = args
         self.controller = CapsuleController()
         self.keys: set[str] = set()
         self.camera_mode = args.camera_mode
+        self.look_smoothing = args.look_smoothing
         self.look_pitch_degrees = -6.0
         self.render_camera: Camera | None = None
         self.sky = SkyPrefab(time_of_day=13.5, cycle_enabled=False, stars_enabled=True, clouds_enabled=True)
@@ -253,7 +236,7 @@ class GLCapsuleWalkViewer:
         self.renderer = ModernGLLiveRenderer(
             args.window_width,
             args.window_height,
-            title="py_3d capsule walk - OpenGL live",
+            title="py_3d capsule walk - live",
             vsync=True,
         )
         self.renderer.menu = LiveMenu(
@@ -261,6 +244,8 @@ class GLCapsuleWalkViewer:
             (
                 LiveMenuOption("done", "Done"),
                 LiveMenuOption("next_camera", "Next camera"),
+                LiveMenuOption("look_smoothing_up", "More look smoothing"),
+                LiveMenuOption("look_smoothing_down", "Less look smoothing"),
                 LiveMenuOption("sky_cycle", "Day/night cycle"),
                 LiveMenuOption("sky_time_up", "Time later"),
                 LiveMenuOption("sky_time_down", "Time earlier"),
@@ -269,34 +254,35 @@ class GLCapsuleWalkViewer:
                 LiveMenuOption("reset", "Reset capsule"),
                 LiveMenuOption("quit", "Quit demo"),
             ),
+            background_blur=getattr(args, "menu_blur", False),
         )
         self._refresh_menu_options()
         self.renderer.set_mouse_captured(True)
         self._last_title_update = 0
 
     def run(self) -> None:
-        clock = self.pygame.time.Clock()
+        clock = self.renderer.frame_clock()
         dt = 1.0 / self.args.fps
         running = True
         try:
             while running:
-                for event in self.pygame.event.get():
-                    if event.type == self.pygame.QUIT:
+                for event in self.renderer.events():
+                    if self.renderer.is_quit_event(event):
                         running = False
                     elif self.renderer.handle_resize_event(event):
                         continue
-                    elif self.renderer.menu.visible and event.type in (self.pygame.MOUSEMOTION, self.pygame.MOUSEBUTTONDOWN, self.pygame.MOUSEWHEEL):
-                        menu_action = self.renderer.menu.handle_mouse_event(event, self.pygame)
+                    elif self.renderer.menu.visible and self.renderer.is_menu_pointer_event(event):
+                        menu_action = self.renderer.handle_menu_mouse_event(event)
                         if menu_action is not None:
                             running = self._handle_menu_action(menu_action)
-                    elif event.type == self.pygame.MOUSEBUTTONDOWN and not self.renderer.menu.visible:
+                    elif self.renderer.is_mouse_button_down_event(event) and not self.renderer.menu.visible:
                         self.renderer.set_mouse_captured(True)
-                    elif event.type == self.pygame.MOUSEMOTION and self.renderer.mouse_captured:
-                        self.on_mouse_motion(event.rel)
-                    elif event.type == self.pygame.KEYDOWN:
-                        running = self.on_key_down(event.key)
-                    elif event.type == self.pygame.KEYUP:
-                        self.on_key_up(event.key)
+                    elif self.renderer.is_mouse_motion_event(event) and self.renderer.mouse_captured:
+                        self.on_mouse_motion(self.renderer.event_mouse_rel(event))
+                    elif self.renderer.is_key_down_event(event):
+                        running = self.on_key_down(self.renderer.event_key(event))
+                    elif self.renderer.is_key_up_event(event):
+                        self.on_key_up(self.renderer.event_key(event))
 
                 if self.camera_mode == "global":
                     self.free_camera.move(self.keys, dt)
@@ -314,16 +300,15 @@ class GLCapsuleWalkViewer:
             self.renderer.close()
 
     def on_key_down(self, key: int) -> bool:
-        pygame = self.pygame
-        menu_action = self.renderer.menu.handle_key(key, pygame)
+        menu_action = self.renderer.handle_menu_key(key)
         if menu_action is not None:
             return self._handle_menu_action(menu_action)
-        if key == pygame.K_v:
+        if self.renderer.key_matches(key, "v"):
             self.camera_mode = {"global": "third", "third": "first", "first": "global"}[self.camera_mode]
             self.render_camera = None
-        elif key == pygame.K_LEFT:
+        elif self.renderer.key_matches(key, "left"):
             self.controller.yaw_degrees -= 5.0
-        elif key == pygame.K_RIGHT:
+        elif self.renderer.key_matches(key, "right"):
             self.controller.yaw_degrees += 5.0
         else:
             movement_key = self._movement_key(key)
@@ -348,6 +333,10 @@ class GLCapsuleWalkViewer:
         if action == "next_camera":
             self.camera_mode = {"global": "third", "third": "first", "first": "global"}[self.camera_mode]
             self.render_camera = None
+        elif action == "look_smoothing_up":
+            self._adjust_look_smoothing(2.0)
+        elif action == "look_smoothing_down":
+            self._adjust_look_smoothing(-2.0)
         elif action == "sky_cycle":
             self.sky.toggle_cycle()
         elif action == "sky_time_up":
@@ -373,6 +362,8 @@ class GLCapsuleWalkViewer:
         options = (
             LiveMenuOption("done", "Done"),
             LiveMenuOption("next_camera", "Camera", self.camera_mode, "Camera"),
+            LiveMenuOption("look_smoothing_up", "Look Smoothing +", f"{self.look_smoothing:0.1f}", "Camera"),
+            LiveMenuOption("look_smoothing_down", "Look Smoothing -", f"{self.look_smoothing:0.1f}", "Camera"),
             LiveMenuOption("sky_cycle", "Cycle", "on" if self.sky.cycle_enabled else "off", "Sky"),
             LiveMenuOption("sky_time_up", "Later", f"{self.sky.time_of_day:04.1f}h", "Sky"),
             LiveMenuOption("sky_time_down", "Earlier", f"{self.sky.time_of_day:04.1f}h", "Sky"),
@@ -441,30 +432,32 @@ class GLCapsuleWalkViewer:
         return scene
 
     def _movement_key(self, key: int) -> str | None:
-        pygame = self.pygame
-        if key == pygame.K_w:
+        if self.renderer.key_matches(key, "w"):
             return "w"
-        if key == pygame.K_a:
+        if self.renderer.key_matches(key, "a"):
             return "a"
-        if key == pygame.K_s:
+        if self.renderer.key_matches(key, "s"):
             return "s"
-        if key == pygame.K_d:
+        if self.renderer.key_matches(key, "d"):
             return "d"
-        if key == pygame.K_SPACE:
+        if self.renderer.key_matches(key, "space"):
             return "space"
-        if key in (pygame.K_LSHIFT, pygame.K_RSHIFT):
+        if self.renderer.key_matches(key, "lshift", "rshift"):
             return "shift" if self.camera_mode == "global" else "sprint"
-        if key in (pygame.K_LCTRL, pygame.K_RCTRL):
+        if self.renderer.key_matches(key, "lctrl", "rctrl"):
             return "crouch"
-        if key == pygame.K_c:
+        if self.renderer.key_matches(key, "c"):
             return "crouch"
         return None
+
+    def _adjust_look_smoothing(self, amount: float) -> None:
+        self.look_smoothing = max(2.0, min(40.0, self.look_smoothing + amount))
 
     def _smoothed_camera(self, camera: Camera, dt: float) -> Camera:
         if self.render_camera is None or self.camera_mode == "global":
             self.render_camera = camera
             return camera
-        alpha = min(1.0, dt * 18.0)
+        alpha = min(1.0, dt * self.look_smoothing)
         position = self.render_camera.position + (camera.position - self.render_camera.position) * alpha
         target = self.render_camera.target + (camera.target - self.render_camera.target) * alpha
         self.render_camera = Camera(position=position, target=target, fov_degrees=camera.fov_degrees, near=camera.near, far=camera.far)
@@ -472,18 +465,37 @@ class GLCapsuleWalkViewer:
 
     def _update_hud(self) -> None:
         state = "CROUCH" if "crouch" in self.keys else ("SPRINT" if "sprint" in self.keys else "WALK")
+        speed = (self.controller.velocity.x * self.controller.velocity.x + self.controller.velocity.z * self.controller.velocity.z) ** 0.5
+        health = 84 if self.camera_mode == "first" else 96
+        health_width = int(128 * health / 100)
+        if self.camera_mode == "first":
+            self.renderer.hud.set(
+                HUDRect((12, 12), (232, 92), (0, 0, 0), alpha=0.62),
+                HUDText(f"FPS HUD  {state}\nSPD {speed:0.1f} M/S  HP {health}\nLEVEL UP READY", (22, 20), color=(238, 245, 255), alpha=0.95, scale=1),
+                HUDRect((22, 78), (128, 10), (48, 48, 48), alpha=0.88),
+                HUDRect((22, 78), (health_width, 10), (56, 210, 112), alpha=0.95),
+            )
+            return
+        if self.camera_mode == "third":
+            self.renderer.hud.set(
+                HUDRect((12, 12), (252, 92), (0, 0, 0), alpha=0.58),
+                HUDText(f"THIRD PERSON HUD\nSPD {speed:0.1f} M/S  ARMOR 42\nLEVEL 2 + CAMERA ORBIT", (22, 20), color=(238, 245, 255), alpha=0.94, scale=1),
+                HUDRect((22, 78), (128, 10), (48, 48, 48), alpha=0.88),
+                HUDRect((22, 78), (health_width, 10), (92, 158, 255), alpha=0.95),
+            )
+            return
         self.renderer.hud.set(
-            HUDRect((12, 12), (178, 62), (3, 7, 10), alpha=0.55),
-            HUDText(f"{self.camera_mode.upper()} CAMERA\n{state}\nSKY {self.sky.time_of_day:04.1f}H", (20, 20), color=(238, 245, 255), alpha=0.94, scale=1),
+            HUDRect((12, 12), (220, 76), (0, 0, 0), alpha=0.56),
+            HUDText(f"FREE CAMERA HUD\nNOCLIP SPEED {self.free_camera.speed:0.1f}\nSKY {self.sky.time_of_day:04.1f}H", (22, 20), color=(238, 245, 255), alpha=0.94, scale=1),
         )
 
     def _update_title(self, stats) -> None:
-        ticks = self.pygame.time.get_ticks()
+        ticks = self.renderer.ticks()
         if ticks - self._last_title_update < 400:
             return
         self._last_title_update = ticks
         self.renderer.set_title(
-            f"py_3d capsule walk - OpenGL live - {self.camera_mode} - {stats.approx_fps:0.1f} fps "
+            f"py_3d capsule walk - live - {self.camera_mode} - {stats.approx_fps:0.1f} fps "
             f"({stats.build_seconds * 1000:0.1f} ms build, {stats.draw_seconds * 1000:0.1f} ms draw)"
         )
 
@@ -492,7 +504,7 @@ def make_engine(renderer: str) -> RenderEngine:
     if renderer == "py_gpu":
         from py_gpu.adapters.py3d import Py3DRasterRenderer
 
-        return RenderEngine(Py3DRasterRenderer())
+        return RenderEngine(Py3DRasterRenderer(reference_compatible=False, fast_materials=True))
     return RenderEngine()
 
 
@@ -509,15 +521,17 @@ def make_blocks() -> tuple[Box, ...]:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a live capsule walking demo with camera modes.")
     parser.add_argument("--renderer", choices=("cpu", "py_gpu"), default="py_gpu")
-    parser.add_argument("--camera-mode", choices=("global", "third", "first"), default="third")
+    parser.add_argument("--camera-mode", choices=("global", "third", "first"), default="first")
     parser.add_argument("--fps", type=int, default=60)
     parser.add_argument("--width", type=int, default=480)
     parser.add_argument("--height", type=int, default=270)
     parser.add_argument("--window-width", type=int, default=960)
     parser.add_argument("--window-height", type=int, default=540)
     parser.add_argument("--fit-window", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--menu-blur", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--ambient", type=float, default=0.0)
     parser.add_argument("--gamma", type=float, default=1.15)
+    parser.add_argument("--look-smoothing", type=float, default=18.0)
     return parser.parse_args()
 
 
@@ -530,7 +544,7 @@ def main() -> None:
             GLCapsuleWalkViewer(args).run()
             return
         except Exception as exc:
-            print(f"OpenGL live renderer unavailable, falling back to Tk PixelBuffer path: {exc}")
+            print(f"py_3d live renderer unavailable, falling back to native PixelWindow path: {exc}")
     CapsuleWalkViewer(args).run()
 
 

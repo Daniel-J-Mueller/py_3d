@@ -104,6 +104,13 @@ class GPURenderer:
         try:
             from py_gpu.adapters.py3d import Py3DRasterRenderer
 
-            return Py3DRasterRenderer(reference_compatible=self.reference_compatible, prefer_backend=self.prefer_backend)
+            try:
+                return Py3DRasterRenderer(
+                    reference_compatible=self.reference_compatible,
+                    prefer_backend=self.prefer_backend,
+                    fast_materials=not self.reference_compatible,
+                )
+            except TypeError:
+                return Py3DRasterRenderer(reference_compatible=self.reference_compatible, prefer_backend=self.prefer_backend)
         except Exception:
             return None

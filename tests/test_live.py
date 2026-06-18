@@ -1,7 +1,16 @@
 from array import array
 
 from py_3d import HUDRect, HUDText, Material, PixelBuffer, RenderSettings, Scene, Sphere, Sun
-from py_3d.live import LiveFlyCamera, LiveMenu, LiveMenuOption, LiveSceneBatchBuilder
+from py_3d.live import (
+    LiveFlyCamera,
+    LiveMenu,
+    LiveMenuOption,
+    LiveMenuTheme,
+    LiveSceneBatchBuilder,
+    _flip_rgba_rows,
+    _overlay_quad_vertices,
+    render_live_menu_surface,
+)
 
 
 def test_live_scene_batch_builder_outputs_triangle_payload():
@@ -68,6 +77,21 @@ def test_live_scene_batch_builder_assigns_texture_slots():
     assert payload[18] == 0.0
 
 
+def test_overlay_quad_vertices_map_pixels_to_clip_space():
+    vertices = _overlay_quad_vertices(10, 5, 20, 10, 100, 50)
+
+    assert len(vertices) == 24
+    assert vertices[:4] == (-0.8, 0.8, 0.0, 1.0)
+    assert vertices[4:8] == (-0.4, 0.8, 1.0, 1.0)
+    assert vertices[8:12] == (-0.4, 0.4, 1.0, 0.0)
+
+
+def test_rgba_rows_flip_for_opengl_uploads():
+    payload = bytes(range(16))
+
+    assert _flip_rgba_rows(payload, 2, 2) == bytes(range(8, 16)) + bytes(range(0, 8))
+
+
 def test_live_fly_camera_uses_mouse_look_and_vertical_keys():
     camera = LiveFlyCamera.looking_at((0, 1, -4), (0, 1, 0), fov_degrees=70.0, speed=2.0)
 
@@ -120,3 +144,21 @@ def test_live_menu_background_blur_is_optional():
     menu = LiveMenu(background_blur=True)
 
     assert menu.background_blur is True
+
+
+def test_live_menu_theme_and_paired_buttons_render():
+    menu = LiveMenu(
+        options=(
+            LiveMenuOption("done", "Done"),
+            LiveMenuOption("gamma_up", "Gamma +", "1.20", "Graphics"),
+            LiveMenuOption("gamma_down", "Gamma -", "1.20", "Graphics"),
+        ),
+        visible=True,
+        theme=LiveMenuTheme(panel=(0, 0, 0, 240)),
+    )
+    surface, left, top = render_live_menu_surface(menu, 800, 600)
+
+    assert surface.width < 800
+    assert left > 0 and top > 0
+    assert any(hitbox[4] == 1 for hitbox in menu.hitboxes)
+    assert any(hitbox[4] == 2 for hitbox in menu.hitboxes)

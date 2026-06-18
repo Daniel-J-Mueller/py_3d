@@ -1,10 +1,10 @@
 {
   "profile": "standard",
-  "render_quality": "high",
+  "render_quality": "balanced",
   "render_quality_presets": {
     "fast": {
-      "width": 640,
-      "height": 360,
+      "width": 480,
+      "height": 270,
       "window_width": 960,
       "window_height": 540,
       "sphere_segments": 10,
@@ -21,12 +21,12 @@
       "max_render_distance": 7.0
     },
     "balanced": {
-      "width": 960,
-      "height": 540,
-      "window_width": 1280,
-      "window_height": 720,
-      "sphere_segments": 18,
-      "sphere_rings": 9,
+      "width": 640,
+      "height": 360,
+      "window_width": 960,
+      "window_height": 540,
+      "sphere_segments": 14,
+      "sphere_rings": 7,
       "smooth_shading": true,
       "texture_size": 256,
       "gamma": 1.12,
@@ -39,12 +39,12 @@
       "max_render_distance": 8.5
     },
     "high": {
-      "width": 1280,
-      "height": 720,
+      "width": 960,
+      "height": 540,
       "window_width": 1280,
       "window_height": 720,
-      "sphere_segments": 24,
-      "sphere_rings": 12,
+      "sphere_segments": 18,
+      "sphere_rings": 9,
       "smooth_shading": true,
       "texture_size": 384,
       "gamma": 1.15,
@@ -57,12 +57,12 @@
       "max_render_distance": 10.0
     },
     "ultra": {
-      "width": 1920,
-      "height": 1080,
-      "window_width": 1920,
-      "window_height": 1080,
-      "sphere_segments": 32,
-      "sphere_rings": 16,
+      "width": 1280,
+      "height": 720,
+      "window_width": 1280,
+      "window_height": 720,
+      "sphere_segments": 24,
+      "sphere_rings": 12,
       "smooth_shading": true,
       "texture_size": 512,
       "gamma": 1.18,

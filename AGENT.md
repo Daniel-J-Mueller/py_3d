@@ -7,8 +7,8 @@ behavior while the engine grows.
 ## Product Direction
 
 - Treat `py_3d` as a basic package, not a full game engine.
-- Favor Pygame-like ergonomics for simple drawing, but keep this project
-  3D-first with explicit depth, camera, lighting, and simulation concepts.
+- Favor direct, beginner-friendly ergonomics for simple drawing, but keep this
+  project 3D-first with explicit depth, camera, lighting, and simulation concepts.
 - Support Windows and Linux.
 - Keep headless rendering as a first-class use case. A window should not be
   required to test drawing or simulation.

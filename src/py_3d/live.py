@@ -1,29 +1,27 @@
-"""Interactive OpenGL presentation for live demos.
-
-This module is intentionally optional. Importing it does not create a window;
-``ModernGLLiveRenderer`` imports pygame and ModernGL only when constructed.
-"""
+"""Interactive live presentation helpers for py_3d demos."""
 
 from __future__ import annotations
 
 from array import array
 from dataclasses import dataclass, field
 from math import asin, atan2, cos, degrees, radians, sin, tan
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import Iterable
 
 from .buffer import PixelBuffer
 from .camera import Camera
 from .color import Color
 from . import draw
+from .gpu import GPURenderer
 from .hud import HUDAnimation, HUDImage, HUDRect, HUDText, LiveHUD
 from .lights import Lamp, Sun
 from .materials import Material
 from .math3d import Vec3
 from .overlays import FloatingTextBulletin, TextBulletin
 from .primitives import Bowl, Box, Capsule, Line3, Mesh, Plane, Point3, Sphere, Triangle
-from .render import RenderSettings, _triangles_for
+from .render import RenderEngine, RenderSettings, _triangles_for
 from .scene import Scene
+from .window import PixelWindow, WindowEvent
 
 
 VERTEX_SHADER = """
@@ -189,7 +187,7 @@ void main() {
     vec3 base_color = v_color;
     int texture_index = int(v_texture_index + 0.5);
     if (u_use_textures && texture_index >= 0 && texture_index < u_texture_count) {
-        vec2 uv = clamp(v_texcoord, vec2(0.0), vec2(1.0));
+        vec2 uv = clamp(vec2(v_texcoord.x, 1.0 - v_texcoord.y), vec2(0.0), vec2(1.0));
         base_color *= texture(u_textures, vec3(uv, float(texture_index))).rgb;
     }
 
@@ -385,11 +383,27 @@ class LiveMenuOption:
     group: str = ""
 
 
+@dataclass(frozen=True)
+class LiveMenuTheme:
+    """Simple color theme for live menus."""
+
+    panel: tuple[int, int, int, int] = (5, 5, 5, 240)
+    border: tuple[int, int, int, int] = (86, 86, 86, 255)
+    text: tuple[int, int, int] = (238, 238, 238)
+    muted_text: tuple[int, int, int] = (152, 152, 152)
+    row: tuple[int, int, int, int] = (12, 12, 12, 236)
+    row_selected: tuple[int, int, int, int] = (38, 38, 38, 244)
+    button: tuple[int, int, int, int] = (28, 28, 28, 244)
+    button_selected: tuple[int, int, int, int] = (58, 58, 58, 250)
+    button_border: tuple[int, int, int, int] = (96, 96, 96, 255)
+    active_border: tuple[int, int, int, int] = (210, 210, 210, 255)
+
+
 @dataclass
 class LiveMenu:
     """Shared mouse-and-key menu state for live OpenGL demos."""
 
-    title: str = "py_3d live menu"
+    title: str = "py_3d"
     options: tuple[LiveMenuOption, ...] = (
         LiveMenuOption("resume", "Resume"),
         LiveMenuOption("quit", "Quit"),
@@ -401,6 +415,7 @@ class LiveMenu:
     active_group: str | None = None
     scroll_offsets: dict[str, int] = field(default_factory=dict)
     background_blur: bool = False
+    theme: LiveMenuTheme = field(default_factory=LiveMenuTheme)
 
     def __post_init__(self) -> None:
         if not self.options:
@@ -522,10 +537,10 @@ class LiveMenu:
                 return group
         return None
 
-    def handle_mouse_event(self, event, pygame) -> str | None:
+    def handle_pointer_event(self, event) -> str | None:
         if not self.visible:
             return None
-        if event.type == pygame.MOUSEMOTION:
+        if event.kind == "motion":
             tab = self.tab_at(event.pos)
             if tab is not None:
                 self.set_group(tab)
@@ -536,10 +551,10 @@ class LiveMenu:
                 self.active_group = self.group_for(self.options[index])
                 return "navigate"
             return "handled"
-        if event.type == pygame.MOUSEWHEEL:
+        if event.kind == "wheel":
             self.scroll(-event.y)
             return "navigate"
-        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+        if event.kind == "button" and event.button == 1:
             tab = self.tab_at(event.pos)
             if tab is not None:
                 self.set_group(tab)
@@ -552,139 +567,241 @@ class LiveMenu:
             return "handled"
         return None
 
-    def handle_key(self, key: int, pygame) -> str | None:
+    def handle_key_name(self, key: str) -> str | None:
         if not self.visible:
-            if key == pygame.K_ESCAPE:
+            if key == "escape":
                 self.open()
                 return "opened"
             return None
-        if key == pygame.K_ESCAPE:
+        if key == "escape":
             return self.cancel_action()
-        if key in (pygame.K_RIGHT, pygame.K_TAB):
+        if key in ("right", "tab"):
             self.cycle_group(1)
             return "navigate"
-        if key == pygame.K_LEFT:
+        if key == "left":
             self.cycle_group(-1)
             return "navigate"
-        if key in (pygame.K_DOWN, pygame.K_s):
+        if key in ("down", "s"):
             self.move(1)
             return "navigate"
-        if key in (pygame.K_UP, pygame.K_w):
+        if key in ("up", "w"):
             self.move(-1)
             return "navigate"
-        if key in (pygame.K_PAGEUP, pygame.K_q):
+        if key in ("pageup", "q"):
             self.scroll(-1)
             return "navigate"
-        if key in (pygame.K_PAGEDOWN, pygame.K_e):
+        if key in ("pagedown", "e"):
             self.scroll(1)
             return "navigate"
-        if key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+        if key in ("return", "enter", "kp_enter", "space"):
             return self.selected_action()
         return "handled"
 
 
-def render_live_menu_surface(menu: LiveMenu, pygame, width: int, height: int):
-    """Return a pygame surface for a live menu plus its screen position."""
+def render_live_menu_surface(menu: LiveMenu, width: int, height: int):
+    """Return a py_3d pixel menu surface plus its screen position."""
 
-    pygame.font.init()
-    panel_width = min(width - 36, max(600, int(width * 0.68)))
-    panel_height = min(height - 36, max(390, int(height * 0.72)))
+    theme = menu.theme
+    panel_width = min(width - 36, max(500, int(width * 0.46)))
+    panel_height = min(height - 36, max(330, int(height * 0.58)))
     panel_width = max(320, panel_width)
     panel_height = max(260, panel_height)
     panel_left = max(12, (width - panel_width) // 2)
     panel_top = max(12, (height - panel_height) // 2)
-    surface = pygame.Surface((panel_width, panel_height), pygame.SRCALPHA)
-    surface.fill((18, 18, 18, 232))
+    surface = PixelBuffer.new(panel_width, panel_height, theme.panel[:3])
 
-    title_font = pygame.font.SysFont("segoeui", 24, bold=True)
-    tab_font = pygame.font.SysFont("segoeui", 15, bold=True)
-    label_font = pygame.font.SysFont("segoeui", 18, bold=True)
-    detail_font = pygame.font.SysFont("segoeui", 14)
-    small_font = pygame.font.SysFont("segoeui", 13)
-
-    pygame.draw.rect(surface, (132, 132, 132, 255), (0, 0, panel_width, panel_height), width=2, border_radius=8)
-    surface.blit(title_font.render(menu.title, True, (246, 246, 246)), (24, 18))
+    draw.rect(surface, (0, 0), (panel_width, panel_height), theme.border[:3])
+    draw.text(surface, (20, 14), draw.fit_text(menu.title, panel_width - 40, scale=2), theme.text, scale=2)
+    draw.line(surface, (20, 45), (panel_width - 20, 45), theme.border[:3])
 
     groups = menu.groups()
     current_group = menu.current_group()
     tab_hitboxes: list[tuple[int, int, int, int, str]] = []
-    tab_x = 24
-    tab_y = 58
+    tab_x = 20
+    tab_y = 56
     for group in groups:
-        text = tab_font.render(group, True, (248, 248, 248) if group == current_group else (170, 170, 170))
-        tab_width = max(86, text.get_width() + 26)
-        tab_rect = (tab_x, tab_y, tab_width, 30)
-        fill = (70, 70, 70, 246) if group == current_group else (30, 30, 30, 232)
-        border = (194, 194, 194, 255) if group == current_group else (96, 96, 96, 255)
-        pygame.draw.rect(surface, fill, tab_rect, border_radius=5)
-        pygame.draw.rect(surface, border, tab_rect, width=1, border_radius=5)
-        surface.blit(text, (tab_x + (tab_width - text.get_width()) // 2, tab_y + 6))
-        tab_hitboxes.append((panel_left + tab_x, panel_top + tab_y, tab_width, 30, group))
-        tab_x += tab_width + 10
+        text_color = theme.text if group == current_group else theme.muted_text
+        group_label = draw.fit_text(group, max(42, panel_width - tab_x - 28))
+        text_width, _text_height = draw.text_size(group_label)
+        tab_width = max(64, text_width + 16)
+        if tab_x + tab_width > panel_width - 20:
+            break
+        tab_rect = (tab_x, tab_y, tab_width, 24)
+        if group == current_group:
+            draw.rect(surface, (tab_x, tab_y), (tab_width, 24), theme.row_selected[:3], fill=True)
+            draw.line(surface, (tab_x + 8, tab_y + 22), (tab_x + tab_width - 8, tab_y + 22), theme.active_border[:3])
+        else:
+            draw.rect(surface, (tab_x, tab_y), (tab_width, 24), theme.button[:3])
+        draw.text(surface, (tab_x + (tab_width - text_width) // 2, tab_y + 8), group_label, text_color)
+        tab_hitboxes.append((panel_left + tab_x, panel_top + tab_y, tab_width, 24, group))
+        tab_x += tab_width + 6
 
     option_indexes = menu.visible_option_indexes()
-    option_area_top = 104
-    footer_height = 66
-    option_area_height = max(80, panel_height - option_area_top - footer_height - 16)
-    columns = 2 if panel_width >= 690 else 1
-    gap = 12
-    option_height = 54
-    option_width = (panel_width - 48 - gap * (columns - 1)) // columns
-    rows = max(1, option_area_height // (option_height + gap))
-    capacity = max(1, rows * columns)
-    max_scroll = max(0, len(option_indexes) - capacity)
+    display_rows = _menu_display_rows(menu, option_indexes)
+    option_area_top = 92
+    footer_height = 52
+    option_area_height = max(80, panel_height - option_area_top - footer_height - 10)
+    option_height = 38
+    option_width = panel_width - 40
+    capacity = max(1, option_area_height // option_height)
+    max_scroll = max(0, len(display_rows) - capacity)
     offset = max(0, min(menu.scroll_offsets.get(current_group, 0), max_scroll))
     menu.scroll_offsets[current_group] = offset
-    visible_indexes = option_indexes[offset : offset + capacity]
+    visible_rows = display_rows[offset : offset + capacity]
 
     hitboxes: list[tuple[int, int, int, int, int]] = []
-    for local, option_index in enumerate(visible_indexes):
-        column = local % columns
-        row = local // columns
-        x = 24 + column * (option_width + gap)
-        y = option_area_top + row * (option_height + gap)
-        option = menu.options[option_index]
-        selected = option_index == menu.selected_index
-        fill = (76, 76, 76, 248) if selected else (30, 30, 30, 238)
-        border = (210, 210, 210, 255) if selected else (92, 92, 92, 255)
-        pygame.draw.rect(surface, fill, (x, y, option_width, option_height), border_radius=6)
-        pygame.draw.rect(surface, border, (x, y, option_width, option_height), width=2 if selected else 1, border_radius=6)
-        label = label_font.render(option.label, True, (246, 246, 246))
-        surface.blit(label, (x + 14, y + 8))
-        if option.detail:
-            detail = detail_font.render(option.detail, True, (184, 184, 184))
-            surface.blit(detail, (x + 14, y + 31))
-        hitboxes.append((panel_left + x, panel_top + y, option_width, option_height, option_index))
+    for local, row in enumerate(visible_rows):
+        x = 20
+        y = option_area_top + local * option_height
+        selected = menu.selected_index in row.indexes
+        if selected:
+            draw.rect(surface, (x, y), (option_width, option_height), theme.row_selected[:3], fill=True)
+            draw.rect(surface, (x, y), (3, option_height), theme.active_border[:3], fill=True)
+        else:
+            draw.rect(surface, (x, y), (option_width, option_height), theme.row[:3], fill=True)
+        draw.line(surface, (x, y + option_height - 1), (x + option_width, y + option_height - 1), (42, 42, 42))
+        detail_x = x + max(190, int(option_width * 0.45))
+        button_left = x + option_width
+        if row.down_index is not None and row.up_index is not None:
+            button_size = 26
+            button_left = x + option_width - button_size * 2 - 10
+        label_max = max(40, detail_x - x - 24)
+        detail_max = max(40, button_left - detail_x - 10)
+        draw.text(surface, (x + 12, y + 14), draw.fit_text(row.label, label_max), theme.text)
+        if row.detail:
+            draw.text(surface, (detail_x, y + 14), draw.fit_text(row.detail, detail_max), theme.muted_text)
+        if row.down_index is not None and row.up_index is not None:
+            button_size = 26
+            minus_rect = (x + option_width - button_size * 2 - 10, y + 6, button_size, button_size)
+            plus_rect = (x + option_width - button_size - 6, y + 6, button_size, button_size)
+            _draw_menu_small_button(surface, "-", minus_rect, row.down_index == menu.selected_index, theme)
+            _draw_menu_small_button(surface, "+", plus_rect, row.up_index == menu.selected_index, theme)
+            hitboxes.append((panel_left + minus_rect[0], panel_top + minus_rect[1], minus_rect[2], minus_rect[3], row.down_index))
+            hitboxes.append((panel_left + plus_rect[0], panel_top + plus_rect[1], plus_rect[2], plus_rect[3], row.up_index))
+            hitboxes.append((panel_left + x, panel_top + y, option_width - button_size * 2 - 18, option_height, row.up_index))
+        else:
+            hitboxes.append((panel_left + x, panel_top + y, option_width, option_height, row.indexes[0]))
 
     if max_scroll > 0:
-        marker = f"{offset + 1}-{min(len(option_indexes), offset + capacity)} / {len(option_indexes)}  mouse wheel scrolls"
-        marker_surface = small_font.render(marker, True, (168, 168, 168))
-        surface.blit(marker_surface, (24, panel_height - footer_height - 20))
+        marker = f"{offset + 1}-{min(len(display_rows), offset + capacity)} / {len(display_rows)}"
+        draw.text(surface, (20, panel_height - footer_height - 12), marker, theme.muted_text)
 
     footer_options = tuple((index, option) for index, option in enumerate(menu.options) if option.action in _MENU_BUTTON_ACTIONS)
-    footer_y = panel_height - 52
-    footer_x = 24
+    footer_y = panel_height - 40
+    footer_x = 20
+    draw.line(surface, (20, footer_y - 10), (panel_width - 20, footer_y - 10), theme.border[:3])
     for option_index, option in footer_options:
-        label = option.label
-        text = tab_font.render(label, True, (246, 246, 246))
-        button_width = max(92, text.get_width() + 28)
-        if footer_x + button_width > panel_width - 24:
+        label = draw.fit_text(option.label, max(1, panel_width - footer_x - 34))
+        text_width, _text_height = draw.text_size(label)
+        button_width = max(82, text_width + 22)
+        if footer_x + button_width > panel_width - 22:
             break
         selected = option_index == menu.selected_index
-        fill = (84, 84, 84, 248) if selected else (42, 42, 42, 242)
-        border = (220, 220, 220, 255) if selected else (112, 112, 112, 255)
-        pygame.draw.rect(surface, fill, (footer_x, footer_y, button_width, 36), border_radius=5)
-        pygame.draw.rect(surface, border, (footer_x, footer_y, button_width, 36), width=2 if selected else 1, border_radius=5)
-        surface.blit(text, (footer_x + (button_width - text.get_width()) // 2, footer_y + 9))
-        hitboxes.append((panel_left + footer_x, panel_top + footer_y, button_width, 36, option_index))
-        footer_x += button_width + 10
-
-    hint = small_font.render("Left/right tabs, up/down buttons, Enter selects", True, (156, 156, 156))
-    surface.blit(hint, (panel_width - hint.get_width() - 24, 22))
+        fill = theme.button_selected if selected else theme.button
+        border = theme.active_border if selected else theme.button_border
+        draw.rect(surface, (footer_x, footer_y), (button_width, 30), fill[:3], fill=True)
+        draw.rect(surface, (footer_x, footer_y), (button_width, 30), border[:3])
+        draw.text(surface, (footer_x + (button_width - text_width) // 2, footer_y + 11), label, theme.text)
+        hitboxes.append((panel_left + footer_x, panel_top + footer_y, button_width, 30, option_index))
+        footer_x += button_width + 6
 
     menu.set_hitboxes(hitboxes)
     menu.set_tab_hitboxes(tab_hitboxes)
-    return surface, panel_left, panel_top
+    return PixelBuffer.from_rgb_bytes(surface.width, surface.height, bytearray(surface.to_rgb_bytes())), panel_left, panel_top
+
+
+@dataclass(frozen=True)
+class _MenuDisplayRow:
+    indexes: tuple[int, ...]
+    label: str
+    detail: str = ""
+    down_index: int | None = None
+    up_index: int | None = None
+
+
+def _menu_display_rows(menu: LiveMenu, option_indexes: list[int]) -> list[_MenuDisplayRow]:
+    rows: list[_MenuDisplayRow] = []
+    consumed: set[int] = set()
+    index_lookup = {menu.options[index].action: index for index in option_indexes}
+    for index in option_indexes:
+        if index in consumed:
+            continue
+        option = menu.options[index]
+        pair = _paired_action(option.action)
+        if pair is not None:
+            base, direction = pair
+            opposite_action = f"{base}_{'down' if direction == 'up' else 'up'}"
+            opposite_index = index_lookup.get(opposite_action)
+            if opposite_index is not None:
+                down_index = index if direction == "down" else opposite_index
+                up_index = index if direction == "up" else opposite_index
+                consumed.update({down_index, up_index})
+                down = menu.options[down_index]
+                up = menu.options[up_index]
+                rows.append(
+                    _MenuDisplayRow(
+                        indexes=(down_index, up_index),
+                        label=_paired_label(base, down, up),
+                        detail=up.detail or down.detail,
+                        down_index=down_index,
+                        up_index=up_index,
+                    )
+                )
+                continue
+        consumed.add(index)
+        rows.append(_MenuDisplayRow(indexes=(index,), label=option.label, detail=option.detail))
+    return rows
+
+
+def _paired_action(action: str) -> tuple[str, str] | None:
+    if action.endswith("_up"):
+        return action[:-3], "up"
+    if action.endswith("_down"):
+        return action[:-5], "down"
+    return None
+
+
+def _paired_label(base: str, down: LiveMenuOption, up: LiveMenuOption) -> str:
+    labels = {
+        "poly": "Polygons",
+        "reflection": "Reflections",
+        "reflections": "Reflections",
+        "texture": "Texture",
+        "gamma": "Gamma",
+        "wind": "Wind",
+        "blade": "Swirl",
+        "look_smoothing": "Look Smoothing",
+        "sun": "Sun",
+        "sky_time": "Sky Time",
+        "sky_sun": "Sun",
+    }
+    if base in labels:
+        return labels[base]
+    stripped = _strip_direction_label(up.label) or _strip_direction_label(down.label)
+    if stripped:
+        return stripped
+    return base.replace("_", " ").title()
+
+
+def _strip_direction_label(label: str) -> str:
+    result = label.strip()
+    for suffix in (" +", " -", "+", "-"):
+        if result.endswith(suffix):
+            result = result[: -len(suffix)].strip()
+    for prefix in ("More ", "Less ", "Fewer "):
+        if result.startswith(prefix):
+            result = result[len(prefix) :].strip()
+    return result
+
+
+def _draw_menu_small_button(surface: PixelBuffer, label: str, rect: tuple[int, int, int, int], selected: bool, theme: LiveMenuTheme) -> None:
+    fill = theme.button_selected if selected else theme.button
+    border = theme.active_border if selected else theme.button_border
+    x, y, width, height = rect
+    draw.rect(surface, (x, y), (width, height), fill[:3], fill=True)
+    draw.rect(surface, (x, y), (width, height), border[:3])
+    text_width, text_height = draw.text_size(label)
+    draw.text(surface, (x + (width - text_width) // 2, y + (height - text_height) // 2), label, theme.text)
 
 
 @dataclass(frozen=True)
@@ -833,379 +950,1105 @@ class LiveSceneBatchBuilder:
         return index
 
 
-class ModernGLLiveRenderer:
-    """Render py_3d scenes directly into a pygame/ModernGL window."""
+class _FrameClock:
+    def __init__(self) -> None:
+        self._last = perf_counter()
+
+    def tick(self, fps: int | float = 0) -> float:
+        target = 1.0 / float(fps) if fps and fps > 0 else 0.0
+        now = perf_counter()
+        elapsed = now - self._last
+        if target > elapsed:
+            sleep(target - elapsed)
+            now = perf_counter()
+            elapsed = now - self._last
+        self._last = now
+        return elapsed * 1000.0
+
+
+class _PixelLiveRenderer:
+    """Render py_3d scenes into the built-in live pixel window."""
 
     def __init__(
         self,
         width: int,
         height: int,
         *,
-        title: str = "py_3d live",
+        title: str = "py_3d",
         vsync: bool = True,
         resizable: bool = True,
     ) -> None:
-        import moderngl
-        import pygame
+        self.window = PixelWindow(width, height, title=title, fit_window=True)
+        self.engine = RenderEngine(GPURenderer(allow_cpu_fallback=True))
+        self.stats = LiveFrameStats(0.0, 0.0, 0, 0)
+        self.mouse_captured = False
+        self.menu = LiveMenu()
+        self.hud = LiveHUD()
+        self.show_crosshair = True
+        self._closed = False
+        self._last_frame_size = (max(1, int(width)), max(1, int(height)))
+        self._started = perf_counter()
+        self._menu_surface_cache_key = None
+        self._menu_surface_cache: tuple[PixelBuffer, int, int] | None = None
+        self._menu_blur_cache: PixelBuffer | None = None
+        self._menu_blur_cache_at = 0.0
+        self._menu_was_visible = self.menu.visible
 
-        self.moderngl = moderngl
-        self.pygame = pygame
-        pygame.init()
-        self._display_flags = pygame.OPENGL | pygame.DOUBLEBUF
-        if resizable:
-            self._display_flags |= pygame.RESIZABLE
-        self._vsync = bool(vsync)
+    @property
+    def size(self) -> tuple[int, int]:
+        return self._last_frame_size
+
+    def set_title(self, title: str) -> None:
+        self.window.set_title(title)
+
+    def resize(self, width: int, height: int) -> None:
+        self._last_frame_size = (max(1, int(width)), max(1, int(height)))
+        self._menu_surface_cache_key = None
+        self._menu_surface_cache = None
+        self._menu_blur_cache = None
+
+    def handle_resize_event(self, event) -> bool:
+        if getattr(event, "kind", "") != "resize":
+            return False
+        size = getattr(event, "size", (0, 0)) or getattr(event, "pos", (0, 0))
+        self.resize(size[0], size[1])
+        return True
+
+    def frame_clock(self):
+        return _FrameClock()
+
+    def ticks(self) -> int:
+        return int((perf_counter() - self._started) * 1000.0)
+
+    def events(self):
+        if self._closed or self.window.closed:
+            return [WindowEvent("quit")]
         try:
-            pygame.display.set_mode((width, height), self._display_flags, vsync=1 if self._vsync else 0)
-        except TypeError:
-            pygame.display.set_mode((width, height), self._display_flags)
-        pygame.display.set_caption(title)
+            raw_events = self.window.poll_events()
+        except Exception:
+            self._closed = True
+            return [WindowEvent("quit")]
+        events = tuple(self._map_window_event(event) for event in raw_events)
+        if any(event.kind == "quit" for event in events):
+            self._closed = True
+        return events
 
+    def event_key(self, event) -> str:
+        return event.key
+
+    def event_mouse_rel(self, event) -> tuple[int, int]:
+        return event.rel
+
+    def event_mouse_button(self, event) -> int:
+        return event.button
+
+    def event_mouse_wheel_y(self, event) -> int:
+        return event.y
+
+    def is_quit_event(self, event) -> bool:
+        return event.kind == "quit"
+
+    def is_menu_pointer_event(self, event) -> bool:
+        return event.kind in {"motion", "button", "wheel"}
+
+    def is_mouse_button_down_event(self, event, button: int | None = None) -> bool:
+        if event.kind != "button":
+            return False
+        return button is None or event.button == button
+
+    def is_mouse_motion_event(self, event) -> bool:
+        return event.kind == "motion"
+
+    def is_mouse_wheel_event(self, event) -> bool:
+        return event.kind == "wheel"
+
+    def is_key_down_event(self, event) -> bool:
+        return event.kind == "key_down"
+
+    def is_key_up_event(self, event) -> bool:
+        return event.kind == "key_up"
+
+    def handle_menu_mouse_event(self, event) -> str | None:
+        return self.menu.handle_pointer_event(event)
+
+    def handle_menu_key(self, key: str) -> str | None:
+        return self.menu.handle_key_name(key)
+
+    def key_matches(self, key: str, *names: str) -> bool:
+        normalized = self._normalize_key(key)
+        return any(normalized == self._normalize_key(name) for name in names)
+
+    def set_mouse_captured(self, captured: bool) -> None:
+        self.mouse_captured = bool(captured)
+
+    def render(self, scene: Scene, camera: Camera, settings: RenderSettings) -> LiveFrameStats:
+        build_start = perf_counter()
+        frame = self.engine.render(scene, camera, settings)
+        build_seconds = perf_counter() - build_start
+        self._last_frame_size = (frame.width, frame.height)
+
+        draw_start = perf_counter()
+        if self.hud.visible:
+            self._draw_hud(frame)
+        if self.show_crosshair and not self.menu.visible:
+            self._draw_crosshair(frame)
+        if self.menu.visible != self._menu_was_visible:
+            self._menu_blur_cache = None
+            self._menu_was_visible = self.menu.visible
+        if self.menu.visible:
+            if self.menu.background_blur:
+                self._apply_menu_blur(frame)
+            self._draw_menu(frame)
+        self.window.show(frame)
+        draw_seconds = perf_counter() - draw_start
+
+        self.stats = LiveFrameStats(build_seconds, draw_seconds, 0, 0)
+        return self.stats
+
+    def close(self) -> None:
+        self._closed = True
+        try:
+            self.window.close()
+        except Exception:
+            pass
+
+    def _map_window_event(self, event: WindowEvent) -> WindowEvent:
+        if event.kind not in {"motion", "button"}:
+            return event
+        frame_width, frame_height = self._last_frame_size
+        window_width, window_height = self.window.size
+        pos = self._map_position(event.pos[0], event.pos[1])
+        rel = (
+            int(event.rel[0] * frame_width / max(1, window_width)),
+            int(event.rel[1] * frame_height / max(1, window_height)),
+        )
+        return WindowEvent(event.kind, key=event.key, pos=pos, rel=rel, button=event.button, y=event.y, size=event.size)
+
+    def _map_position(self, x: int, y: int) -> tuple[int, int]:
+        frame_width, frame_height = self._last_frame_size
+        window_width, window_height = self.window.size
+        return (
+            max(0, min(frame_width - 1, int(x * frame_width / max(1, window_width)))),
+            max(0, min(frame_height - 1, int(y * frame_height / max(1, window_height)))),
+        )
+
+    @staticmethod
+    def _normalize_key(key: str) -> str:
+        cleaned = key.lower().replace("-", "_")
+        aliases = {
+            "esc": "escape",
+            "return": "return",
+            "enter": "return",
+            "kp_enter": "return",
+            "shift_l": "lshift",
+            "shift_r": "rshift",
+            "control_l": "lctrl",
+            "control_r": "rctrl",
+            "ctrl_l": "lctrl",
+            "ctrl_r": "rctrl",
+            "bracketleft": "leftbracket",
+            "bracketright": "rightbracket",
+            "prior": "pageup",
+            "next": "pagedown",
+        }
+        return aliases.get(cleaned, cleaned)
+
+    def _draw_menu(self, frame: PixelBuffer) -> None:
+        key = self._menu_cache_key(frame.width, frame.height)
+        if key == self._menu_surface_cache_key and self._menu_surface_cache is not None:
+            menu, left, top = self._menu_surface_cache
+        else:
+            menu, left, top = render_live_menu_surface(self.menu, frame.width, frame.height)
+            self._menu_surface_cache_key = key
+            self._menu_surface_cache = (menu, left, top)
+        _blit_buffer(frame, menu, left, top)
+
+    def _menu_cache_key(self, width: int, height: int):
+        menu = self.menu
+        options = tuple((option.action, option.label, option.detail, option.group) for option in menu.options)
+        scroll = tuple(sorted(menu.scroll_offsets.items()))
+        theme = (
+            menu.theme.panel,
+            menu.theme.border,
+            menu.theme.text,
+            menu.theme.muted_text,
+            menu.theme.row,
+            menu.theme.row_selected,
+            menu.theme.button,
+            menu.theme.button_selected,
+            menu.theme.button_border,
+            menu.theme.active_border,
+        )
+        return (width, height, menu.visible, menu.title, menu.selected_index, menu.active_group, options, scroll, theme)
+
+    def _apply_menu_blur(self, frame: PixelBuffer) -> None:
+        now = perf_counter()
+        cache = self._menu_blur_cache
+        if (
+            cache is not None
+            and cache.width == frame.width
+            and cache.height == frame.height
+            and now - self._menu_blur_cache_at < 0.12
+        ):
+            frame.blit(cache, 0, 0)
+            return
+        self._blur_buffer(frame)
+        self._menu_blur_cache = PixelBuffer.from_rgb_bytes(frame.width, frame.height, bytearray(frame.to_rgb_bytes()))
+        self._menu_blur_cache_at = now
+
+    def _draw_crosshair(self, frame: PixelBuffer) -> None:
+        center_x = frame.width // 2
+        center_y = frame.height // 2
+        color = Color(235, 244, 255)
+        for offset in range(-8, 9):
+            if abs(offset) <= 1:
+                continue
+            frame.set_pixel(center_x + offset, center_y, color)
+            frame.set_pixel(center_x, center_y + offset, color)
+        for y in range(center_y - 1, center_y + 2):
+            for x in range(center_x - 1, center_x + 2):
+                frame.set_pixel(x, y, color)
+
+    def _draw_hud(self, frame: PixelBuffer) -> None:
+        seconds = perf_counter() - self._started
+        for element in self.hud.elements:
+            if isinstance(element, HUDRect):
+                _blend_rect(frame, element.position, element.size, element.color, element.alpha)
+            elif isinstance(element, HUDText):
+                if element.background is not None:
+                    text_width, text_height = draw.text_size(element.text, scale=element.scale)
+                    _blend_rect(
+                        frame,
+                        element.position,
+                        (text_width + element.padding * 2, text_height + element.padding * 2),
+                        element.background,
+                        element.alpha,
+                    )
+                draw.text(
+                    frame,
+                    (element.position[0] + element.padding, element.position[1] + element.padding),
+                    element.text,
+                    element.color,
+                    scale=element.scale,
+                )
+            elif isinstance(element, HUDImage):
+                image = element.image if element.scale <= 1 else element.image.resized_nearest(element.image.width * element.scale, element.image.height * element.scale)
+                _blit_buffer(frame, image, element.position[0], element.position[1], alpha=element.alpha)
+            elif isinstance(element, HUDAnimation):
+                image = element.frame_at(seconds)
+                if image is None:
+                    continue
+                prepared = image if element.scale <= 1 else image.resized_nearest(image.width * element.scale, image.height * element.scale)
+                _blit_buffer(frame, prepared, element.position[0], element.position[1], alpha=element.alpha)
+
+    def _blur_buffer(self, frame: PixelBuffer) -> None:
+        if _blur_buffer_numpy(frame, radius=3):
+            return
+        source = frame.copy()
+        radius = 3
+        for y in range(frame.height):
+            for x in range(frame.width):
+                red = green = blue = count = 0
+                for yy in range(max(0, y - radius), min(frame.height, y + radius + 1)):
+                    for xx in range(max(0, x - radius), min(frame.width, x + radius + 1)):
+                        pixel = source.get_pixel(xx, yy)
+                        red += pixel.r
+                        green += pixel.g
+                        blue += pixel.b
+                        count += 1
+                frame.set_pixel(x, y, (red // count, green // count, blue // count))
+
+
+class _GLFWModernGLLiveRenderer:
+    """Direct GLFW/ModernGL live renderer with a GPU-backed swapchain."""
+
+    backend = "opengl"
+
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        *,
+        title: str = "py_3d",
+        vsync: bool = True,
+        resizable: bool = True,
+    ) -> None:
+        try:
+            import glfw
+            import moderngl
+        except Exception as exc:
+            raise RuntimeError("ModernGL live rendering requires moderngl and glfw") from exc
+
+        if not glfw.init():
+            raise RuntimeError("GLFW could not initialize an OpenGL window")
+
+        glfw.window_hint(glfw.CONTEXT_VERSION_MAJOR, 3)
+        glfw.window_hint(glfw.CONTEXT_VERSION_MINOR, 3)
+        glfw.window_hint(glfw.OPENGL_PROFILE, glfw.OPENGL_CORE_PROFILE)
+        glfw.window_hint(glfw.RESIZABLE, glfw.TRUE if resizable else glfw.FALSE)
+        self._window = glfw.create_window(max(1, int(width)), max(1, int(height)), str(title), None, None)
+        if not self._window:
+            raise RuntimeError("GLFW could not create an OpenGL window")
+
+        glfw.make_context_current(self._window)
+        glfw.swap_interval(1 if vsync else 0)
+        self._glfw = glfw
+        self._moderngl = moderngl
         self.ctx = moderngl.create_context()
         self.ctx.enable(moderngl.DEPTH_TEST)
-        self.ctx.enable(moderngl.BLEND)
-        self.ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
-        self.program = self.ctx.program(vertex_shader=VERTEX_SHADER, fragment_shader=FRAGMENT_SHADER)
+        self.ctx.depth_func = "<"
+        self.scene_program = self.ctx.program(vertex_shader=VERTEX_SHADER, fragment_shader=FRAGMENT_SHADER)
         self.overlay_program = self.ctx.program(vertex_shader=OVERLAY_VERTEX_SHADER, fragment_shader=OVERLAY_FRAGMENT_SHADER)
+        self._set_uniform(self.scene_program, "u_textures", 0)
+        self._set_uniform(self.overlay_program, "u_texture", 0)
+
+        self._triangle_buffer = self.ctx.buffer(reserve=4, dynamic=True)
+        self._line_buffer = self.ctx.buffer(reserve=4, dynamic=True)
+        self._overlay_buffer = self.ctx.buffer(reserve=6 * 4 * 4, dynamic=True)
+        self._triangle_capacity = 4
+        self._line_capacity = 4
+        self._triangle_vao = self.ctx.vertex_array(
+            self.scene_program,
+            [(self._triangle_buffer, _VERTEX_FORMAT, *_VERTEX_ATTRIBUTES)],
+        )
+        self._line_vao = self.ctx.vertex_array(
+            self.scene_program,
+            [(self._line_buffer, _VERTEX_FORMAT, *_VERTEX_ATTRIBUTES)],
+        )
+        self._overlay_vao = self.ctx.vertex_array(
+            self.overlay_program,
+            [(self._overlay_buffer, _OVERLAY_VERTEX_FORMAT, *_OVERLAY_VERTEX_ATTRIBUTES)],
+        )
         self.builder = LiveSceneBatchBuilder()
         self.stats = LiveFrameStats(0.0, 0.0, 0, 0)
         self.mouse_captured = False
         self.menu = LiveMenu()
         self.hud = LiveHUD()
         self.show_crosshair = True
-        self._texture_array = None
-        self._texture_key: tuple[int, tuple[int, ...]] | None = None
+        self._closed = False
+        self._started = perf_counter()
+        self._events: list[WindowEvent] = []
+        self._last_mouse: tuple[int, int] | None = None
+        self._last_frame_size = self._framebuffer_size()
+        self._window_size = self._safe_window_size()
+        self._scene_texture = None
+        self._scene_texture_key = None
+        self._scene_texture_size = 0
+        self._texture_rgba_cache: dict[tuple[int, int, int, int, int], bytes] = {}
+        self._overlay_textures: dict[str, object] = {}
+        self._overlay_sizes: dict[str, tuple[int, int]] = {}
+        self._active_overlay_slots: set[str] = set()
+        self._menu_surface_cache_key = None
+        self._menu_surface_cache: tuple[PixelBuffer, int, int] | None = None
+        self._menu_was_visible = self.menu.visible
+        self._install_callbacks()
 
     @property
     def size(self) -> tuple[int, int]:
-        surface = self.pygame.display.get_surface()
-        if surface is None:
-            return (1, 1)
-        return surface.get_size()
+        return self._framebuffer_size()
 
     def set_title(self, title: str) -> None:
-        self.pygame.display.set_caption(title)
+        self._glfw.set_window_title(self._window, str(title))
 
     def resize(self, width: int, height: int) -> None:
-        width = max(1, int(width))
-        height = max(1, int(height))
-        try:
-            self.pygame.display.set_mode((width, height), self._display_flags, vsync=1 if self._vsync else 0)
-        except TypeError:
-            self.pygame.display.set_mode((width, height), self._display_flags)
-        self.ctx.viewport = (0, 0, width, height)
+        self._glfw.set_window_size(self._window, max(1, int(width)), max(1, int(height)))
+        self._last_frame_size = self._framebuffer_size()
+        self._invalidate_surface_caches()
 
     def handle_resize_event(self, event) -> bool:
-        resize_types = {
-            getattr(self.pygame, "VIDEORESIZE", None),
-            getattr(self.pygame, "WINDOWRESIZED", None),
-            getattr(self.pygame, "WINDOWSIZECHANGED", None),
-        }
-        if event.type not in resize_types:
+        if getattr(event, "kind", "") != "resize":
             return False
-        width = getattr(event, "w", None) or getattr(event, "x", None)
-        height = getattr(event, "h", None) or getattr(event, "y", None)
-        if width is None or height is None:
-            try:
-                width, height = self.pygame.display.get_window_size()
-            except Exception:
-                width, height = self.size
-        self.resize(width, height)
+        self._last_frame_size = self._framebuffer_size()
+        self._window_size = self._safe_window_size()
+        self._invalidate_surface_caches()
         return True
+
+    def frame_clock(self):
+        return _FrameClock()
+
+    def ticks(self) -> int:
+        return int((perf_counter() - self._started) * 1000.0)
+
+    def events(self):
+        if self._closed:
+            return [WindowEvent("quit")]
+        self._glfw.poll_events()
+        events = tuple(self._map_window_event(event) for event in self._events)
+        self._events.clear()
+        if self._glfw.window_should_close(self._window):
+            events = events + (WindowEvent("quit"),)
+        if any(event.kind == "quit" for event in events):
+            self._closed = True
+        return events
+
+    def event_key(self, event) -> str:
+        return event.key
+
+    def event_mouse_rel(self, event) -> tuple[int, int]:
+        return event.rel
+
+    def event_mouse_button(self, event) -> int:
+        return event.button
+
+    def event_mouse_wheel_y(self, event) -> int:
+        return event.y
+
+    def is_quit_event(self, event) -> bool:
+        return event.kind == "quit"
+
+    def is_menu_pointer_event(self, event) -> bool:
+        return event.kind in {"motion", "button", "wheel"}
+
+    def is_mouse_button_down_event(self, event, button: int | None = None) -> bool:
+        if event.kind != "button":
+            return False
+        return button is None or event.button == button
+
+    def is_mouse_motion_event(self, event) -> bool:
+        return event.kind == "motion"
+
+    def is_mouse_wheel_event(self, event) -> bool:
+        return event.kind == "wheel"
+
+    def is_key_down_event(self, event) -> bool:
+        return event.kind == "key_down"
+
+    def is_key_up_event(self, event) -> bool:
+        return event.kind == "key_up"
+
+    def handle_menu_mouse_event(self, event) -> str | None:
+        return self.menu.handle_pointer_event(event)
+
+    def handle_menu_key(self, key: str) -> str | None:
+        return self.menu.handle_key_name(key)
+
+    def key_matches(self, key: str, *names: str) -> bool:
+        normalized = self._normalize_key(key)
+        return any(normalized == self._normalize_key(name) for name in names)
 
     def set_mouse_captured(self, captured: bool) -> None:
         self.mouse_captured = bool(captured)
-        self.pygame.event.set_grab(self.mouse_captured)
-        self.pygame.mouse.set_visible(not self.mouse_captured)
-        self.pygame.mouse.get_rel()
+        mode = self._glfw.CURSOR_DISABLED if self.mouse_captured else self._glfw.CURSOR_NORMAL
+        self._glfw.set_input_mode(self._window, self._glfw.CURSOR, mode)
+        self._last_mouse = None
 
     def render(self, scene: Scene, camera: Camera, settings: RenderSettings) -> LiveFrameStats:
-        width, height = self.size
-        width = max(1, width)
-        height = max(1, height)
-
         build_start = perf_counter()
         triangle_bytes, line_bytes, triangle_vertices, line_vertices = self.builder.build(scene, settings)
         build_seconds = perf_counter() - build_start
 
         draw_start = perf_counter()
+        width, height = self._framebuffer_size()
+        self._last_frame_size = (width, height)
         self.ctx.viewport = (0, 0, width, height)
-        red, green, blue = settings.background.to_floats()
-        self.ctx.clear(red, green, blue, 1.0, depth=1.0)
+        background = Color.from_value(settings.background).to_floats()
+        self.ctx.clear(background[0], background[1], background[2], 1.0, depth=1.0)
+        self.ctx.enable(self._moderngl.DEPTH_TEST)
+        self.ctx.disable(self._moderngl.BLEND)
+        if settings.cull_backfaces:
+            self.ctx.enable(self._moderngl.CULL_FACE)
+        else:
+            self.ctx.disable(self._moderngl.CULL_FACE)
 
-        self._set_uniforms(scene, camera, settings, width, height)
-        self._set_live_textures(settings)
-        if triangle_bytes:
-            self._draw_payload(triangle_bytes, self.moderngl.TRIANGLES)
-        if line_bytes:
-            try:
-                self.ctx.line_width = 1.4
-            except Exception:
-                pass
-            self._draw_payload(line_bytes, self.moderngl.LINES)
-        self._draw_scene_overlays(scene, camera, width, height)
-        self._draw_hud(width, height)
+        self._apply_scene_uniforms(scene, camera, settings, width, height)
+        self._upload_scene_textures(settings)
+        self._draw_scene_vertices(triangle_bytes, triangle_vertices, self._triangle_buffer, "_triangle_capacity", self._triangle_vao, self._moderngl.TRIANGLES)
+        self._draw_scene_vertices(line_bytes, line_vertices, self._line_buffer, "_line_capacity", self._line_vao, self._moderngl.LINES)
+
+        self.ctx.disable(self._moderngl.DEPTH_TEST)
+        self.ctx.enable(self._moderngl.BLEND)
+        self.ctx.blend_func = self._moderngl.SRC_ALPHA, self._moderngl.ONE_MINUS_SRC_ALPHA
+        self._begin_overlays()
+        self._draw_scene_bulletins(scene, camera, width, height)
+        if self.hud.visible:
+            self._draw_hud(width, height)
         if self.show_crosshair and not self.menu.visible:
             self._draw_crosshair(width, height)
+        if self.menu.visible != self._menu_was_visible:
+            self._menu_was_visible = self.menu.visible
+            self._invalidate_surface_caches()
         if self.menu.visible:
+            if self.menu.background_blur:
+                self._draw_overlay_rgba(
+                    "menu_dim",
+                    0,
+                    0,
+                    width,
+                    height,
+                    _solid_rgba((width, height), (0, 0, 0), 0.22)[2],
+                )
             self._draw_menu(width, height)
-        self.pygame.display.flip()
+        self._end_overlays()
+        self._glfw.swap_buffers(self._window)
+        draw_seconds = perf_counter() - draw_start
 
-        self.stats = LiveFrameStats(build_seconds, perf_counter() - draw_start, triangle_vertices, line_vertices)
+        self.stats = LiveFrameStats(build_seconds, draw_seconds, triangle_vertices, line_vertices)
         return self.stats
 
     def close(self) -> None:
-        self.set_mouse_captured(False)
-        if self._texture_array is not None:
-            self._texture_array.release()
-            self._texture_array = None
-        self.pygame.quit()
-
-    def _draw_scene_overlays(self, scene: Scene, camera: Camera, width: int, height: int) -> None:
-        for bulletin in scene.bulletins:
-            if isinstance(bulletin, TextBulletin):
-                self._draw_bulletin_texture(
-                    bulletin.text,
-                    bulletin.position,
-                    bulletin.color,
-                    bulletin.background,
-                    bulletin.padding,
-                    bulletin.scale,
-                    width,
-                    height,
-                )
-            elif isinstance(bulletin, FloatingTextBulletin):
-                projected = camera.project(bulletin.position, width, height)
-                if projected is None:
-                    continue
-                text_width, text_height = draw.text_size(bulletin.text, scale=bulletin.scale)
-                total_width = text_width + bulletin.padding * 2
-                total_height = text_height + bulletin.padding * 2
-                position = (
-                    int(projected.x + bulletin.screen_offset[0] - total_width * bulletin.anchor[0]),
-                    int(projected.y + bulletin.screen_offset[1] - total_height * bulletin.anchor[1]),
-                )
-                self._draw_bulletin_texture(
-                    bulletin.text,
-                    position,
-                    bulletin.color,
-                    bulletin.background,
-                    bulletin.padding,
-                    bulletin.scale,
-                    width,
-                    height,
-                )
-
-    def _draw_menu(self, width: int, height: int) -> None:
-        pygame = self.pygame
-        if self.menu.background_blur:
-            self._draw_blurred_frame(width, height)
-        surface, panel_left, panel_top = render_live_menu_surface(self.menu, pygame, width, height)
-        panel_width, panel_height = surface.get_size()
-        data = pygame.image.tostring(surface, "RGBA")
-        self._draw_overlay_texture(panel_left, panel_top, panel_width, panel_height, data, width, height)
-
-    def _draw_blurred_frame(self, width: int, height: int) -> None:
-        pygame = self.pygame
-        try:
-            data = self.ctx.screen.read(components=4, alignment=1)
-        except Exception:
+        if self._closed:
             return
-        frame = pygame.image.frombuffer(data, (width, height), "RGBA")
-        frame = pygame.transform.flip(frame, False, True)
-        frame = _blur_surface(frame, pygame)
-        veil = pygame.Surface((width, height), pygame.SRCALPHA)
-        veil.fill((0, 0, 0, 70))
-        frame.blit(veil, (0, 0))
-        payload = pygame.image.tostring(frame, "RGBA")
-        self._draw_overlay_texture(0, 0, width, height, payload, width, height)
-
-    def _draw_crosshair(self, width: int, height: int) -> None:
-        image_width, image_height, data = _crosshair_rgba(Color(235, 244, 255))
-        self._draw_overlay_texture((width - image_width) // 2, (height - image_height) // 2, image_width, image_height, data, width, height)
-
-    def _draw_hud(self, width: int, height: int) -> None:
-        if not self.hud.visible:
-            return
-        seconds = perf_counter()
-        for element in self.hud.elements:
-            if isinstance(element, HUDRect):
-                image_width, image_height, data = _solid_rgba(element.size, element.color, element.alpha)
-                self._draw_overlay_texture(element.position[0], element.position[1], image_width, image_height, data, width, height)
-            elif isinstance(element, HUDText):
-                image_width, image_height, data = _hud_text_rgba(element)
-                self._draw_overlay_texture(element.position[0], element.position[1], image_width, image_height, data, width, height)
-            elif isinstance(element, HUDImage):
-                image = element.image if element.scale <= 1 else element.image.resized_nearest(element.image.width * element.scale, element.image.height * element.scale)
-                image_width, image_height, data = _pixelbuffer_rgba(image, element.alpha)
-                self._draw_overlay_texture(element.position[0], element.position[1], image_width, image_height, data, width, height)
-            elif isinstance(element, HUDAnimation):
-                frame = element.frame_at(seconds)
-                if frame is None:
-                    continue
-                image = frame if element.scale <= 1 else frame.resized_nearest(frame.width * element.scale, frame.height * element.scale)
-                image_width, image_height, data = _pixelbuffer_rgba(image, element.alpha)
-                self._draw_overlay_texture(element.position[0], element.position[1], image_width, image_height, data, width, height)
-
-    def _draw_bulletin_texture(
-        self,
-        text: str,
-        position: tuple[int, int],
-        color: Color,
-        background: Color | None,
-        padding: int,
-        scale: int,
-        width: int,
-        height: int,
-    ) -> None:
-        image_width, image_height, data = _bulletin_rgba(text, color, background, padding, scale)
-        self._draw_overlay_texture(position[0], position[1], image_width, image_height, data, width, height)
-
-    def _draw_overlay_texture(
-        self,
-        left: int,
-        top: int,
-        image_width: int,
-        image_height: int,
-        data: bytes,
-        target_width: int,
-        target_height: int,
-    ) -> None:
-        if image_width <= 0 or image_height <= 0:
-            return
-        x0 = (left / target_width) * 2.0 - 1.0
-        x1 = ((left + image_width) / target_width) * 2.0 - 1.0
-        y0 = 1.0 - (top / target_height) * 2.0
-        y1 = 1.0 - ((top + image_height) / target_height) * 2.0
-        vertices = array(
-            "f",
-            (
-                x0,
-                y0,
-                0.0,
-                0.0,
-                x1,
-                y0,
-                1.0,
-                0.0,
-                x0,
-                y1,
-                0.0,
-                1.0,
-                x1,
-                y0,
-                1.0,
-                0.0,
-                x1,
-                y1,
-                1.0,
-                1.0,
-                x0,
-                y1,
-                0.0,
-                1.0,
-            ),
-        )
-        texture = self.ctx.texture((image_width, image_height), 4, data)
-        texture.filter = (self.moderngl.NEAREST, self.moderngl.NEAREST)
-        vbo = self.ctx.buffer(vertices.tobytes())
-        vao = self.ctx.vertex_array(self.overlay_program, [(vbo, _OVERLAY_VERTEX_FORMAT, *_OVERLAY_VERTEX_ATTRIBUTES)])
-        self.ctx.disable(self.moderngl.DEPTH_TEST)
-        texture.use(0)
-        self.overlay_program["u_texture"].value = 0
-        vao.render(mode=self.moderngl.TRIANGLES)
-        self.ctx.enable(self.moderngl.DEPTH_TEST)
-        vao.release()
-        vbo.release()
-        texture.release()
-
-    def _draw_payload(self, payload: bytes, mode: int) -> None:
-        vbo = self.ctx.buffer(payload)
-        vao = self.ctx.vertex_array(self.program, [(vbo, _VERTEX_FORMAT, *_VERTEX_ATTRIBUTES)])
-        vao.render(mode=mode)
-        vao.release()
-        vbo.release()
-
-    def _set_live_textures(self, settings: RenderSettings) -> None:
-        textures = self.builder.active_textures[:_MAX_TEXTURES]
-        if not textures:
-            self.program["u_use_textures"].value = False
-            self.program["u_texture_count"].value = 0
-            return
-        texture_size = settings.texture_size
-        key = (texture_size, tuple(id(texture) for texture in textures))
-        if key != self._texture_key:
-            if self._texture_array is not None:
-                self._texture_array.release()
-                self._texture_array = None
-            payload = bytearray()
-            for texture in textures:
-                prepared = texture if texture.width == texture_size and texture.height == texture_size else texture.resized_nearest(texture_size, texture_size)
-                payload.extend(prepared.to_rgb_bytes())
+        self._closed = True
+        for texture in tuple(self._overlay_textures.values()):
             try:
-                self._texture_array = self.ctx.texture_array((texture_size, texture_size, len(textures)), 3, bytes(payload))
-                self._texture_array.filter = (self.moderngl.LINEAR, self.moderngl.LINEAR)
-                self._texture_array.repeat_x = False
-                self._texture_array.repeat_y = False
-                self._texture_key = key
+                texture.release()
             except Exception:
-                self._texture_array = None
-                self._texture_key = None
-        if self._texture_array is None:
-            self.program["u_use_textures"].value = False
-            self.program["u_texture_count"].value = 0
-            return
-        self._texture_array.use(0)
-        self.program["u_textures"].value = 0
-        self.program["u_use_textures"].value = True
-        self.program["u_texture_count"].value = len(textures)
+                pass
+        if self._scene_texture is not None:
+            try:
+                self._scene_texture.release()
+            except Exception:
+                pass
+        for resource in (
+            self._triangle_vao,
+            self._line_vao,
+            self._overlay_vao,
+            self._triangle_buffer,
+            self._line_buffer,
+            self._overlay_buffer,
+            self.scene_program,
+            self.overlay_program,
+        ):
+            try:
+                resource.release()
+            except Exception:
+                pass
+        try:
+            self._glfw.destroy_window(self._window)
+        except Exception:
+            pass
 
-    def _set_uniforms(self, scene: Scene, camera: Camera, settings: RenderSettings, width: int, height: int) -> None:
+    def _install_callbacks(self) -> None:
+        self._glfw.set_window_size_callback(self._window, self._on_window_size)
+        self._glfw.set_framebuffer_size_callback(self._window, self._on_framebuffer_size)
+        self._glfw.set_window_close_callback(self._window, self._on_close)
+        self._glfw.set_key_callback(self._window, self._on_key)
+        self._glfw.set_cursor_pos_callback(self._window, self._on_cursor_pos)
+        self._glfw.set_mouse_button_callback(self._window, self._on_mouse_button)
+        self._glfw.set_scroll_callback(self._window, self._on_scroll)
+
+    def _on_window_size(self, _window, width: int, height: int) -> None:
+        self._window_size = (max(1, int(width)), max(1, int(height)))
+        self._events.append(WindowEvent("resize", size=self._window_size))
+
+    def _on_framebuffer_size(self, _window, width: int, height: int) -> None:
+        self._last_frame_size = (max(1, int(width)), max(1, int(height)))
+        self._invalidate_surface_caches()
+
+    def _on_close(self, _window) -> None:
+        self._events.append(WindowEvent("quit"))
+
+    def _on_key(self, _window, key: int, scancode: int, action: int, _mods: int) -> None:
+        if action == self._glfw.PRESS or action == self._glfw.REPEAT:
+            self._events.append(WindowEvent("key_down", key=self._glfw_key_name(key, scancode)))
+        elif action == self._glfw.RELEASE:
+            self._events.append(WindowEvent("key_up", key=self._glfw_key_name(key, scancode)))
+
+    def _on_cursor_pos(self, _window, x: float, y: float) -> None:
+        pos = (int(x), int(y))
+        last = self._last_mouse or pos
+        rel = (pos[0] - last[0], pos[1] - last[1])
+        self._last_mouse = pos
+        self._events.append(WindowEvent("motion", pos=pos, rel=rel))
+
+    def _on_mouse_button(self, _window, button: int, action: int, _mods: int) -> None:
+        x, y = self._glfw.get_cursor_pos(self._window)
+        event_button = self._mouse_button_number(button)
+        if action == self._glfw.PRESS:
+            self._events.append(WindowEvent("button", pos=(int(x), int(y)), button=event_button))
+        elif action == self._glfw.RELEASE:
+            self._events.append(WindowEvent("button_up", pos=(int(x), int(y)), button=event_button))
+
+    def _on_scroll(self, _window, _x: float, y: float) -> None:
+        self._events.append(WindowEvent("wheel", y=1 if y > 0 else -1 if y < 0 else 0))
+
+    def _mouse_button_number(self, button: int) -> int:
+        mapping = {
+            self._glfw.MOUSE_BUTTON_LEFT: 1,
+            self._glfw.MOUSE_BUTTON_MIDDLE: 2,
+            self._glfw.MOUSE_BUTTON_RIGHT: 3,
+            self._glfw.MOUSE_BUTTON_4: 4,
+            self._glfw.MOUSE_BUTTON_5: 5,
+        }
+        return mapping.get(button, int(button) + 1)
+
+    def _map_window_event(self, event: WindowEvent) -> WindowEvent:
+        if event.kind not in {"motion", "button", "button_up"}:
+            return event
+        frame_width, frame_height = self._last_frame_size
+        window_width, window_height = self._window_size
+        pos = self._map_position(event.pos[0], event.pos[1])
+        rel = (
+            int(event.rel[0] * frame_width / max(1, window_width)),
+            int(event.rel[1] * frame_height / max(1, window_height)),
+        )
+        return WindowEvent(event.kind, key=event.key, pos=pos, rel=rel, button=event.button, y=event.y, size=event.size)
+
+    def _map_position(self, x: int, y: int) -> tuple[int, int]:
+        frame_width, frame_height = self._last_frame_size
+        window_width, window_height = self._window_size
+        return (
+            max(0, min(frame_width - 1, int(x * frame_width / max(1, window_width)))),
+            max(0, min(frame_height - 1, int(y * frame_height / max(1, window_height)))),
+        )
+
+    def _framebuffer_size(self) -> tuple[int, int]:
+        width, height = self._glfw.get_framebuffer_size(self._window)
+        return (max(1, int(width)), max(1, int(height)))
+
+    def _safe_window_size(self) -> tuple[int, int]:
+        width, height = self._glfw.get_window_size(self._window)
+        return (max(1, int(width)), max(1, int(height)))
+
+    def _glfw_key_name(self, key: int, scancode: int) -> str:
+        name = self._glfw.get_key_name(key, scancode)
+        if name:
+            return name.lower()
+        mapping = {
+            self._glfw.KEY_BACKSPACE: "backspace",
+            self._glfw.KEY_TAB: "tab",
+            self._glfw.KEY_ENTER: "return",
+            self._glfw.KEY_ESCAPE: "escape",
+            self._glfw.KEY_SPACE: "space",
+            self._glfw.KEY_PAGE_UP: "pageup",
+            self._glfw.KEY_PAGE_DOWN: "pagedown",
+            self._glfw.KEY_LEFT: "left",
+            self._glfw.KEY_UP: "up",
+            self._glfw.KEY_RIGHT: "right",
+            self._glfw.KEY_DOWN: "down",
+            self._glfw.KEY_LEFT_SHIFT: "lshift",
+            self._glfw.KEY_RIGHT_SHIFT: "rshift",
+            self._glfw.KEY_LEFT_CONTROL: "lctrl",
+            self._glfw.KEY_RIGHT_CONTROL: "rctrl",
+            self._glfw.KEY_LEFT_ALT: "lalt",
+            self._glfw.KEY_RIGHT_ALT: "ralt",
+            self._glfw.KEY_LEFT_BRACKET: "leftbracket",
+            self._glfw.KEY_RIGHT_BRACKET: "rightbracket",
+        }
+        return mapping.get(key, f"key_{key}")
+
+    @staticmethod
+    def _normalize_key(key: str) -> str:
+        cleaned = key.lower().replace("-", "_")
+        aliases = {
+            "esc": "escape",
+            "return": "return",
+            "enter": "return",
+            "kp_enter": "return",
+            "shift_l": "lshift",
+            "shift_r": "rshift",
+            "control_l": "lctrl",
+            "control_r": "rctrl",
+            "ctrl_l": "lctrl",
+            "ctrl_r": "rctrl",
+            "left_shift": "lshift",
+            "right_shift": "rshift",
+            "left_control": "lctrl",
+            "right_control": "rctrl",
+            "bracketleft": "leftbracket",
+            "bracketright": "rightbracket",
+            "prior": "pageup",
+            "next": "pagedown",
+        }
+        return aliases.get(cleaned, cleaned)
+
+    def _apply_scene_uniforms(self, scene: Scene, camera: Camera, settings: RenderSettings, width: int, height: int) -> None:
         right, true_up, forward = camera.basis()
-        self.program["u_camera_position"].value = camera.position.as_tuple()
-        self.program["u_camera_right"].value = right.as_tuple()
-        self.program["u_camera_up"].value = true_up.as_tuple()
-        self.program["u_camera_forward"].value = forward.as_tuple()
-        self.program["u_focal"].value = 1.0 / tan(radians(camera.fov_degrees) / 2.0)
-        self.program["u_aspect"].value = width / height
-        self.program["u_near"].value = camera.near
-        self.program["u_far"].value = camera.far
-        self.program["u_ambient"].value = settings.ambient
-        self.program["u_gamma"].value = settings.gamma
-        self.program["u_light_wrap"].value = settings.light_wrap
-        self.program["u_bounce_light"].value = settings.bounce_light
-        self.program["u_tone_mapping"].value = bool(settings.tone_mapping)
-        self.program["u_two_sided_lighting"].value = bool(settings.two_sided_lighting)
-        self.program["u_reflection_bounces"].value = int(settings.reflection_bounces)
+        self._set_uniform(self.scene_program, "u_camera_position", camera.position.as_tuple())
+        self._set_uniform(self.scene_program, "u_camera_right", right.as_tuple())
+        self._set_uniform(self.scene_program, "u_camera_up", true_up.as_tuple())
+        self._set_uniform(self.scene_program, "u_camera_forward", forward.as_tuple())
+        self._set_uniform(self.scene_program, "u_focal", 1.0 / tan(radians(camera.fov_degrees) / 2.0))
+        self._set_uniform(self.scene_program, "u_aspect", width / max(1, height))
+        self._set_uniform(self.scene_program, "u_near", camera.near)
+        self._set_uniform(self.scene_program, "u_far", camera.far)
+        self._set_uniform(self.scene_program, "u_ambient", settings.ambient)
+        self._set_uniform(self.scene_program, "u_gamma", settings.gamma)
+        self._set_uniform(self.scene_program, "u_light_wrap", settings.light_wrap)
+        self._set_uniform(self.scene_program, "u_bounce_light", settings.bounce_light)
+        self._set_uniform(self.scene_program, "u_tone_mapping", bool(settings.tone_mapping))
+        self._set_uniform(self.scene_program, "u_two_sided_lighting", bool(settings.two_sided_lighting))
+        self._set_uniform(self.scene_program, "u_reflection_bounces", int(settings.reflection_bounces))
+        self._apply_light_uniforms(scene)
 
+    def _apply_light_uniforms(self, scene: Scene) -> None:
+        lights = []
+        for light in scene.lights:
+            if isinstance(light, Sun):
+                sample = light.sample(Vec3(0.0, 0.0, 0.0))
+                lights.append((0, sample.direction, sample.color.to_floats(), sample.intensity))
+            elif isinstance(light, Lamp):
+                lights.append((1, light.position, light.color.to_floats(), light.intensity))
+            elif hasattr(light, "sample"):
+                sample = light.sample(Vec3(0.0, 0.0, 0.0))
+                lights.append((0, sample.direction, sample.color.to_floats(), sample.intensity))
+            if len(lights) >= 8:
+                break
+
+        self._set_uniform(self.scene_program, "u_light_count", len(lights))
         kinds: list[int] = []
         vectors: list[tuple[float, float, float]] = []
         colors: list[tuple[float, float, float]] = []
         intensities: list[float] = []
-        for light in scene.lights[:8]:
-            if isinstance(light, Sun):
-                kinds.append(0)
-                vectors.append((-light.direction).as_tuple())
-                colors.append(light.color.to_floats())
-                intensities.append(float(light.intensity))
-            elif isinstance(light, Lamp):
-                kinds.append(1)
-                vectors.append(light.position.as_tuple())
-                colors.append(light.color.to_floats())
-                intensities.append(float(light.intensity))
+        for index in range(8):
+            if index < len(lights):
+                kind, vector, color, intensity = lights[index]
+                vector_tuple = vector.as_tuple()
+                color_tuple = color
+            else:
+                kind, vector_tuple, color_tuple, intensity = 0, (0.0, 1.0, 0.0), (0.0, 0.0, 0.0), 0.0
+            kinds.append(int(kind))
+            vectors.append(vector_tuple)
+            colors.append(color_tuple)
+            intensities.append(float(intensity))
+            self._set_uniform(self.scene_program, f"u_light_kind[{index}]", int(kind))
+            self._set_uniform(self.scene_program, f"u_light_vector[{index}]", vector_tuple)
+            self._set_uniform(self.scene_program, f"u_light_color[{index}]", color_tuple)
+            self._set_uniform(self.scene_program, f"u_light_intensity[{index}]", float(intensity))
+        self._set_uniform(self.scene_program, "u_light_kind", tuple(kinds))
+        self._set_uniform(self.scene_program, "u_light_vector", tuple(vectors))
+        self._set_uniform(self.scene_program, "u_light_color", tuple(colors))
+        self._set_uniform(self.scene_program, "u_light_intensity", tuple(intensities))
 
-        count = len(kinds)
-        while len(kinds) < 8:
-            kinds.append(0)
-            vectors.append((0.0, 1.0, 0.0))
-            colors.append((0.0, 0.0, 0.0))
-            intensities.append(0.0)
+    def _upload_scene_textures(self, settings: RenderSettings) -> None:
+        textures = tuple(self.builder.active_textures[:_MAX_TEXTURES])
+        if not textures:
+            self._set_uniform(self.scene_program, "u_use_textures", False)
+            self._set_uniform(self.scene_program, "u_texture_count", 0)
+            return
 
-        self.program["u_light_count"].value = count
-        self.program["u_light_kind"].value = tuple(kinds)
-        self.program["u_light_vector"].value = tuple(vectors)
-        self.program["u_light_color"].value = tuple(colors)
-        self.program["u_light_intensity"].value = tuple(intensities)
+        size = max(16, int(settings.texture_size))
+        key = tuple((id(texture), id(texture.pixels), texture.width, texture.height, size) for texture in textures)
+        if key != self._scene_texture_key or self._scene_texture is None or self._scene_texture_size != size:
+            layers = [self._texture_layer_rgba(texture, size) for texture in textures]
+            blank = bytes(size * size * 4)
+            while len(layers) < _MAX_TEXTURES:
+                layers.append(blank)
+            payload = b"".join(layers)
+            if self._scene_texture is None or self._scene_texture_size != size:
+                if self._scene_texture is not None:
+                    self._scene_texture.release()
+                self._scene_texture = self.ctx.texture_array((size, size, _MAX_TEXTURES), 4, payload, alignment=1)
+                try:
+                    self._scene_texture.filter = (self._moderngl.LINEAR, self._moderngl.LINEAR)
+                except Exception:
+                    pass
+                self._scene_texture_size = size
+            else:
+                self._scene_texture.write(payload, alignment=1)
+            self._scene_texture_key = key
+        self._scene_texture.use(location=0)
+        self._set_uniform(self.scene_program, "u_use_textures", True)
+        self._set_uniform(self.scene_program, "u_texture_count", len(textures))
+
+    def _texture_layer_rgba(self, texture: PixelBuffer, size: int) -> bytes:
+        key = (id(texture), id(texture.pixels), texture.width, texture.height, size)
+        cached = self._texture_rgba_cache.get(key)
+        if cached is not None:
+            return cached
+        prepared = texture if texture.width == size and texture.height == size else texture.resized_nearest(size, size)
+        rgba = _pixelbuffer_rgba(prepared, 1.0)[2]
+        flipped = _flip_rgba_rows(rgba, size, size)
+        if len(self._texture_rgba_cache) > 64:
+            self._texture_rgba_cache.clear()
+        self._texture_rgba_cache[key] = flipped
+        return flipped
+
+    def _draw_scene_vertices(self, data: bytes, vertices: int, buffer, capacity_name: str, vao, mode: int) -> None:
+        if not data or vertices <= 0:
+            return
+        capacity = getattr(self, capacity_name)
+        required = len(data)
+        if required > capacity:
+            while capacity < required:
+                capacity *= 2
+            buffer.orphan(capacity)
+            setattr(self, capacity_name, capacity)
+        buffer.write(data)
+        vao.render(mode=mode, vertices=vertices)
+
+    def _begin_overlays(self) -> None:
+        self._active_overlay_slots.clear()
+
+    def _end_overlays(self) -> None:
+        for slot in tuple(self._overlay_textures):
+            if slot in self._active_overlay_slots:
+                continue
+            try:
+                self._overlay_textures[slot].release()
+            except Exception:
+                pass
+            self._overlay_textures.pop(slot, None)
+            self._overlay_sizes.pop(slot, None)
+
+    def _draw_scene_bulletins(self, scene: Scene, camera: Camera, width: int, height: int) -> None:
+        for index, bulletin in enumerate(scene.bulletins):
+            if isinstance(bulletin, TextBulletin):
+                surface_width, surface_height, rgba = _bulletin_rgba(
+                    bulletin.text,
+                    bulletin.color,
+                    bulletin.background,
+                    bulletin.padding,
+                    bulletin.scale,
+                )
+                self._draw_overlay_rgba(f"bulletin_{index}", bulletin.position[0], bulletin.position[1], surface_width, surface_height, rgba)
+            elif isinstance(bulletin, FloatingTextBulletin):
+                projected = camera.project(bulletin.position, width, height)
+                if projected is None:
+                    continue
+                surface_width, surface_height, rgba = _bulletin_rgba(
+                    bulletin.text,
+                    bulletin.color,
+                    bulletin.background,
+                    bulletin.padding,
+                    bulletin.scale,
+                )
+                left = int(projected.x + bulletin.screen_offset[0] - surface_width * bulletin.anchor[0])
+                top = int(projected.y + bulletin.screen_offset[1] - surface_height * bulletin.anchor[1])
+                self._draw_overlay_rgba(f"floating_bulletin_{index}", left, top, surface_width, surface_height, rgba)
+
+    def _draw_hud(self, width: int, height: int) -> None:
+        seconds = perf_counter() - self._started
+        del width, height
+        for index, element in enumerate(self.hud.elements):
+            if isinstance(element, HUDRect):
+                surface_width, surface_height, rgba = _solid_rgba(element.size, element.color, element.alpha)
+                self._draw_overlay_rgba(f"hud_{index}", element.position[0], element.position[1], surface_width, surface_height, rgba)
+            elif isinstance(element, HUDText):
+                surface_width, surface_height, rgba = _hud_text_rgba(element)
+                self._draw_overlay_rgba(f"hud_{index}", element.position[0], element.position[1], surface_width, surface_height, rgba)
+            elif isinstance(element, HUDImage):
+                image = element.image if element.scale <= 1 else element.image.resized_nearest(element.image.width * element.scale, element.image.height * element.scale)
+                surface_width, surface_height, rgba = _pixelbuffer_rgba(image, element.alpha)
+                self._draw_overlay_rgba(f"hud_{index}", element.position[0], element.position[1], surface_width, surface_height, rgba)
+            elif isinstance(element, HUDAnimation):
+                image = element.frame_at(seconds)
+                if image is None:
+                    continue
+                prepared = image if element.scale <= 1 else image.resized_nearest(image.width * element.scale, image.height * element.scale)
+                surface_width, surface_height, rgba = _pixelbuffer_rgba(prepared, element.alpha)
+                self._draw_overlay_rgba(f"hud_{index}", element.position[0], element.position[1], surface_width, surface_height, rgba)
+
+    def _draw_crosshair(self, width: int, height: int) -> None:
+        surface_width, surface_height, rgba = _crosshair_rgba(Color(235, 244, 255))
+        self._draw_overlay_rgba(
+            "crosshair",
+            (width - surface_width) // 2,
+            (height - surface_height) // 2,
+            surface_width,
+            surface_height,
+            rgba,
+        )
+
+    def _draw_menu(self, width: int, height: int) -> None:
+        key = self._menu_cache_key(width, height)
+        if key == self._menu_surface_cache_key and self._menu_surface_cache is not None:
+            menu, left, top = self._menu_surface_cache
+        else:
+            menu, left, top = render_live_menu_surface(self.menu, width, height)
+            self._menu_surface_cache_key = key
+            self._menu_surface_cache = (menu, left, top)
+        surface_width, surface_height, rgba = _pixelbuffer_rgba(menu, 1.0)
+        self._draw_overlay_rgba("menu", left, top, surface_width, surface_height, rgba)
+
+    def _draw_overlay_rgba(self, slot: str, left: int, top: int, width: int, height: int, rgba: bytes) -> None:
+        if width <= 0 or height <= 0:
+            return
+        texture = self._overlay_texture(slot, width, height, rgba)
+        texture.use(location=0)
+        frame_width, frame_height = self._last_frame_size
+        vertices = _overlay_quad_vertices(left, top, width, height, frame_width, frame_height)
+        self._overlay_buffer.write(array("f", vertices).tobytes())
+        self._overlay_vao.render(mode=self._moderngl.TRIANGLES, vertices=6)
+
+    def _overlay_texture(self, slot: str, width: int, height: int, rgba: bytes):
+        self._active_overlay_slots.add(slot)
+        payload = _flip_rgba_rows(rgba, width, height)
+        texture = self._overlay_textures.get(slot)
+        if texture is None or self._overlay_sizes.get(slot) != (width, height):
+            if texture is not None:
+                texture.release()
+            texture = self.ctx.texture((width, height), 4, payload, alignment=1)
+            try:
+                texture.filter = (self._moderngl.NEAREST, self._moderngl.NEAREST)
+            except Exception:
+                pass
+            self._overlay_textures[slot] = texture
+            self._overlay_sizes[slot] = (width, height)
+        else:
+            texture.write(payload, alignment=1)
+        return texture
+
+    def _menu_cache_key(self, width: int, height: int):
+        menu = self.menu
+        options = tuple((option.action, option.label, option.detail, option.group) for option in menu.options)
+        scroll = tuple(sorted(menu.scroll_offsets.items()))
+        theme = (
+            menu.theme.panel,
+            menu.theme.border,
+            menu.theme.text,
+            menu.theme.muted_text,
+            menu.theme.row,
+            menu.theme.row_selected,
+            menu.theme.button,
+            menu.theme.button_selected,
+            menu.theme.button_border,
+            menu.theme.active_border,
+        )
+        return (width, height, menu.visible, menu.title, menu.selected_index, menu.active_group, options, scroll, theme)
+
+    def _invalidate_surface_caches(self) -> None:
+        self._menu_surface_cache_key = None
+        self._menu_surface_cache = None
+
+    @staticmethod
+    def _set_uniform(program, name: str, value) -> bool:
+        for candidate in (name, f"{name}[0]" if not name.endswith("]") else name):
+            try:
+                program[candidate].value = value
+                return True
+            except Exception:
+                continue
+        return False
+
+
+class ModernGLLiveRenderer:
+    """Create the fastest available live renderer with a compatible API."""
+
+    def __new__(
+        cls,
+        width: int,
+        height: int,
+        *,
+        title: str = "py_3d",
+        vsync: bool = True,
+        resizable: bool = True,
+        backend: str = "auto",
+    ):
+        backend_name = backend.lower()
+        if backend_name in {"auto", "gl", "opengl", "moderngl", "gpu"}:
+            try:
+                return _GLFWModernGLLiveRenderer(width, height, title=title, vsync=vsync, resizable=resizable)
+            except Exception:
+                if backend_name != "auto":
+                    raise
+        if backend_name in {"auto", "pixel", "cpu", "native"}:
+            return _PixelLiveRenderer(width, height, title=title, vsync=vsync, resizable=resizable)
+        raise ValueError(f"unknown live renderer backend: {backend}")
+
+
+def _overlay_quad_vertices(left: int, top: int, width: int, height: int, frame_width: int, frame_height: int) -> tuple[float, ...]:
+    x0 = (float(left) / max(1, frame_width)) * 2.0 - 1.0
+    x1 = (float(left + width) / max(1, frame_width)) * 2.0 - 1.0
+    y0 = 1.0 - (float(top) / max(1, frame_height)) * 2.0
+    y1 = 1.0 - (float(top + height) / max(1, frame_height)) * 2.0
+    return (
+        x0,
+        y0,
+        0.0,
+        1.0,
+        x1,
+        y0,
+        1.0,
+        1.0,
+        x1,
+        y1,
+        1.0,
+        0.0,
+        x0,
+        y0,
+        0.0,
+        1.0,
+        x1,
+        y1,
+        1.0,
+        0.0,
+        x0,
+        y1,
+        0.0,
+        0.0,
+    )
+
+
+def _flip_rgba_rows(rgba: bytes, width: int, height: int) -> bytes:
+    stride = width * 4
+    if len(rgba) != stride * height:
+        raise ValueError("RGBA payload dimensions do not match")
+    return b"".join(rgba[y * stride : (y + 1) * stride] for y in range(height - 1, -1, -1))
+
+
+def _blend_color(base: Color, overlay: Color | tuple[int, int, int], alpha: float) -> Color:
+    top = Color.from_value(overlay)
+    amount = max(0.0, min(1.0, float(alpha)))
+    inverse = 1.0 - amount
+    return Color(
+        int(base.r * inverse + top.r * amount),
+        int(base.g * inverse + top.g * amount),
+        int(base.b * inverse + top.b * amount),
+    )
+
+
+def _blend_rect(buffer: PixelBuffer, position: tuple[int, int], size: tuple[int, int], color: Color | tuple[int, int, int], alpha: float) -> None:
+    x, y = int(position[0]), int(position[1])
+    width, height = max(1, int(size[0])), max(1, int(size[1]))
+    for yy in range(max(0, y), min(buffer.height, y + height)):
+        for xx in range(max(0, x), min(buffer.width, x + width)):
+            buffer.set_pixel(xx, yy, _blend_color(buffer.get_pixel(xx, yy), color, alpha))
+
+
+def _blur_buffer_numpy(frame: PixelBuffer, *, radius: int) -> bool:
+    try:
+        import numpy
+    except Exception:
+        return False
+    if radius <= 0:
+        return True
+    try:
+        source = numpy.frombuffer(frame.to_rgb_bytes(), dtype=numpy.uint8).reshape((frame.height, frame.width, 3))
+    except Exception:
+        return False
+    pixel_count = frame.width * frame.height
+    sample_step = 1
+    if pixel_count > 900_000:
+        sample_step = 4
+    elif pixel_count > 260_000:
+        sample_step = 2
+    if sample_step > 1:
+        source = source[::sample_step, ::sample_step]
+    source_height, source_width = source.shape[:2]
+    window = radius * 2 + 1
+    horizontal_source = numpy.pad(source, ((0, 0), (radius, radius), (0, 0)), mode="edge").astype(numpy.uint32)
+    horizontal_sum = numpy.cumsum(horizontal_source, axis=1, dtype=numpy.uint32)
+    horizontal_sum = numpy.pad(horizontal_sum, ((0, 0), (1, 0), (0, 0)), mode="constant")
+    horizontal = horizontal_sum[:, window : window + source_width] - horizontal_sum[:, :source_width]
+    vertical_source = numpy.pad(horizontal, ((radius, radius), (0, 0), (0, 0)), mode="edge")
+    vertical_sum = numpy.cumsum(vertical_source, axis=0, dtype=numpy.uint32)
+    vertical_sum = numpy.pad(vertical_sum, ((1, 0), (0, 0), (0, 0)), mode="constant")
+    blurred = ((vertical_sum[window : window + source_height] - vertical_sum[:source_height]) // (window * window)).astype(numpy.uint8)
+    if sample_step > 1:
+        blurred = blurred.repeat(sample_step, axis=0).repeat(sample_step, axis=1)[: frame.height, : frame.width]
+    frame.pixels = PixelBuffer.from_rgb_bytes(frame.width, frame.height, bytearray(blurred.tobytes())).pixels
+    return True
+
+
+def _blit_buffer(target: PixelBuffer, source: PixelBuffer, left: int, top: int, *, alpha: float = 1.0) -> None:
+    amount = max(0.0, min(1.0, float(alpha)))
+    if amount >= 1.0:
+        target.blit(source, left, top)
+        return
+    for y in range(source.height):
+        target_y = top + y
+        if target_y < 0 or target_y >= target.height:
+            continue
+        for x in range(source.width):
+            target_x = left + x
+            if target_x < 0 or target_x >= target.width:
+                continue
+            pixel = source.get_pixel(x, y)
+            if amount >= 1.0:
+                target.set_pixel(target_x, target_y, pixel)
+            else:
+                target.set_pixel(target_x, target_y, _blend_color(target.get_pixel(target_x, target_y), pixel, amount))
 
 
 def _template_from_triangles(triangles: Iterable[Triangle], *, smooth_shading: bool = True) -> _Template:
@@ -1407,13 +2250,6 @@ def _pixelbuffer_rgba(buffer: PixelBuffer, alpha: float) -> tuple[int, int, byte
         payload[offset + 3] = opacity
         offset += 4
     return buffer.width, buffer.height, bytes(payload)
-
-
-def _blur_surface(surface, pygame, *, scale: int = 12):
-    width, height = surface.get_size()
-    small_size = (max(1, width // scale), max(1, height // scale))
-    small = pygame.transform.smoothscale(surface, small_size)
-    return pygame.transform.smoothscale(small, (width, height))
 
 
 def _alpha_byte(alpha: float) -> int:

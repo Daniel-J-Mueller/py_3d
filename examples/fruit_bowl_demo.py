@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 from dataclasses import dataclass, replace
 from math import cos, pi, radians, sin, tau
@@ -30,6 +29,7 @@ from py_3d import (
     Material,
     Mesh,
     PhysicsWorld,
+    PixelWindow,
     PixelBuffer,
     RenderEngine,
     RenderSettings,
@@ -55,8 +55,8 @@ USER_SETTINGS_PATH = Path("USER") / "settings.json"
 
 DEFAULT_RENDER_QUALITY_PRESETS = {
     "fast": {
-        "width": 640,
-        "height": 360,
+        "width": 480,
+        "height": 270,
         "window_width": 960,
         "window_height": 540,
         "sphere_segments": 10,
@@ -73,12 +73,12 @@ DEFAULT_RENDER_QUALITY_PRESETS = {
         "max_render_distance": 7.0,
     },
     "balanced": {
-        "width": 960,
-        "height": 540,
-        "window_width": 1280,
-        "window_height": 720,
-        "sphere_segments": 18,
-        "sphere_rings": 9,
+        "width": 640,
+        "height": 360,
+        "window_width": 960,
+        "window_height": 540,
+        "sphere_segments": 14,
+        "sphere_rings": 7,
         "smooth_shading": True,
         "texture_size": 256,
         "gamma": 1.12,
@@ -91,12 +91,12 @@ DEFAULT_RENDER_QUALITY_PRESETS = {
         "max_render_distance": 8.5,
     },
     "high": {
-        "width": 1280,
-        "height": 720,
+        "width": 960,
+        "height": 540,
         "window_width": 1280,
         "window_height": 720,
-        "sphere_segments": 24,
-        "sphere_rings": 12,
+        "sphere_segments": 18,
+        "sphere_rings": 9,
         "smooth_shading": True,
         "texture_size": 384,
         "gamma": 1.15,
@@ -109,12 +109,12 @@ DEFAULT_RENDER_QUALITY_PRESETS = {
         "max_render_distance": 10.0,
     },
     "ultra": {
-        "width": 1920,
-        "height": 1080,
-        "window_width": 1920,
-        "window_height": 1080,
-        "sphere_segments": 32,
-        "sphere_rings": 16,
+        "width": 1280,
+        "height": 720,
+        "window_width": 1280,
+        "window_height": 720,
+        "sphere_segments": 24,
+        "sphere_rings": 12,
         "smooth_shading": True,
         "texture_size": 512,
         "gamma": 1.18,
@@ -597,40 +597,38 @@ def floor_texture(width: int = 512, height: int = 512) -> PixelBuffer:
     return _FLOOR_TEXTURE
 
 
-def sign_texture(label: str, quality_label: str, width: int = 384, height: int = 192) -> PixelBuffer:
+def sign_texture(label: str, quality_label: str, width: int = 512, height: int = 256) -> PixelBuffer:
     key = (label, quality_label, width, height)
     cached = _SIGN_TEXTURES.get(key)
     if cached is not None:
         return cached
 
-    buffer = PixelBuffer.new(width, height, (16, 22, 27))
+    buffer = PixelBuffer.new(width, height, (4, 5, 6))
     for y in range(height):
         for x in range(width):
             u = x / max(1, width - 1)
             v = y / max(1, height - 1)
-            grain = 0.5 + 0.5 * sin((u * 11.0 + 0.2 * sin(v * tau * 2.0)) * tau)
+            grain = 0.5 + 0.5 * sin((u * 7.0 + 0.12 * sin(v * tau * 2.0)) * tau)
             dust = _hash_unit(x // 2, y // 2, 0x5190)
             edge = max(abs(u - 0.5) * 2.0, abs(v - 0.5) * 2.0)
-            shade = 1.0 - max(0.0, edge - 0.72) * 0.42
-            buffer.pixels[y * width + x] = Color((15 + grain * 18 + dust * 7) * shade, (21 + grain * 16 + dust * 6) * shade, (27 + grain * 14 + dust * 5) * shade)
+            shade = 1.0 - max(0.0, edge - 0.76) * 0.3
+            buffer.pixels[y * width + x] = Color((8 + grain * 8 + dust * 3) * shade, (9 + grain * 8 + dust * 3) * shade, (10 + grain * 8 + dust * 3) * shade)
 
-    draw.rect(buffer, (8, 8), (width - 16, height - 16), (122, 90, 55), fill=False)
-    draw.rect(buffer, (14, 14), (width - 28, height - 28), (42, 52, 58), fill=False)
+    draw.rect(buffer, (8, 8), (width - 16, height - 16), (214, 190, 132), fill=False)
+    draw.rect(buffer, (16, 16), (width - 32, height - 32), (88, 88, 88), fill=False)
 
     lines = (label.upper(), f"QUALITY {quality_label.upper()}")
-    scale = 3
-    if any(draw.text_size(line, scale=scale)[0] > width - 48 for line in lines):
-        scale = 2
-    if any(draw.text_size(line, scale=scale)[0] > width - 48 for line in lines):
-        scale = 1
+    scale = 5
+    while scale > 1 and any(draw.text_size(line, scale=scale)[0] > width - 72 for line in lines):
+        scale -= 1
     line_spacing = 2
     total_height = len(lines) * 7 * scale + (len(lines) - 1) * line_spacing * scale
     y = (height - total_height) // 2
     for line in lines:
         text_width, text_height = draw.text_size(line, scale=scale, line_spacing=line_spacing)
         x = max(0, (width - text_width) // 2)
-        draw.text(buffer, (x + 2, y + 2), line, (4, 7, 10), scale=scale, line_spacing=line_spacing)
-        draw.text(buffer, (x, y), line, (235, 240, 226), scale=scale, line_spacing=line_spacing)
+        draw.text(buffer, (x + 3, y + 3), line, (0, 0, 0), scale=scale, line_spacing=line_spacing)
+        draw.text(buffer, (x, y), line, (255, 250, 214), scale=scale, line_spacing=line_spacing)
         y += text_height + line_spacing * scale
 
     _SIGN_TEXTURES[key] = buffer
@@ -879,6 +877,8 @@ class FruitBowlSimulation:
         lights = self._lights_for_mode(light_mode)
         if mode in {"poly-lamp", "hanging-lamp"}:
             scene.add(self._hanging_lamp_primitive())
+        elif mode == "rgb-bulbs":
+            scene.add(*self._rgb_bulb_markers())
         else:
             scene.add(*self._light_markers(lights))
         for light in lights:
@@ -940,11 +940,11 @@ class FruitBowlSimulation:
             shininess=18.0,
         )
         trim = Material(color=(100, 72, 42), roughness=0.6, fuzziness=0.12, specular=0.04)
-        panel_z = -1.212
-        left = -2.23
-        right = -1.33
-        bottom = -1.075
-        top = -0.685
+        panel_z = -1.214
+        left = -2.36
+        right = -1.18
+        bottom = -1.13
+        top = -0.58
         panel = Mesh(
             (
                 Triangle((left, bottom, panel_z), (right, top, panel_z), (right, bottom, panel_z), board, (0.0, 1.0), (1.0, 0.0), (1.0, 1.0)),
@@ -952,11 +952,11 @@ class FruitBowlSimulation:
             )
         )
         return (
-            Box((-1.78, -0.88, -1.18), (1.02, 0.46, 0.055), Material(color=(20, 26, 31), roughness=0.55, specular=0.08, shininess=16.0)),
+            Box((-1.77, -0.86, -1.18), (1.34, 0.66, 0.06), Material(color=(8, 9, 10), roughness=0.55, specular=0.08, shininess=16.0)),
             panel,
-            Box((-2.24, -1.18, -1.16), (0.055, 0.72, 0.055), trim),
-            Box((-1.32, -1.18, -1.16), (0.055, 0.72, 0.055), trim),
-            Box((-1.78, -0.62, -1.16), (1.12, 0.055, 0.075), trim),
+            Box((-2.38, -1.16, -1.16), (0.06, 0.88, 0.06), trim),
+            Box((-1.16, -1.16, -1.16), (0.06, 0.88, 0.06), trim),
+            Box((-1.77, -0.53, -1.16), (1.32, 0.06, 0.08), trim),
         )
 
     def _hanging_lamp_pose(self) -> tuple[Vec3, Vec3]:
@@ -989,10 +989,50 @@ class FruitBowlSimulation:
                 markers.append(Sphere(start, 0.045, Material(color=light.color, emission=(255, 255, 255), diffuse=0.1)))
         return tuple(markers)
 
+    def _rgb_bulb_positions(self) -> tuple[Vec3, Vec3, Vec3]:
+        return (Vec3(-1.45, 1.65, -1.42), Vec3(0.0, 1.86, -1.56), Vec3(1.45, 1.65, -1.42))
+
+    def _rgb_bulb_state(self) -> tuple[bool, bool, bool]:
+        states = (
+            (True, False, False),
+            (False, True, False),
+            (False, False, True),
+            (True, True, False),
+            (True, False, True),
+            (False, True, True),
+            (True, True, True),
+            (False, False, False),
+        )
+        return states[int(self.time // 2.0) % len(states)]
+
+    def _rgb_bulb_markers(self) -> tuple[Sphere, ...]:
+        colors = ((255, 50, 50), (70, 255, 90), (80, 125, 255))
+        enabled = self._rgb_bulb_state()
+        bulbs: list[Sphere] = []
+        for position, color, active in zip(self._rgb_bulb_positions(), colors, enabled):
+            material = Material(
+                color=color if active else (42, 42, 42),
+                emission=color if active else (0, 0, 0),
+                diffuse=0.18 if active else 0.65,
+                roughness=0.08,
+                specular=0.32,
+                shininess=48.0,
+            )
+            bulbs.append(Sphere(position, 0.1, material))
+        return tuple(bulbs)
+
     def _lights_for_mode(self, light_mode: str) -> tuple[Sun | Lamp, ...]:
         mode = light_mode.lower().replace("_", "-")
-        if mode not in {"multiple", "blinking", "multicolor", "color-shift-blink", "mirror-prelight", "poly-lamp", "hanging-lamp"}:
+        if mode not in {"multiple", "blinking", "multicolor", "color-shift-blink", "mirror-prelight", "poly-lamp", "hanging-lamp", "rgb-bulbs"}:
             mode = "multiple"
+        if mode == "rgb-bulbs":
+            enabled = self._rgb_bulb_state()
+            colors = ((255, 50, 50), (70, 255, 90), (80, 125, 255))
+            lamps = tuple(
+                Lamp(position=position, color=color, intensity=3.8 if active else 0.0)
+                for position, color, active in zip(self._rgb_bulb_positions(), colors, enabled)
+            )
+            return (Sun(direction=(-0.35, -0.82, -0.9), color=(225, 230, 240), intensity=0.25), *lamps)
         if mode in {"poly-lamp", "hanging-lamp"}:
             cord_start, shade_center = self._hanging_lamp_pose()
             axis = (shade_center - cord_start).normalized(Vec3(0.0, -1.0, 0.0))
@@ -1060,7 +1100,7 @@ def make_engine(renderer: str = "cpu", *, fast: bool = False) -> RenderEngine:
     if renderer == "py_gpu":
         from py_gpu.adapters.py3d import Py3DRasterRenderer
 
-        return RenderEngine(Py3DRasterRenderer(reference_compatible=not fast))
+        return RenderEngine(Py3DRasterRenderer(reference_compatible=not fast, fast_materials=fast))
     return RenderEngine(CPURenderer(cache_static_geometry=False))
 
 
@@ -1251,9 +1291,6 @@ def render_video(args: argparse.Namespace) -> Path:
 
 class LiveFruitBowlViewer:
     def __init__(self, args: argparse.Namespace) -> None:
-        import tkinter as tk
-
-        self.tk = tk
         self.args = args
         self.simulation = FruitBowlSimulation(bowl_material=args.bowl_material)
         self.engine = make_engine(args.renderer, fast=getattr(args, "gpu_fast_render", False))
@@ -1266,36 +1303,36 @@ class LiveFruitBowlViewer:
         self.drag_start: tuple[int, int] | None = None
         self.paused = False
         self.full_render = not getattr(args, "live_wireframe", True)
-        self.base_photo = None
-        self.photo = None
-        self.window_icon = None
-
-        self.root = tk.Tk()
-        self.root.title("py_3d fruit bowl")
-        self.root.geometry(f"{args.window_width}x{args.window_height}")
-        self._set_window_icon()
-        self.canvas = tk.Canvas(self.root, bg="#080b0f", highlightthickness=0)
-        self.canvas.pack(fill=tk.BOTH, expand=True)
-        self.image_item = self.canvas.create_image(0, 0, anchor=tk.NW)
-
-        self.canvas.bind("<Button-1>", self.on_click)
-        self.canvas.bind("<B1-Motion>", self.on_drag)
-        self.canvas.bind("<ButtonRelease-1>", self.on_release)
-        self.canvas.bind("<MouseWheel>", self.on_mouse_wheel)
-        self.canvas.bind("<Configure>", lambda event: self.render_once())
-        for key in ("<Left>", "<Right>", "<Up>", "<Down>", "<w>", "<s>", "<a>", "<d>", "<q>", "<e>", "<p>", "<space>", "<r>", "<x>"):
-            self.root.bind(key, self.on_key)
+        self.window = PixelWindow(args.window_width, args.window_height, title="py_3d fruit bowl", fit_window=args.fit_window)
 
     def run(self) -> None:
-        self.render_once()
-        self.root.after(max(1, int(1000 / self.args.fps)), self.tick)
-        self.root.mainloop()
+        from time import sleep
+
+        frame_time = 1.0 / max(1, self.args.fps)
+        while not self.window.closed:
+            for event in self.window.poll_events():
+                if event.kind == "quit":
+                    self.window.close()
+                elif event.kind == "key_down":
+                    if event.key == "escape":
+                        self.window.close()
+                    else:
+                        self.on_key(event.key)
+                elif event.kind == "button" and event.button == 1:
+                    self.on_click(event.pos)
+                elif event.kind == "button_up" and event.button == 1:
+                    self.on_release()
+                elif event.kind == "motion" and self.drag_start is not None:
+                    self.on_drag(event.pos)
+                elif event.kind == "wheel":
+                    self.on_mouse_wheel(event.y)
+            self.tick()
+            sleep(frame_time)
 
     def tick(self) -> None:
         if not self.paused:
             self.simulation.step(1.0 / self.args.fps)
         self.render_once()
-        self.root.after(max(1, int(1000 / self.args.fps)), self.tick)
 
     def camera(self) -> Camera:
         yaw = radians(self.yaw)
@@ -1307,37 +1344,24 @@ class LiveFruitBowlViewer:
         )
         return Camera(position=self.target + offset, target=self.target, fov_degrees=48)
 
-    def _set_window_icon(self) -> None:
-        icon_path = Path(__file__).resolve().parents[1] / "assets" / "py_3d_logo.png"
-        if not icon_path.exists():
-            return
-        try:
-            self.window_icon = self.tk.PhotoImage(file=str(icon_path))
-            self.root.iconphoto(True, self.window_icon)
-        except self.tk.TclError as exc:
-            print(f"Could not load window icon {icon_path}: {exc}")
+    def on_click(self, position: tuple[int, int]) -> None:
+        self.drag_start = position
 
-    def on_click(self, event) -> None:
-        self.canvas.focus_set()
-        self.drag_start = (event.x, event.y)
-
-    def on_drag(self, event) -> None:
+    def on_drag(self, position: tuple[int, int]) -> None:
         if self.drag_start is None:
             return
         last_x, last_y = self.drag_start
-        self.yaw -= (event.x - last_x) * 0.35
-        self.pitch -= (event.y - last_y) * 0.25
-        self.drag_start = (event.x, event.y)
+        self.yaw -= (position[0] - last_x) * 0.35
+        self.pitch -= (position[1] - last_y) * 0.25
+        self.drag_start = position
 
-    def on_release(self, event) -> None:
-        del event
+    def on_release(self) -> None:
         self.drag_start = None
 
-    def on_mouse_wheel(self, event) -> None:
-        self.distance = max(1.6, self.distance * (0.9 if event.delta > 0 else 1.1))
+    def on_mouse_wheel(self, amount: int) -> None:
+        self.distance = max(1.6, self.distance * (0.9 if amount > 0 else 1.1))
 
-    def on_key(self, event) -> None:
-        key = event.keysym.lower()
+    def on_key(self, key: str) -> None:
         if key == "left":
             self.yaw -= 5.0
         elif key == "right":
@@ -1378,18 +1402,7 @@ class LiveFruitBowlViewer:
             self.camera(),
             settings,
         )
-        self.base_photo = self._photo_from_buffer(output)
-        self.photo = self.base_photo
-        if self.args.fit_window:
-            width = max(1, self.canvas.winfo_width())
-            height = max(1, self.canvas.winfo_height())
-            scale_x = width // output.width
-            scale_y = height // output.height
-            if scale_x >= 1 and scale_y >= 1 and output.width * scale_x == width and output.height * scale_y == height:
-                self.photo = self.base_photo.zoom(scale_x, scale_y)
-            else:
-                self.photo = self._photo_from_buffer(output.resized_nearest(width, height))
-        self.canvas.itemconfigure(self.image_item, image=self.photo)
+        self.window.show(output)
 
     def save_snapshot(self) -> None:
         OUTPUT_DIR.mkdir(exist_ok=True)
@@ -1421,20 +1434,10 @@ class LiveFruitBowlViewer:
             sphere_rings=max(4, min(self.settings.sphere_rings, 5)),
         )
 
-    def _photo_from_buffer(self, buffer):
-        ppm = buffer.to_ppm_bytes()
-        try:
-            return self.tk.PhotoImage(data=ppm, format="PPM")
-        except self.tk.TclError:
-            return self.tk.PhotoImage(data=base64.b64encode(ppm).decode("ascii"), format="PPM")
-
-
 class GLFruitBowlViewer:
     def __init__(self, args: argparse.Namespace) -> None:
-        import pygame
         from py_3d.live import LiveFlyCamera, LiveMenu, LiveMenuOption, ModernGLLiveRenderer
 
-        self.pygame = pygame
         self.args = args
         self.simulation = FruitBowlSimulation(bowl_material=args.bowl_material)
         self.snapshot_engine = make_engine(args.renderer, fast=getattr(args, "gpu_fast_render", True))
@@ -1464,7 +1467,7 @@ class GLFruitBowlViewer:
         self.renderer = ModernGLLiveRenderer(
             args.window_width,
             args.window_height,
-            title="py_3d fruit bowl - OpenGL live",
+            title="py_3d fruit bowl - live",
             vsync=getattr(args, "vsync", True),
         )
         self.renderer.menu = LiveMenu(
@@ -1480,6 +1483,9 @@ class GLFruitBowlViewer:
                 LiveMenuOption("reflections_down", "Fewer reflections"),
                 LiveMenuOption("smooth", "Smooth shading"),
                 LiveMenuOption("texture_up", "Texture resolution"),
+                LiveMenuOption("texture_down", "Texture resolution"),
+                LiveMenuOption("gamma_up", "Gamma"),
+                LiveMenuOption("gamma_down", "Gamma"),
                 LiveMenuOption("tone_mapping", "Tone mapping"),
                 LiveMenuOption("sky_cycle", "Day/night cycle"),
                 LiveMenuOption("sky_time_up", "Time later"),
@@ -1494,37 +1500,39 @@ class GLFruitBowlViewer:
                 LiveMenuOption("snapshot", "Save snapshot"),
                 LiveMenuOption("quit", "Quit demo"),
             ),
+            background_blur=getattr(args, "menu_blur", False),
         )
         self._refresh_menu_options()
         self.renderer.set_mouse_captured(True)
         self._last_title_update = 0
 
     def run(self) -> None:
-        clock = self.pygame.time.Clock()
+        clock = self.renderer.frame_clock()
         dt = 1.0 / self.args.fps if self.args.fps > 0 else 1.0 / 120.0
         running = True
         try:
             while running:
-                for event in self.pygame.event.get():
-                    if event.type == self.pygame.QUIT:
+                for event in self.renderer.events():
+                    if self.renderer.is_quit_event(event):
                         running = False
                     elif self.renderer.handle_resize_event(event):
                         continue
-                    elif self.renderer.menu.visible and event.type in (self.pygame.MOUSEMOTION, self.pygame.MOUSEBUTTONDOWN, self.pygame.MOUSEWHEEL):
-                        menu_action = self.renderer.menu.handle_mouse_event(event, self.pygame)
+                    elif self.renderer.menu.visible and self.renderer.is_menu_pointer_event(event):
+                        menu_action = self.renderer.handle_menu_mouse_event(event)
                         if menu_action is not None:
                             running = self._handle_menu_action(menu_action)
-                    elif event.type == self.pygame.MOUSEBUTTONDOWN and not self.renderer.menu.visible:
+                    elif self.renderer.is_mouse_button_down_event(event) and not self.renderer.menu.visible:
                         self.renderer.set_mouse_captured(True)
-                        self.on_mouse_button(event.button)
-                    elif event.type == self.pygame.MOUSEWHEEL and not self.renderer.menu.visible:
-                        self.on_mouse_wheel(event.y)
-                    elif event.type == self.pygame.MOUSEMOTION and self.renderer.mouse_captured:
-                        self.camera_controller.look(event.rel[0], event.rel[1])
-                    elif event.type == self.pygame.KEYDOWN:
-                        running = self.on_key_down(event.key)
-                    elif event.type == self.pygame.KEYUP:
-                        self.on_key_up(event.key)
+                        self.on_mouse_button(self.renderer.event_mouse_button(event))
+                    elif self.renderer.is_mouse_wheel_event(event) and not self.renderer.menu.visible:
+                        self.on_mouse_wheel(self.renderer.event_mouse_wheel_y(event))
+                    elif self.renderer.is_mouse_motion_event(event) and self.renderer.mouse_captured:
+                        rel = self.renderer.event_mouse_rel(event)
+                        self.camera_controller.look(rel[0], rel[1])
+                    elif self.renderer.is_key_down_event(event):
+                        running = self.on_key_down(self.renderer.event_key(event))
+                    elif self.renderer.is_key_up_event(event):
+                        self.on_key_up(self.renderer.event_key(event))
 
                 self.camera_controller.move(self.keys, dt)
                 self.sky.step(dt)
@@ -1591,33 +1599,32 @@ class GLFruitBowlViewer:
         return scene
 
     def on_key_down(self, key: int) -> bool:
-        pygame = self.pygame
-        menu_action = self.renderer.menu.handle_key(key, pygame)
+        menu_action = self.renderer.handle_menu_key(key)
         if menu_action is not None:
             return self._handle_menu_action(menu_action)
         movement_key = self._movement_key(key)
         if movement_key is not None:
             self.keys.add(movement_key)
-        elif key == pygame.K_LEFT:
+        elif self.renderer.key_matches(key, "left"):
             self.camera_controller.look(-36.0, 0.0)
-        elif key == pygame.K_RIGHT:
+        elif self.renderer.key_matches(key, "right"):
             self.camera_controller.look(36.0, 0.0)
-        elif key == pygame.K_UP:
+        elif self.renderer.key_matches(key, "up"):
             self.camera_controller.look(0.0, -36.0)
-        elif key == pygame.K_DOWN:
+        elif self.renderer.key_matches(key, "down"):
             self.camera_controller.look(0.0, 36.0)
-        elif key == pygame.K_p:
+        elif self.renderer.key_matches(key, "p"):
             self.save_snapshot()
-        elif key == pygame.K_SPACE:
+        elif self.renderer.key_matches(key, "space"):
             self.paused = not self.paused
             self._refresh_menu_options()
-        elif key == pygame.K_r:
+        elif self.renderer.key_matches(key, "r"):
             self.full_render = not self.full_render
             self._refresh_menu_options()
-        elif key == pygame.K_x:
+        elif self.renderer.key_matches(key, "x"):
             self.simulation = FruitBowlSimulation(bowl_material=self.args.bowl_material)
             self.drop_held_fruit()
-        elif key == pygame.K_e:
+        elif self.renderer.key_matches(key, "e"):
             self.toggle_grabbed_fruit()
         return True
 
@@ -1625,9 +1632,9 @@ class GLFruitBowlViewer:
         held = self.held_fruit.name.upper() if self.held_fruit is not None else "NONE"
         quality = getattr(self.args, "quality", "custom").upper()
         self.renderer.hud.set(
-            HUDRect((12, 12), (230, 74), (3, 7, 10), alpha=0.58),
+            HUDRect((12, 12), (246, 82), (3, 7, 10), alpha=0.58),
             HUDText(
-                f"E GRAB/DROP\nHELD {held}\n{quality}  {self.settings.reflection_bounces} REFL\nSKY {self.sky.time_of_day:04.1f}H",
+                f"E GRAB/DROP\nHELD {held}\n{quality}  {self.settings.reflection_bounces} REFL  G {self.settings.gamma:0.2f}\nSKY {self.sky.time_of_day:04.1f}H",
                 (20, 20),
                 color=(238, 245, 255),
                 alpha=0.92,
@@ -1653,7 +1660,10 @@ class GLFruitBowlViewer:
             LiveMenuOption("reflections_up", "Reflections +", str(settings.reflection_bounces), "Graphics"),
             LiveMenuOption("reflections_down", "Reflections -", str(settings.reflection_bounces), "Graphics"),
             LiveMenuOption("smooth", "Smooth", "on" if settings.smooth_shading else "off", "Graphics"),
-            LiveMenuOption("texture_up", "Texture", str(settings.texture_size), "Graphics"),
+            LiveMenuOption("texture_up", "Texture +", str(settings.texture_size), "Graphics"),
+            LiveMenuOption("texture_down", "Texture -", str(settings.texture_size), "Graphics"),
+            LiveMenuOption("gamma_up", "Gamma +", f"{settings.gamma:0.2f}", "Graphics"),
+            LiveMenuOption("gamma_down", "Gamma -", f"{settings.gamma:0.2f}", "Graphics"),
             LiveMenuOption("tone_mapping", "Tone Map", "on" if settings.tone_mapping else "off", "Graphics"),
             LiveMenuOption("sky_cycle", "Cycle", "on" if self.sky.cycle_enabled else "off", "Sky"),
             LiveMenuOption("sky_time_up", "Later", f"{self.sky.time_of_day:04.1f}h", "Sky"),
@@ -1797,6 +1807,12 @@ class GLFruitBowlViewer:
         size = sizes[(current_index + amount) % len(sizes)]
         self._set_menu_settings(replace(settings, texture_size=size))
 
+    def _adjust_gamma(self, amount: int) -> None:
+        self._mark_custom_quality()
+        settings = self._menu_settings()
+        gamma = max(0.6, min(2.2, round(settings.gamma + amount * 0.05, 2)))
+        self._set_menu_settings(replace(settings, gamma=gamma))
+
     def _toggle_smooth_shading(self) -> None:
         self._mark_custom_quality()
         settings = self._menu_settings()
@@ -1843,6 +1859,12 @@ class GLFruitBowlViewer:
             self._toggle_smooth_shading()
         elif action == "texture_up":
             self._adjust_texture_size(1)
+        elif action == "texture_down":
+            self._adjust_texture_size(-1)
+        elif action == "gamma_up":
+            self._adjust_gamma(1)
+        elif action == "gamma_down":
+            self._adjust_gamma(-1)
         elif action == "tone_mapping":
             self._toggle_tone_mapping()
         elif action == "sky_cycle":
@@ -1877,18 +1899,17 @@ class GLFruitBowlViewer:
             self.keys.discard(movement_key)
 
     def _movement_key(self, key: int) -> str | None:
-        pygame = self.pygame
-        if key == pygame.K_w:
+        if self.renderer.key_matches(key, "w"):
             return "w"
-        if key == pygame.K_a:
+        if self.renderer.key_matches(key, "a"):
             return "a"
-        if key == pygame.K_s:
+        if self.renderer.key_matches(key, "s"):
             return "s"
-        if key == pygame.K_d:
+        if self.renderer.key_matches(key, "d"):
             return "d"
-        if key in (pygame.K_LSHIFT, pygame.K_RSHIFT):
+        if self.renderer.key_matches(key, "lshift", "rshift"):
             return "shift"
-        if key in (pygame.K_LCTRL, pygame.K_RCTRL):
+        if self.renderer.key_matches(key, "lctrl", "rctrl"):
             return "ctrl"
         return None
 
@@ -1922,14 +1943,14 @@ class GLFruitBowlViewer:
         )
 
     def _update_title(self, stats) -> None:
-        ticks = self.pygame.time.get_ticks()
+        ticks = self.renderer.ticks()
         if ticks - self._last_title_update < 400:
             return
         self._last_title_update = ticks
         mode = "filled" if self.full_render else "wire"
         held = f" - holding {self.held_fruit.name}" if self.held_fruit is not None else ""
         self.renderer.set_title(
-            f"py_3d fruit bowl - OpenGL live - {mode} - {getattr(self.args, 'quality', 'custom')} "
+            f"py_3d fruit bowl - live - {mode} - {getattr(self.args, 'quality', 'custom')} "
             f"- {self.settings.sphere_segments}x{self.settings.sphere_rings} - {self.settings.reflection_bounces} refl{held} "
             f"- {stats.approx_fps:0.1f} render fps "
             f"({stats.build_seconds * 1000:0.1f} ms build, {stats.draw_seconds * 1000:0.1f} ms draw)"
@@ -1957,15 +1978,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fit-window", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--vsync", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--live-wireframe", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--menu-blur", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--quality", help="Render quality preset from USER/settings.json, e.g. fast, balanced, high, ultra, poly.")
     parser.add_argument(
         "--light-mode",
-        choices=("multiple", "blinking", "multicolor", "color-shift-blink", "mirror-prelight", "poly-lamp", "hanging-lamp"),
+        choices=("multiple", "blinking", "multicolor", "color-shift-blink", "mirror-prelight", "poly-lamp", "hanging-lamp", "rgb-bulbs"),
         default="multiple",
     )
     parser.add_argument("--bowl-material", choices=("wood", "mirror"), default="wood")
     parser.add_argument("--renderer", choices=("cpu", "py_gpu"), default="cpu")
-    parser.add_argument("--gpu-fast-render", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--gpu-fast-render", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--cpu-reduced-specs", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--smooth-shading", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--texture-size", type=int, default=256)
@@ -1996,9 +2018,9 @@ def main() -> None:
                 GLFruitBowlViewer(args).run()
                 return
             except Exception as exc:
-                print(f"OpenGL live renderer unavailable, falling back to Tk PixelBuffer path: {exc}")
+                print(f"py_3d live renderer unavailable, falling back to native PixelWindow path: {exc}")
         if args.fps == 0:
-            raise ValueError("fps must be positive for the Tk PixelBuffer fallback")
+            raise ValueError("fps must be positive for the native PixelWindow fallback")
         LiveFruitBowlViewer(args).run()
         return
     if args.fps == 0:

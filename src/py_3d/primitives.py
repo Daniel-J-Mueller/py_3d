@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from math import cos, pi, sin
 from typing import Iterable
 
@@ -289,73 +290,40 @@ class Sphere:
         if rings < 2:
             raise ValueError("sphere rings must be at least 2")
 
-        vertices: list[list[Vec3]] = []
-        normals: list[list[Vec3]] = []
-        for ring in range(rings + 1):
-            phi = pi * ring / rings
-            row = []
-            normal_row = []
-            for segment in range(segments):
-                theta = 2.0 * pi * segment / segments
-                normal = Vec3(
-                    sin(phi) * cos(theta),
-                    cos(phi),
-                    sin(phi) * sin(theta),
+        template = _sphere_template(self.radius, self.perturbation, segments, rings)
+        if self.rotation.x == 0.0 and self.rotation.y == 0.0 and self.rotation.z == 0.0:
+            return tuple(
+                Triangle(
+                    self.center + a,
+                    self.center + b,
+                    self.center + c,
+                    self.material,
+                    uv_a,
+                    uv_b,
+                    uv_c,
+                    normal_a,
+                    normal_b,
+                    normal_c,
                 )
-                radius = self._radius_at(normal)
-                rotated_normal = _rotate_euler(normal, self.rotation)
-                row.append(self.center + rotated_normal * radius)
-                normal_row.append(rotated_normal)
-            vertices.append(row)
-            normals.append(normal_row)
+                for a, b, c, uv_a, uv_b, uv_c, normal_a, normal_b, normal_c in template
+            )
 
-        triangles: list[Triangle] = []
-        for ring in range(rings):
-            for segment in range(segments):
-                next_segment = (segment + 1) % segments
-                u = segment / segments
-                next_u = 1.0 if next_segment == 0 else next_segment / segments
-                v = ring / rings
-                next_v = (ring + 1) / rings
-                top_left = vertices[ring][segment]
-                top_right = vertices[ring][next_segment]
-                bottom_left = vertices[ring + 1][segment]
-                bottom_right = vertices[ring + 1][next_segment]
-                normal_top_left = normals[ring][segment]
-                normal_top_right = normals[ring][next_segment]
-                normal_bottom_left = normals[ring + 1][segment]
-                normal_bottom_right = normals[ring + 1][next_segment]
-                if ring != 0:
-                    triangles.append(
-                        Triangle(
-                            top_left,
-                            bottom_left,
-                            top_right,
-                            self.material,
-                            (u, v),
-                            (u, next_v),
-                            (next_u, v),
-                            normal_top_left,
-                            normal_bottom_left,
-                            normal_top_right,
-                        )
-                    )
-                if ring != rings - 1:
-                    triangles.append(
-                        Triangle(
-                            top_right,
-                            bottom_left,
-                            bottom_right,
-                            self.material,
-                            (next_u, v),
-                            (u, next_v),
-                            (next_u, next_v),
-                            normal_top_right,
-                            normal_bottom_left,
-                            normal_bottom_right,
-                        )
-                    )
-        return tuple(triangles)
+        rotation = _rotation_terms(self.rotation)
+        return tuple(
+            Triangle(
+                self.center + _rotate_euler_precomputed(a, rotation),
+                self.center + _rotate_euler_precomputed(b, rotation),
+                self.center + _rotate_euler_precomputed(c, rotation),
+                self.material,
+                uv_a,
+                uv_b,
+                uv_c,
+                _rotate_euler_precomputed(normal_a, rotation),
+                _rotate_euler_precomputed(normal_b, rotation),
+                _rotate_euler_precomputed(normal_c, rotation),
+            )
+            for a, b, c, uv_a, uv_b, uv_c, normal_a, normal_b, normal_c in template
+        )
 
     def _radius_at(self, normal: Vec3) -> float:
         if self.perturbation is None:
@@ -469,98 +437,22 @@ class Bowl:
         if rings < 1:
             raise ValueError("bowl rings must be at least 1")
 
-        end_phi = pi / 2.0 + self.depth * pi / 2.0
-        vertices: list[list[Vec3]] = []
-        normals: list[list[Vec3]] = []
-        for ring in range(rings + 1):
-            amount = ring / rings
-            phi = pi / 2.0 + (end_phi - pi / 2.0) * amount
-            row = []
-            normal_row = []
-            for segment in range(segments):
-                theta = 2.0 * pi * segment / segments
-                normal = Vec3(
-                    sin(phi) * cos(theta),
-                    cos(phi),
-                    sin(phi) * sin(theta),
-                )
-                row.append(self.center + normal * self._radius_at(normal))
-                normal_row.append(-normal)
-            vertices.append(row)
-            normals.append(normal_row)
-
-        triangles: list[Triangle] = []
-        for ring in range(rings):
-            for segment in range(segments):
-                next_segment = (segment + 1) % segments
-                u = segment / segments
-                next_u = 1.0 if next_segment == 0 else next_segment / segments
-                v = ring / rings
-                next_v = (ring + 1) / rings
-                top_left = vertices[ring][segment]
-                top_right = vertices[ring][next_segment]
-                bottom_left = vertices[ring + 1][segment]
-                bottom_right = vertices[ring + 1][next_segment]
-                normal_top_left = normals[ring][segment]
-                normal_top_right = normals[ring][next_segment]
-                normal_bottom_left = normals[ring + 1][segment]
-                normal_bottom_right = normals[ring + 1][next_segment]
-                triangles.append(
-                    Triangle(
-                        top_left,
-                        bottom_left,
-                        top_right,
-                        self.material,
-                        (u, v),
-                        (u, next_v),
-                        (next_u, v),
-                        normal_top_left,
-                        normal_bottom_left,
-                        normal_top_right,
-                    )
-                )
-                if ring != rings - 1 or self.depth < 1.0:
-                    triangles.append(
-                        Triangle(
-                            top_right,
-                            bottom_left,
-                            bottom_right,
-                            self.material,
-                            (next_u, v),
-                            (u, next_v),
-                            (next_u, next_v),
-                            normal_top_right,
-                            normal_bottom_left,
-                            normal_bottom_right,
-                        )
-                    )
-
-        if self.depth < 1.0:
-            bottom_phi = end_phi
-            bottom_y = self.center.y + cos(bottom_phi) * self.radius
-            bottom_center = Vec3(self.center.x, bottom_y, self.center.z)
-            bottom_v = 1.0
-            for segment in range(segments):
-                next_segment = (segment + 1) % segments
-                u = segment / segments
-                next_u = 1.0 if next_segment == 0 else next_segment / segments
-                triangles.append(
-                    Triangle(
-                        vertices[-1][next_segment],
-                        vertices[-1][segment],
-                        bottom_center,
-                        self.material,
-                        (next_u, bottom_v),
-                        (u, bottom_v),
-                        (0.5, bottom_v),
-                        Vec3(0.0, 1.0, 0.0),
-                        Vec3(0.0, 1.0, 0.0),
-                        Vec3(0.0, 1.0, 0.0),
-                    )
-                )
-        if self.thickness > 0.0:
-            triangles.extend(self._thickness_triangles(vertices, normals, segments, rings, end_phi))
-        return tuple(triangles)
+        template = _bowl_template(self.radius, self.depth, self.perturbation, self.thickness, segments, rings)
+        return tuple(
+            Triangle(
+                self.center + a,
+                self.center + b,
+                self.center + c,
+                self.material,
+                uv_a,
+                uv_b,
+                uv_c,
+                normal_a,
+                normal_b,
+                normal_c,
+            )
+            for a, b, c, uv_a, uv_b, uv_c, normal_a, normal_b, normal_c in template
+        )
 
     def _thickness_triangles(
         self,
@@ -877,10 +769,292 @@ def _horizontal_ring(cx: float, cy: float, cz: float, radius: float, segments: i
     ]
 
 
+@lru_cache(maxsize=128)
+def _sphere_template(
+    radius: float,
+    perturbation: SurfacePerturbation | None,
+    segments: int,
+    rings: int,
+) -> tuple[tuple[Vec3, Vec3, Vec3, tuple[float, float], tuple[float, float], tuple[float, float], Vec3, Vec3, Vec3], ...]:
+    vertices: list[list[Vec3]] = []
+    normals: list[list[Vec3]] = []
+    for ring in range(rings + 1):
+        phi = pi * ring / rings
+        row = []
+        normal_row = []
+        for segment in range(segments):
+            theta = 2.0 * pi * segment / segments
+            normal = Vec3(
+                sin(phi) * cos(theta),
+                cos(phi),
+                sin(phi) * sin(theta),
+            )
+            local_radius = _surface_radius(radius, perturbation, normal)
+            row.append(normal * local_radius)
+            normal_row.append(normal)
+        vertices.append(row)
+        normals.append(normal_row)
+
+    triangles: list[tuple[Vec3, Vec3, Vec3, tuple[float, float], tuple[float, float], tuple[float, float], Vec3, Vec3, Vec3]] = []
+    for ring in range(rings):
+        for segment in range(segments):
+            next_segment = (segment + 1) % segments
+            u = segment / segments
+            next_u = 1.0 if next_segment == 0 else next_segment / segments
+            v = ring / rings
+            next_v = (ring + 1) / rings
+            top_left = vertices[ring][segment]
+            top_right = vertices[ring][next_segment]
+            bottom_left = vertices[ring + 1][segment]
+            bottom_right = vertices[ring + 1][next_segment]
+            normal_top_left = normals[ring][segment]
+            normal_top_right = normals[ring][next_segment]
+            normal_bottom_left = normals[ring + 1][segment]
+            normal_bottom_right = normals[ring + 1][next_segment]
+            if ring != 0:
+                triangles.append(
+                    (
+                        top_left,
+                        bottom_left,
+                        top_right,
+                        (u, v),
+                        (u, next_v),
+                        (next_u, v),
+                        normal_top_left,
+                        normal_bottom_left,
+                        normal_top_right,
+                    )
+                )
+            if ring != rings - 1:
+                triangles.append(
+                    (
+                        top_right,
+                        bottom_left,
+                        bottom_right,
+                        (next_u, v),
+                        (u, next_v),
+                        (next_u, next_v),
+                        normal_top_right,
+                        normal_bottom_left,
+                        normal_bottom_right,
+                    )
+                )
+    return tuple(triangles)
+
+
+@lru_cache(maxsize=64)
+def _bowl_template(
+    radius: float,
+    depth: float,
+    perturbation: SurfacePerturbation | None,
+    thickness: float,
+    segments: int,
+    rings: int,
+) -> tuple[tuple[Vec3, Vec3, Vec3, tuple[float, float] | None, tuple[float, float] | None, tuple[float, float] | None, Vec3, Vec3, Vec3], ...]:
+    end_phi = pi / 2.0 + depth * pi / 2.0
+    vertices: list[list[Vec3]] = []
+    normals: list[list[Vec3]] = []
+    for ring in range(rings + 1):
+        amount = ring / rings
+        phi = pi / 2.0 + (end_phi - pi / 2.0) * amount
+        row = []
+        normal_row = []
+        for segment in range(segments):
+            theta = 2.0 * pi * segment / segments
+            normal = Vec3(
+                sin(phi) * cos(theta),
+                cos(phi),
+                sin(phi) * sin(theta),
+            )
+            row.append(normal * _surface_radius(radius, perturbation, normal))
+            normal_row.append(-normal)
+        vertices.append(row)
+        normals.append(normal_row)
+
+    triangles: list[tuple[Vec3, Vec3, Vec3, tuple[float, float] | None, tuple[float, float] | None, tuple[float, float] | None, Vec3, Vec3, Vec3]] = []
+    for ring in range(rings):
+        for segment in range(segments):
+            next_segment = (segment + 1) % segments
+            u = segment / segments
+            next_u = 1.0 if next_segment == 0 else next_segment / segments
+            v = ring / rings
+            next_v = (ring + 1) / rings
+            top_left = vertices[ring][segment]
+            top_right = vertices[ring][next_segment]
+            bottom_left = vertices[ring + 1][segment]
+            bottom_right = vertices[ring + 1][next_segment]
+            normal_top_left = normals[ring][segment]
+            normal_top_right = normals[ring][next_segment]
+            normal_bottom_left = normals[ring + 1][segment]
+            normal_bottom_right = normals[ring + 1][next_segment]
+            triangles.append(
+                (
+                    top_left,
+                    bottom_left,
+                    top_right,
+                    (u, v),
+                    (u, next_v),
+                    (next_u, v),
+                    normal_top_left,
+                    normal_bottom_left,
+                    normal_top_right,
+                )
+            )
+            if ring != rings - 1 or depth < 1.0:
+                triangles.append(
+                    (
+                        top_right,
+                        bottom_left,
+                        bottom_right,
+                        (next_u, v),
+                        (u, next_v),
+                        (next_u, next_v),
+                        normal_top_right,
+                        normal_bottom_left,
+                        normal_bottom_right,
+                    )
+                )
+
+    if depth < 1.0:
+        bottom_y = cos(end_phi) * radius
+        bottom_center = Vec3(0.0, bottom_y, 0.0)
+        bottom_v = 1.0
+        bottom_normal = Vec3(0.0, 1.0, 0.0)
+        for segment in range(segments):
+            next_segment = (segment + 1) % segments
+            u = segment / segments
+            next_u = 1.0 if next_segment == 0 else next_segment / segments
+            triangles.append(
+                (
+                    vertices[-1][next_segment],
+                    vertices[-1][segment],
+                    bottom_center,
+                    (next_u, bottom_v),
+                    (u, bottom_v),
+                    (0.5, bottom_v),
+                    bottom_normal,
+                    bottom_normal,
+                    bottom_normal,
+                )
+            )
+
+    if thickness > 0.0:
+        triangles.extend(_bowl_thickness_template(vertices, radius, thickness, segments, rings, end_phi, depth))
+    return tuple(triangles)
+
+
+def _bowl_thickness_template(
+    inner_vertices: list[list[Vec3]],
+    radius: float,
+    thickness: float,
+    segments: int,
+    rings: int,
+    end_phi: float,
+    depth: float,
+) -> list[tuple[Vec3, Vec3, Vec3, tuple[float, float] | None, tuple[float, float] | None, tuple[float, float] | None, Vec3, Vec3, Vec3]]:
+    outer_vertices: list[list[Vec3]] = []
+    outer_normals: list[list[Vec3]] = []
+    outer_radius = radius + thickness
+    for ring in range(rings + 1):
+        amount = ring / rings
+        phi = pi / 2.0 + (end_phi - pi / 2.0) * amount
+        row = []
+        normal_row = []
+        for segment in range(segments):
+            theta = 2.0 * pi * segment / segments
+            normal = Vec3(
+                sin(phi) * cos(theta),
+                cos(phi),
+                sin(phi) * sin(theta),
+            )
+            row.append(normal * outer_radius)
+            normal_row.append(normal)
+        outer_vertices.append(row)
+        outer_normals.append(normal_row)
+
+    triangles: list[tuple[Vec3, Vec3, Vec3, tuple[float, float] | None, tuple[float, float] | None, tuple[float, float] | None, Vec3, Vec3, Vec3]] = []
+    for ring in range(rings):
+        for segment in range(segments):
+            next_segment = (segment + 1) % segments
+            u = segment / segments
+            next_u = 1.0 if next_segment == 0 else next_segment / segments
+            v = ring / rings
+            next_v = (ring + 1) / rings
+            top_left = outer_vertices[ring][segment]
+            top_right = outer_vertices[ring][next_segment]
+            bottom_left = outer_vertices[ring + 1][segment]
+            bottom_right = outer_vertices[ring + 1][next_segment]
+            normal_top_left = outer_normals[ring][segment]
+            normal_top_right = outer_normals[ring][next_segment]
+            normal_bottom_left = outer_normals[ring + 1][segment]
+            normal_bottom_right = outer_normals[ring + 1][next_segment]
+            triangles.append(
+                (
+                    top_left,
+                    top_right,
+                    bottom_left,
+                    (u, v),
+                    (next_u, v),
+                    (u, next_v),
+                    normal_top_left,
+                    normal_top_right,
+                    normal_bottom_left,
+                )
+            )
+            if ring != rings - 1 or depth < 1.0:
+                triangles.append(
+                    (
+                        top_right,
+                        bottom_right,
+                        bottom_left,
+                        (next_u, v),
+                        (next_u, next_v),
+                        (u, next_v),
+                        normal_top_right,
+                        normal_bottom_right,
+                        normal_bottom_left,
+                    )
+                )
+
+    rim_normal = Vec3(0.0, 1.0, 0.0)
+    for segment in range(segments):
+        next_segment = (segment + 1) % segments
+        inner_left = inner_vertices[0][segment]
+        inner_right = inner_vertices[0][next_segment]
+        outer_left = outer_vertices[0][segment]
+        outer_right = outer_vertices[0][next_segment]
+        triangles.append((inner_right, inner_left, outer_left, None, None, None, rim_normal, rim_normal, rim_normal))
+        triangles.append((inner_right, outer_left, outer_right, None, None, None, rim_normal, rim_normal, rim_normal))
+    return triangles
+
+
+def _surface_radius(radius: float, perturbation: SurfacePerturbation | None, normal: Vec3) -> float:
+    if perturbation is None:
+        return radius
+    return max(0.001, radius + perturbation.displacement(normal))
+
+
+def _rotation_terms(rotation: Vec3) -> tuple[float, float, float, float, float, float]:
+    return (
+        cos(rotation.x),
+        sin(rotation.x),
+        cos(rotation.y),
+        sin(rotation.y),
+        cos(rotation.z),
+        sin(rotation.z),
+    )
+
+
+def _rotate_euler_precomputed(value: Vec3, terms: tuple[float, float, float, float, float, float]) -> Vec3:
+    cx, sx, cy, sy, cz, sz = terms
+    x_rotated = value.x
+    y_rotated = value.y * cx - value.z * sx
+    z_rotated = value.y * sx + value.z * cx
+    x2 = x_rotated * cy + z_rotated * sy
+    y2 = y_rotated
+    z2 = -x_rotated * sy + z_rotated * cy
+    return Vec3(x2 * cz - y2 * sz, x2 * sz + y2 * cz, z2)
+
+
 def _rotate_euler(value: Vec3, rotation: Vec3) -> Vec3:
-    cx, sx = cos(rotation.x), sin(rotation.x)
-    cy, sy = cos(rotation.y), sin(rotation.y)
-    cz, sz = cos(rotation.z), sin(rotation.z)
-    x_rotated = Vec3(value.x, value.y * cx - value.z * sx, value.y * sx + value.z * cx)
-    y_rotated = Vec3(x_rotated.x * cy + x_rotated.z * sy, x_rotated.y, -x_rotated.x * sy + x_rotated.z * cy)
-    return Vec3(y_rotated.x * cz - y_rotated.y * sz, y_rotated.x * sz + y_rotated.y * cz, y_rotated.z)
+    return _rotate_euler_precomputed(value, _rotation_terms(rotation))

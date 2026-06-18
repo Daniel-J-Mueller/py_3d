@@ -63,7 +63,16 @@ class ClothSheet:
                 pinned = row == 0 and column in {0, columns - 1, columns // 2}
                 self.nodes.append(ClothNode(Vec3(x, y, z), Vec3(0.0, 0.0, 0.0), pinned))
 
-    def step(self, dt: float, time: float, substeps: int = 3, *, wind_scale: float = 1.0) -> None:
+    def step(
+        self,
+        dt: float,
+        time: float,
+        substeps: int = 3,
+        *,
+        wind_scale: float = 1.0,
+        obstacle_center: Vec3 | None = None,
+        obstacle_radius: float = 0.0,
+    ) -> None:
         step_dt = dt / substeps
         for _ in range(substeps):
             forces = [Vec3(0.0, -1.15, 0.0) for _node in self.nodes]
@@ -72,9 +81,12 @@ class ClothSheet:
                 if node.pinned:
                     node.velocity = Vec3(0.0, 0.0, 0.0)
                     continue
-                wind = self._wind_force(node.position, time) * wind_scale
+                occlusion = self._wind_occlusion(node.position, obstacle_center, obstacle_radius)
+                wind = self._wind_force(node.position, time) * wind_scale * occlusion
                 node.velocity = (node.velocity + (forces[index] + wind) * step_dt) * 0.985
                 node.position = node.position + node.velocity * step_dt
+                if obstacle_center is not None and obstacle_radius > 0.0:
+                    self._resolve_obstacle_collision(node, obstacle_center, obstacle_radius)
                 if node.position.y < 0.14:
                     node.position = Vec3(node.position.x, 0.14, node.position.z)
                     node.velocity = Vec3(node.velocity.x, abs(node.velocity.y) * 0.08, node.velocity.z)
@@ -113,6 +125,36 @@ class ClothSheet:
         pulse = 0.82 + 0.18 * sin(time * tau * 1.7 + position.z * 4.2)
         turbulence = Vec3(0.0, sin(time * 3.4 + position.z * 5.0) * 0.32, cos(time * 2.7 + position.y * 4.0) * 0.28)
         return (Vec3(1.0, 0.0, 0.0) + turbulence) * (5.2 * alignment * pulse / (1.0 + distance * distance * 0.9))
+
+    @staticmethod
+    def _wind_occlusion(position: Vec3, obstacle_center: Vec3 | None, obstacle_radius: float) -> float:
+        if obstacle_center is None or obstacle_radius <= 0.0 or position.x <= obstacle_center.x:
+            return 1.0
+        source = Vec3(-2.0, 0.98, 0.0)
+        ray = position - source
+        length_squared = ray.length_squared()
+        if length_squared <= 1e-8:
+            return 1.0
+        t = max(0.0, min(1.0, (obstacle_center - source).dot(ray) / length_squared))
+        closest = source + ray * t
+        if closest.distance_to(obstacle_center) < obstacle_radius * 0.85:
+            return 0.28
+        return 1.0
+
+    @staticmethod
+    def _resolve_obstacle_collision(node: ClothNode, center: Vec3, radius: float) -> None:
+        if node.position.y > center.y + radius * 0.68:
+            return
+        local = node.position - center
+        distance = local.length()
+        margin = 0.035
+        if distance <= 1e-8 or distance >= radius + margin:
+            return
+        normal = local / distance
+        node.position = node.position + normal * (radius + margin - distance)
+        inward_speed = node.velocity.dot(normal)
+        if inward_speed < 0.0:
+            node.velocity = (node.velocity - normal * (1.45 * inward_speed)) * 0.72
 
     def mesh(self) -> Mesh:
         material = Material(color=(255, 255, 255), texture=cloth_texture(), roughness=0.72, fuzziness=0.18, specular=0.04)
@@ -175,7 +217,15 @@ class FanWaterSimulation:
 
     def step(self, dt: float) -> None:
         self.time += dt
-        self.cloth.step(dt, self.time, wind_scale=self.wind_scale)
+        cloth_substeps = 6 if self.wind_scale > 1.6 else 4
+        self.cloth.step(
+            dt,
+            self.time,
+            substeps=cloth_substeps,
+            wind_scale=self.wind_scale,
+            obstacle_center=Vec3(self.water_center.x, 0.78, self.water_center.z),
+            obstacle_radius=0.78,
+        )
         self.fluid.step(dt, substeps=3, external_force=self._fan_blade_force)
         self._constrain_water()
 
@@ -343,10 +393,8 @@ def make_settings(args: argparse.Namespace) -> RenderSettings:
 
 class GLFanClothWaterViewer:
     def __init__(self, args: argparse.Namespace) -> None:
-        import pygame
         from py_3d.live import LiveFlyCamera, LiveMenu, LiveMenuOption, ModernGLLiveRenderer
 
-        self.pygame = pygame
         self.args = args
         self.simulation = FanWaterSimulation(quality=args.quality)
         self.settings = make_settings(args)
@@ -364,7 +412,7 @@ class GLFanClothWaterViewer:
         self.renderer = ModernGLLiveRenderer(
             args.window_width,
             args.window_height,
-            title="py_3d fan cloth water - OpenGL live",
+            title="py_3d fan cloth water - live",
             vsync=getattr(args, "vsync", True),
         )
         self.renderer.menu = LiveMenu(
@@ -387,34 +435,36 @@ class GLFanClothWaterViewer:
                 LiveMenuOption("reset", "Reset simulation"),
                 LiveMenuOption("quit", "Quit demo"),
             ),
+            background_blur=getattr(args, "menu_blur", False),
         )
         self._refresh_menu_options()
         self.renderer.set_mouse_captured(True)
         self._last_title_update = 0
 
     def run(self) -> None:
-        clock = self.pygame.time.Clock()
+        clock = self.renderer.frame_clock()
         dt = 1.0 / self.args.fps
         running = True
         try:
             while running:
-                for event in self.pygame.event.get():
-                    if event.type == self.pygame.QUIT:
+                for event in self.renderer.events():
+                    if self.renderer.is_quit_event(event):
                         running = False
                     elif self.renderer.handle_resize_event(event):
                         continue
-                    elif self.renderer.menu.visible and event.type in (self.pygame.MOUSEMOTION, self.pygame.MOUSEBUTTONDOWN, self.pygame.MOUSEWHEEL):
-                        menu_action = self.renderer.menu.handle_mouse_event(event, self.pygame)
+                    elif self.renderer.menu.visible and self.renderer.is_menu_pointer_event(event):
+                        menu_action = self.renderer.handle_menu_mouse_event(event)
                         if menu_action is not None:
                             running = self._handle_menu_action(menu_action)
-                    elif event.type == self.pygame.MOUSEBUTTONDOWN and not self.renderer.menu.visible:
+                    elif self.renderer.is_mouse_button_down_event(event) and not self.renderer.menu.visible:
                         self.renderer.set_mouse_captured(True)
-                    elif event.type == self.pygame.MOUSEMOTION and self.renderer.mouse_captured:
-                        self.camera_controller.look(event.rel[0], event.rel[1])
-                    elif event.type == self.pygame.KEYDOWN:
-                        running = self.on_key_down(event.key)
-                    elif event.type == self.pygame.KEYUP:
-                        self.on_key_up(event.key)
+                    elif self.renderer.is_mouse_motion_event(event) and self.renderer.mouse_captured:
+                        rel = self.renderer.event_mouse_rel(event)
+                        self.camera_controller.look(rel[0], rel[1])
+                    elif self.renderer.is_key_down_event(event):
+                        running = self.on_key_down(self.renderer.event_key(event))
+                    elif self.renderer.is_key_up_event(event):
+                        self.on_key_up(self.renderer.event_key(event))
 
                 self.camera_controller.move(self.keys, dt)
                 self.sky.step(dt)
@@ -430,21 +480,20 @@ class GLFanClothWaterViewer:
             self.renderer.close()
 
     def on_key_down(self, key: int) -> bool:
-        pygame = self.pygame
-        menu_action = self.renderer.menu.handle_key(key, pygame)
+        menu_action = self.renderer.handle_menu_key(key)
         if menu_action is not None:
             return self._handle_menu_action(menu_action)
         movement_key = self._movement_key(key)
         if movement_key is not None:
             self.keys.add(movement_key)
-        elif key == pygame.K_p:
+        elif self.renderer.key_matches(key, "p"):
             self.paused = not self.paused
             self._refresh_menu_options()
-        elif key == pygame.K_r:
+        elif self.renderer.key_matches(key, "r"):
             self._reset_simulation()
-        elif key == pygame.K_LEFTBRACKET:
+        elif self.renderer.key_matches(key, "leftbracket"):
             self._adjust_wind(-0.15)
-        elif key == pygame.K_RIGHTBRACKET:
+        elif self.renderer.key_matches(key, "rightbracket"):
             self._adjust_wind(0.15)
         return True
 
@@ -454,20 +503,19 @@ class GLFanClothWaterViewer:
             self.keys.discard(movement_key)
 
     def _movement_key(self, key: int) -> str | None:
-        pygame = self.pygame
-        if key == pygame.K_w:
+        if self.renderer.key_matches(key, "w"):
             return "w"
-        if key == pygame.K_a:
+        if self.renderer.key_matches(key, "a"):
             return "a"
-        if key == pygame.K_s:
+        if self.renderer.key_matches(key, "s"):
             return "s"
-        if key == pygame.K_d:
+        if self.renderer.key_matches(key, "d"):
             return "d"
-        if key == pygame.K_SPACE:
+        if self.renderer.key_matches(key, "space"):
             return "space"
-        if key in (pygame.K_LSHIFT, pygame.K_RSHIFT):
+        if self.renderer.key_matches(key, "lshift", "rshift"):
             return "shift"
-        if key in (pygame.K_LCTRL, pygame.K_RCTRL):
+        if self.renderer.key_matches(key, "lctrl", "rctrl"):
             return "ctrl"
         return None
 
@@ -526,7 +574,7 @@ class GLFanClothWaterViewer:
         self.simulation.blade_strength = old_blade
 
     def _adjust_wind(self, amount: float) -> None:
-        self.simulation.wind_scale = max(0.0, min(2.5, self.simulation.wind_scale + amount))
+        self.simulation.wind_scale = max(0.0, min(4.0, self.simulation.wind_scale + amount))
 
     def _adjust_blade(self, amount: float) -> None:
         self.simulation.blade_strength = max(0.0, min(2.5, self.simulation.blade_strength + amount))
@@ -586,12 +634,12 @@ class GLFanClothWaterViewer:
         )
 
     def _update_title(self, stats) -> None:
-        ticks = self.pygame.time.get_ticks()
+        ticks = self.renderer.ticks()
         if ticks - self._last_title_update < 400:
             return
         self._last_title_update = ticks
         self.renderer.set_title(
-            f"py_3d fan cloth water - OpenGL live - {self.args.quality} - {self.settings.reflection_bounces} refl "
+            f"py_3d fan cloth water - live - {self.args.quality} - {self.settings.reflection_bounces} refl "
             f"- {stats.approx_fps:0.1f} fps ({stats.build_seconds * 1000:0.1f} ms build, {stats.draw_seconds * 1000:0.1f} ms draw)"
         )
 
@@ -683,6 +731,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--window-width", type=int, default=960)
     parser.add_argument("--window-height", type=int, default=540)
     parser.add_argument("--vsync", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--menu-blur", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--ambient", type=float, default=0.04)
     parser.add_argument("--gamma", type=float, default=1.12)
     parser.add_argument("--reflection-bounces", type=int, default=2)

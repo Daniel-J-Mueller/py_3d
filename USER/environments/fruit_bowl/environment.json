@@ -1,6 +1,6 @@
 {
   "name": "fruit_bowl",
-  "description": "Kinematic fruit bowl scene with direct OpenGL live navigation and full render variants.",
+  "description": "Kinematic fruit bowl scene with direct py_3d live navigation and full render variants.",
   "rendering_dir": "USER/environments/fruit_bowl/renderings",
   "baking_dir": "USER/environments/fruit_bowl/baking",
   "render_data": "USER/environments/fruit_bowl/render-data.json",
@@ -77,6 +77,12 @@
       "poly-lamp",
       "--label",
       "POLY WOOD LAMP"
+    ],
+    "rgb_bulbs": [
+      "python",
+      "examples/fruit_bowl_rgb_bulbs_live.py",
+      "--renderer",
+      "py_gpu"
     ],
     "cpu_preview": [
       "python",

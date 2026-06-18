@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 import subprocess
+from time import sleep
 from typing import Sequence
+
+from py_3d import PixelBuffer, PixelWindow, draw
 
 
 ROOT = Path(__file__).resolve().parents[2]
+FRAME_WIDTH = 960
+FRAME_HEIGHT = 540
 
 
 @dataclass(frozen=True)
@@ -26,16 +31,8 @@ class Experience:
 @dataclass(frozen=True)
 class MenuSettings:
     quality: str = "balanced"
-    safe_mode: bool = True
+    safe_mode: bool = False
     background_blur: bool = False
-
-
-@dataclass(frozen=True)
-class Button:
-    action: str
-    rect: tuple[int, int, int, int]
-    label: str
-    enabled: bool = True
 
 
 EXPERIENCES = [
@@ -49,10 +46,19 @@ EXPERIENCES = [
         "WASD mouse look, E grab/drop, wheel depth, Esc menu.",
     ),
     Experience(
+        "Fruit Bowl RGB Bulbs",
+        "16_live_fruit_bowl_rgb_bulbs.py",
+        "Standalone red, green, and blue bulbs blink through R, G, B, RG, RB, GB, RGB, and all-off states.",
+        ("python", "examples/fruit_bowl_rgb_bulbs_live.py", "--renderer", "py_gpu"),
+        None,
+        Path("USER/environments/fruit_bowl/renderings/fruit_bowl_rgb_bulbs.png"),
+        "2-second RGB bulb sequence, WASD mouse look, E grab/drop, Esc menu.",
+    ),
+    Experience(
         "Capsule Player Controller",
         "11_live_capsule_walk.py",
         "FPS, over-shoulder, and free cameras with crouch, sprint, collision, HUD overlays, and player model primitives.",
-        ("python", "examples/capsule_walk_demo.py", "--renderer", "py_gpu", "--camera-mode", "third"),
+        ("python", "examples/capsule_walk_demo.py", "--renderer", "py_gpu"),
         None,
         Path("USER/environments/capsule_walk/renderings/capsule_walk_preview.png"),
         "WASD move, mouse aim, Shift sprint, Ctrl/C crouch, V camera.",
@@ -110,6 +116,8 @@ def command_for(experience: Experience, settings: MenuSettings) -> tuple[str, ..
     if "examples/fruit_bowl_live.py" in command or "examples/fan_cloth_water_demo.py" in command:
         if "--quality" not in command:
             command.extend(QUALITY_ARGS.get(quality, QUALITY_ARGS["balanced"]))
+    if settings.background_blur and "--menu-blur" not in command:
+        command.append("--menu-blur")
     return tuple(command)
 
 
@@ -143,399 +151,347 @@ def render_preview(index: int, *, dry_run: bool = False) -> None:
         subprocess.run(command, cwd=ROOT)
 
 
-class ShowcaseMenu:
-    def __init__(self) -> None:
-        import pygame
+def _fit_text(value: str, max_width: int, *, scale: int = 1) -> str:
+    return draw.fit_text(value, max_width, scale=scale)
 
-        self.pygame = pygame
-        pygame.init()
-        self.screen = pygame.display.set_mode((1180, 720), pygame.RESIZABLE)
-        pygame.display.set_caption("py_3d render engine showcase")
-        self.clock = pygame.time.Clock()
-        self.font = pygame.font.SysFont("segoeui", 21)
-        self.small = pygame.font.SysFont("segoeui", 16)
-        self.title_font = pygame.font.SysFont("segoeui", 34, bold=True)
+
+def _draw_wrapped_text(
+    buffer: PixelBuffer,
+    value: str,
+    left: int,
+    top: int,
+    width: int,
+    color: tuple[int, int, int],
+    *,
+    max_lines: int = 4,
+    scale: int = 1,
+) -> None:
+    lines = draw.wrap_text(value, width, scale=scale, max_lines=max_lines)
+    line_height = (7 + 2) * scale
+    for index, line in enumerate(lines[:max_lines]):
+        draw.text(buffer, (left, top + index * line_height), line, color, scale=scale)
+
+
+def _blit(target: PixelBuffer, source: PixelBuffer, left: int, top: int) -> None:
+    target.blit(source, left, top)
+
+
+class NativeShowcaseMenu:
+    quality_order = ("safe", "balanced", "high", "ultra")
+
+    def __init__(self) -> None:
+        self.window = PixelWindow(FRAME_WIDTH, FRAME_HEIGHT, title="py_3d", fit_window=True)
         self.selected = 0
+        self.hover_action = ""
         self.settings = MenuSettings()
-        self.pending_settings = self.settings
         self.last_safe_settings = self.settings
-        self.show_settings = False
-        self.status = "Select an experience and launch or render a preview."
+        self.status = "Select an experience, preview it, or launch it."
         self.child: subprocess.Popen | None = None
         self.child_command: tuple[str, ...] | None = None
-        self.buttons: list[Button] = []
-        self.preview_cache: dict[Path, tuple[float, object]] = {}
+        self.child_preview = False
+        self.hitboxes: list[tuple[int, int, int, int, str]] = []
+        self.preview_cache: dict[Path, PixelBuffer | None] = {}
+        self.preview_scaled_cache: dict[tuple[Path, int, int], PixelBuffer | None] = {}
+        self.preview_images_enabled = False
+        self._dirty = True
+        self._frame: PixelBuffer | None = None
 
     def run(self) -> None:
-        running = True
-        while running:
-            self._poll_child()
-            for event in self.pygame.event.get():
-                if event.type == self.pygame.QUIT:
-                    running = False
-                elif event.type == self.pygame.KEYDOWN:
-                    running = self._handle_key(event.key)
-                elif event.type == self.pygame.MOUSEBUTTONDOWN and event.button == 1:
-                    running = self._handle_click(event.pos)
-                elif event.type == self.pygame.MOUSEWHEEL and not self.show_settings:
-                    self.selected = (self.selected - event.y) % len(EXPERIENCES)
-            self._draw()
-            self.clock.tick(60)
-        if self.child is not None and self.child.poll() is None:
-            self.child.terminate()
-        self.pygame.quit()
+        self._redraw()
+        while not self.window.closed:
+            for event in self.window.poll_events():
+                if event.kind == "quit":
+                    self.window.close()
+                elif event.kind == "key_down":
+                    self._handle_key(event.key)
+                elif event.kind == "motion":
+                    action = self._action_at(self._frame_position(event.pos))
+                    if action != self.hover_action:
+                        self.hover_action = action
+                        self._mark_dirty()
+                elif event.kind == "button" and event.button == 1:
+                    self._handle_action(self._action_at(self._frame_position(event.pos)))
+            if self._poll_child():
+                self._mark_dirty()
+            if self._dirty:
+                self._redraw()
+            sleep(0.005)
 
-    def _poll_child(self) -> None:
-        if self.child is None:
-            return
-        code = self.child.poll()
-        if code is None:
-            return
-        command = " ".join(self.child_command or ())
-        if code == 0:
-            self.status = f"Finished: {command}"
-            self.last_safe_settings = self.settings
-        else:
-            self.settings = self.last_safe_settings
-            self.pending_settings = self.settings
-            self.status = f"Process exited {code}; reverted menu settings."
-        self.child = None
-        self.child_command = None
+    def _redraw(self) -> None:
+        self._frame = self._render()
+        self._dirty = False
+        self.window.show(self._frame)
 
-    def _handle_key(self, key: int) -> bool:
-        pygame = self.pygame
-        if key == pygame.K_ESCAPE:
-            if self.show_settings:
-                self._discard_settings()
-                self.show_settings = False
-                return True
-            return False
-        if self.show_settings:
-            if key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                self._apply_settings(close=True)
-            elif key == pygame.K_LEFT:
-                self._cycle_quality(-1)
-            elif key == pygame.K_RIGHT:
-                self._cycle_quality(1)
-            elif key == pygame.K_s:
-                self.pending_settings = replace(self.pending_settings, safe_mode=not self.pending_settings.safe_mode)
-            elif key == pygame.K_b:
-                self.pending_settings = replace(self.pending_settings, background_blur=not self.pending_settings.background_blur)
-            return True
-        if key in (pygame.K_DOWN, pygame.K_s):
-            self.selected = (self.selected + 1) % len(EXPERIENCES)
-        elif key in (pygame.K_UP, pygame.K_w):
-            self.selected = (self.selected - 1) % len(EXPERIENCES)
-        elif key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_SPACE):
+    def _render(self) -> PixelBuffer:
+        buffer = PixelBuffer.from_rgb_bytes(FRAME_WIDTH, FRAME_HEIGHT, bytearray((9, 9, 9)) * (FRAME_WIDTH * FRAME_HEIGHT))
+        if self.settings.background_blur:
+            self._draw_soft_background(buffer)
+        self.hitboxes = []
+        panel_left, panel_top, panel_width, panel_height = 50, 30, 860, 480
+        draw.rect(buffer, (panel_left, panel_top), (panel_width, panel_height), (0, 0, 0), fill=True)
+        draw.rect(buffer, (panel_left, panel_top), (panel_width, panel_height), (86, 86, 86), fill=False)
+        draw.text(buffer, (panel_left + 26, panel_top + 22), "PY_3D", (242, 242, 242), scale=3)
+        draw.text(buffer, (panel_left + 26, panel_top + 58), f"PROFILE {self._profile_label(self.settings).upper()}", (158, 158, 158), scale=1)
+        draw.text(buffer, (panel_left + 388, panel_top + 58), _fit_text(self.status, 480), (190, 190, 190), scale=1)
+
+        list_left, list_top = panel_left + 26, panel_top + 98
+        for index, experience in enumerate(EXPERIENCES):
+            top = list_top + index * 44
+            selected = index == self.selected
+            color = (36, 36, 36) if selected else (14, 14, 14)
+            if self.hover_action == f"select:{index}" and not selected:
+                color = (24, 24, 24)
+            draw.rect(buffer, (list_left, top), (318, 36), color, fill=True)
+            draw.rect(buffer, (list_left, top), (318, 36), (112, 112, 112) if selected else (44, 44, 44), fill=False)
+            draw.text(buffer, (list_left + 10, top + 10), _fit_text(experience.title, 296, scale=2), (238, 238, 238), scale=2)
+            self._hitbox(list_left, top, 318, 36, f"select:{index}")
+
+        detail_left, detail_top = panel_left + 380, panel_top + 98
+        experience = EXPERIENCES[self.selected]
+        draw.rect(buffer, (detail_left, detail_top), (448, 144), (15, 15, 15), fill=True)
+        draw.rect(buffer, (detail_left, detail_top), (448, 144), (54, 54, 54), fill=False)
+        self._draw_preview(buffer, detail_left + 8, detail_top + 8, 432, 128)
+        draw.text(buffer, (detail_left, detail_top + 166), _fit_text(experience.title, 448, scale=2), (244, 244, 244), scale=2)
+        _draw_wrapped_text(buffer, experience.description, detail_left, detail_top + 198, 448, (206, 206, 206), max_lines=3, scale=2)
+        _draw_wrapped_text(buffer, experience.controls, detail_left, detail_top + 258, 448, (156, 156, 156), max_lines=2, scale=1)
+
+        controls_top = panel_top + panel_height - 104
+        self._button(buffer, panel_left + 26, controls_top, 126, 36, "LAUNCH", "launch", scale=2)
+        self._button(buffer, panel_left + 166, controls_top, 148, 36, "PREVIEW", "preview", scale=2)
+        self._button(buffer, panel_left + 328, controls_top, 104, 36, "STOP", "stop", enabled=self.child is not None, scale=2)
+        self._button(buffer, panel_left + panel_width - 126, controls_top, 96, 36, "EXIT", "exit", scale=2)
+
+        quality = "safe" if self.settings.safe_mode else self.settings.quality
+        settings_top = controls_top + 56
+        draw.text(buffer, (panel_left + 26, settings_top + 12), "QUALITY", (190, 190, 190), scale=1)
+        self._button(buffer, panel_left + 128, settings_top, 34, 32, "-", "quality_down", scale=2)
+        draw.rect(buffer, (panel_left + 172, settings_top), (118, 32), (18, 18, 18), fill=True)
+        draw.rect(buffer, (panel_left + 172, settings_top), (118, 32), (78, 78, 78), fill=False)
+        draw.text(buffer, (panel_left + 190, settings_top + 9), _fit_text(quality.upper(), 82, scale=2), (235, 235, 235), scale=2)
+        self._button(buffer, panel_left + 300, settings_top, 34, 32, "+", "quality_up", scale=2)
+        self._button(buffer, panel_left + 362, settings_top, 142, 32, f"BLUR {'ON' if self.settings.background_blur else 'OFF'}", "blur", scale=1)
+        return buffer
+
+    def _draw_preview(self, buffer: PixelBuffer, left: int, top: int, width: int, height: int) -> None:
+        draw.rect(buffer, (left, top), (width, height), (20, 20, 20), fill=True)
+        path = EXPERIENCES[self.selected].preview_path
+        if not self.preview_images_enabled:
+            label = "PREVIEW" if path is not None else "NO PREVIEW"
+            text_width, text_height = draw.text_size(label, scale=2)
+            draw.text(buffer, (left + (width - text_width) // 2, top + (height - text_height) // 2), label, (150, 150, 150), scale=2)
+            return
+        preview = self._preview_image()
+        if preview is None:
+            label = "NO PREVIEW"
+            text_width, text_height = draw.text_size(label, scale=2)
+            draw.text(buffer, (left + (width - text_width) // 2, top + (height - text_height) // 2), label, (150, 150, 150), scale=2)
+            return
+        resized = self._scaled_preview(preview, width, height)
+        _blit(buffer, resized, left + (width - resized.width) // 2, top + (height - resized.height) // 2)
+
+    def _preview_image(self) -> PixelBuffer | None:
+        path = EXPERIENCES[self.selected].preview_path
+        if path is None:
+            return None
+        target = ROOT / path
+        if target in self.preview_cache:
+            return self.preview_cache[target]
+        try:
+            image = PixelBuffer.from_png(target) if target.exists() else None
+        except Exception:
+            image = None
+        self.preview_cache[target] = image
+        return image
+
+    def _scaled_preview(self, preview: PixelBuffer, width: int, height: int) -> PixelBuffer:
+        path = EXPERIENCES[self.selected].preview_path or Path("")
+        key = (ROOT / path, width, height)
+        cached = self.preview_scaled_cache.get(key)
+        if cached is not None:
+            return cached
+        scale = min(width / preview.width, height / preview.height)
+        resized = preview.resized_nearest(max(1, int(preview.width * scale)), max(1, int(preview.height * scale)))
+        self.preview_scaled_cache[key] = resized
+        return resized
+
+    def _button(
+        self,
+        buffer: PixelBuffer,
+        left: int,
+        top: int,
+        width: int,
+        height: int,
+        label: str,
+        action: str,
+        *,
+        enabled: bool = True,
+        scale: int = 1,
+    ) -> None:
+        hovered = self.hover_action == action and enabled
+        fill = (42, 42, 42) if hovered else (24, 24, 24)
+        border = (150, 150, 150) if hovered else (84, 84, 84)
+        text = (238, 238, 238) if enabled else (100, 100, 100)
+        draw.rect(buffer, (left, top), (width, height), fill, fill=True)
+        draw.rect(buffer, (left, top), (width, height), border, fill=False)
+        label = _fit_text(label, max(1, width - 10), scale=scale)
+        text_width, text_height = draw.text_size(label, scale=scale)
+        draw.text(buffer, (left + (width - text_width) // 2, top + (height - text_height) // 2), label, text, scale=scale)
+        if enabled:
+            self._hitbox(left, top, width, height, action)
+
+    def _hitbox(self, left: int, top: int, width: int, height: int, action: str) -> None:
+        self.hitboxes.append((left, top, width, height, action))
+
+    def _action_at(self, position: tuple[int, int]) -> str:
+        x, y = position
+        for left, top, width, height, action in self.hitboxes:
+            if left <= x <= left + width and top <= y <= top + height:
+                return action
+        return ""
+
+    def _frame_position(self, position: tuple[int, int]) -> tuple[int, int]:
+        window_width, window_height = self.window.size
+        return (
+            max(0, min(FRAME_WIDTH - 1, int(position[0] * FRAME_WIDTH / max(1, window_width)))),
+            max(0, min(FRAME_HEIGHT - 1, int(position[1] * FRAME_HEIGHT / max(1, window_height)))),
+        )
+
+    def _mark_dirty(self) -> None:
+        self._dirty = True
+
+    def _handle_key(self, key: str) -> None:
+        if key == "escape":
+            self.window.close()
+        elif key in {"up", "w"}:
+            self._select((self.selected - 1) % len(EXPERIENCES))
+        elif key in {"down", "s"}:
+            self._select((self.selected + 1) % len(EXPERIENCES))
+        elif key == "return":
             self._launch_selected()
-        elif key == pygame.K_p:
+        elif key == "p":
             self._render_selected_preview()
-        elif key == pygame.K_TAB:
-            self.show_settings = True
-            self.pending_settings = self.settings
-        return True
+        elif key == "q":
+            self._cycle_quality(1)
+        elif key == "b":
+            self._toggle_blur()
+        elif key == "x":
+            self._stop_child()
 
-    def _handle_click(self, pos: tuple[int, int]) -> bool:
-        for button in self.buttons:
-            x, y, width, height = button.rect
-            if button.enabled and x <= pos[0] <= x + width and y <= pos[1] <= y + height:
-                return self._dispatch(button.action)
-        if not self.show_settings:
-            for index, rect in self._experience_rects():
-                x, y, width, height = rect
-                if x <= pos[0] <= x + width and y <= pos[1] <= y + height:
-                    self.selected = index
-                    return True
-        return True
-
-    def _dispatch(self, action: str) -> bool:
-        if action == "launch":
+    def _handle_action(self, action: str) -> None:
+        if not action:
+            return
+        if action.startswith("select:"):
+            self._select(int(action.split(":", 1)[1]))
+        elif action == "launch":
             self._launch_selected()
         elif action == "preview":
             self._render_selected_preview()
-        elif action == "settings":
-            self.show_settings = True
-            self.pending_settings = self.settings
         elif action == "stop":
             self._stop_child()
         elif action == "exit":
-            return False
-        elif action == "quality_prev":
+            self.window.close()
+        elif action == "quality_down":
             self._cycle_quality(-1)
-        elif action == "quality_next":
+        elif action == "quality_up":
             self._cycle_quality(1)
-        elif action == "safe":
-            self.pending_settings = replace(self.pending_settings, safe_mode=not self.pending_settings.safe_mode)
         elif action == "blur":
-            self.pending_settings = replace(self.pending_settings, background_blur=not self.pending_settings.background_blur)
-        elif action == "apply":
-            self._apply_settings(close=False)
-        elif action == "done":
-            self._apply_settings(close=True)
-        elif action == "cancel":
-            self._discard_settings()
-            self.show_settings = False
-        return True
+            self._toggle_blur()
 
     def _launch_selected(self) -> None:
         if self.child is not None:
-            self.status = "A demo is already running. Stop it or close it before launching another."
+            self.status = "A demo is already running."
+            self._mark_dirty()
             return
         experience = EXPERIENCES[self.selected]
-        command = command_for(experience, self.settings)
-        self._start_child(command, f"Launched {experience.title}.")
+        self._start_child(command_for(experience, self.settings), f"Launched {experience.title}.")
 
     def _render_selected_preview(self) -> None:
         if self.child is not None:
-            self.status = "A process is already running. Stop it or wait before rendering a preview."
+            self.status = "A process is already running."
+            self._mark_dirty()
             return
         command = EXPERIENCES[self.selected].preview_command
         if command is None:
-            self.status = "This experience is live-only right now; no still preview command is registered."
+            path = EXPERIENCES[self.selected].preview_path
+            target = ROOT / path if path is not None else None
+            if target is not None and target.exists():
+                self.preview_images_enabled = True
+                self.status = f"Loaded preview for {EXPERIENCES[self.selected].title}."
+            else:
+                self.status = "No still-preview command is available."
+            self._mark_dirty()
             return
-        self._start_child(command, f"Rendering preview for {EXPERIENCES[self.selected].title}.")
+        self.preview_images_enabled = False
+        self._start_child(command, f"Rendering preview for {EXPERIENCES[self.selected].title}.", preview=True)
 
-    def _start_child(self, command: Sequence[str], status: str) -> None:
+    def _start_child(self, command: Sequence[str], status: str, *, preview: bool = False) -> None:
         self.child_command = tuple(command)
-        self.status = status
+        self.child_preview = preview
         try:
             self.child = subprocess.Popen(list(command), cwd=ROOT)
         except OSError as exc:
             self.child = None
             self.child_command = None
+            self.child_preview = False
             self.status = f"Could not start process: {exc}"
+            self._mark_dirty()
+            return
+        self.status = status
+        self._mark_dirty()
 
     def _stop_child(self) -> None:
+        if self.child is not None:
+            self.child.terminate()
+            self.status = "Stopping current process."
+            self._mark_dirty()
+
+    def _poll_child(self) -> bool:
         if self.child is None:
+            return False
+        code = self.child.poll()
+        if code is None:
+            return False
+        command = " ".join(self.child_command or ())
+        if code == 0:
+            self.status = f"Finished: {command}"
+            self.last_safe_settings = self.settings
+            if self.child_preview:
+                self.preview_cache.clear()
+                self.preview_scaled_cache.clear()
+                self.preview_images_enabled = True
+        else:
+            self.settings = self.last_safe_settings
+            self.preview_images_enabled = False
+            self.status = f"Process exited {code}; reverted menu settings."
+        self.child = None
+        self.child_command = None
+        self.child_preview = False
+        return True
+
+    def _select(self, index: int) -> None:
+        if index == self.selected:
             return
-        self.child.terminate()
-        self.status = "Stopping current process."
+        self.selected = index
+        self.preview_images_enabled = False
+        self._mark_dirty()
 
     def _cycle_quality(self, amount: int) -> None:
-        qualities = ("safe", "balanced", "high", "ultra")
-        current = "safe" if self.pending_settings.safe_mode else self.pending_settings.quality
-        index = qualities.index(current) if current in qualities else 1
-        next_quality = qualities[(index + amount) % len(qualities)]
-        self.pending_settings = MenuSettings(quality="balanced" if next_quality == "safe" else next_quality, safe_mode=next_quality == "safe")
+        current = "safe" if self.settings.safe_mode else self.settings.quality
+        index = self.quality_order.index(current) if current in self.quality_order else 2
+        value = self.quality_order[(index + amount) % len(self.quality_order)]
+        self.settings = MenuSettings(quality="balanced" if value == "safe" else value, safe_mode=value == "safe", background_blur=self.settings.background_blur)
+        self.status = f"Profile {self._profile_label(self.settings)}."
+        self._mark_dirty()
 
-    def _apply_settings(self, *, close: bool) -> None:
-        self.last_safe_settings = self.settings
-        self.settings = self.pending_settings
-        self.status = f"Applied menu profile: {self._profile_label(self.settings)}."
-        if close:
-            self.show_settings = False
+    def _toggle_blur(self) -> None:
+        self.settings = MenuSettings(quality=self.settings.quality, safe_mode=self.settings.safe_mode, background_blur=not self.settings.background_blur)
+        self.status = f"Menu blur {'enabled' if self.settings.background_blur else 'disabled'}."
+        self._mark_dirty()
 
-    def _discard_settings(self) -> None:
-        self.pending_settings = self.settings
-        self.status = "Discarded pending menu settings."
-
-    def _draw(self) -> None:
-        width, height = self.screen.get_size()
-        self.buttons = []
-        self._draw_background(width, height)
-        menu_rect = self._menu_rect(width, height)
-        self._draw_menu_box(menu_rect)
-        self._draw_header(menu_rect)
-        self._draw_experience_list(menu_rect)
-        self._draw_preview_panel(menu_rect)
-        self._draw_button_bay(menu_rect)
-        if self.show_settings:
-            self._draw_settings(width, height)
-        self.pygame.display.flip()
-
-    def _draw_background(self, width: int, height: int) -> None:
-        for y in range(height):
-            t = y / max(1, height - 1)
-            shade = 18 + int(t * 20)
-            color = (shade, shade, shade)
-            self.pygame.draw.line(self.screen, color, (0, y), (width, y))
-        for index in range(72):
-            x = (index * 97 + 31) % max(1, width)
-            y = (index * 53 + 17) % max(1, max(1, height - 96))
-            shade = 72 + (index * 37) % 68
-            self.screen.fill((shade, shade, shade), (x, y, 2, 2))
-
-    def _menu_rect(self, width: int, height: int) -> tuple[int, int, int, int]:
-        panel_width = min(max(320, width - 48), 1120)
-        panel_height = min(max(440, height - 48), 660)
-        if panel_width > width - 24:
-            panel_width = max(300, width - 24)
-        if panel_height > height - 24:
-            panel_height = max(360, height - 24)
-        return ((width - panel_width) // 2, (height - panel_height) // 2, panel_width, panel_height)
-
-    def _draw_menu_box(self, rect: tuple[int, int, int, int]) -> None:
-        self.pygame.draw.rect(self.screen, (24, 24, 24), rect, border_radius=6)
-        self.pygame.draw.rect(self.screen, (138, 138, 138), rect, width=2, border_radius=6)
-
-    def _draw_header(self, rect: tuple[int, int, int, int]) -> None:
-        left, top, width, _height = rect
-        self._text("py_3d render engine showcase", (left + 24, top + 22), self.title_font, (246, 246, 246))
-        profile = self._profile_label(self.settings)
-        self._text(f"Profile {profile}   {self.status}", (left + 26, top + 66), self.small, (188, 188, 188), max_width=width - 52)
-
-    def _draw_experience_list(self, rect: tuple[int, int, int, int]) -> None:
-        panel_left, panel_top, panel_width, _panel_height = rect
-        left = panel_left + 24
-        top = panel_top + 104
-        card_width = min(430, max(300, int(panel_width * 0.40)))
-        card_height = 112
-        for index, experience in enumerate(EXPERIENCES):
-            y = top + index * (card_height + 14)
-            selected = index == self.selected
-            fill = (64, 64, 64) if selected else (34, 34, 34)
-            border = (214, 214, 214) if selected else (104, 104, 104)
-            rect = (left, y, card_width, card_height)
-            self.pygame.draw.rect(self.screen, fill, rect, border_radius=6)
-            self.pygame.draw.rect(self.screen, border, rect, width=2, border_radius=6)
-            self._text(experience.title, (left + 16, y + 10), self.font, (246, 246, 246), max_width=card_width - 32)
-            self._text(experience.description, (left + 16, y + 38), self.small, (190, 190, 190), max_width=card_width - 32, max_lines=2)
-            self._text(experience.controls, (left + 16, y + 86), self.small, (154, 154, 154), max_width=card_width - 32, max_lines=1)
-
-    def _draw_preview_panel(self, rect: tuple[int, int, int, int]) -> None:
-        panel_left, panel_top, panel_width, panel_height = rect
-        list_width = min(430, max(300, int(panel_width * 0.40)))
-        left = panel_left + 48 + list_width
-        top = panel_top + 104
-        preview_width = max(280, panel_left + panel_width - left - 24)
-        preview_height = max(230, panel_top + panel_height - top - 86)
-        self.pygame.draw.rect(self.screen, (32, 32, 32), (left, top, preview_width, preview_height), border_radius=6)
-        self.pygame.draw.rect(self.screen, (104, 104, 104), (left, top, preview_width, preview_height), width=2, border_radius=6)
-        experience = EXPERIENCES[self.selected]
-        image_rect = (left + 18, top + 18, preview_width - 36, max(160, preview_height - 104))
-        self._draw_preview_image(experience, image_rect)
-        self._text(experience.script, (left + 20, top + preview_height - 72), self.small, (160, 160, 160), max_width=preview_width - 40)
-        self._text("Preview images are rendered assets; launch opens an interactive demo window.", (left + 20, top + preview_height - 46), self.small, (198, 198, 198), max_width=preview_width - 40)
-
-    def _draw_preview_image(self, experience: Experience, rect: tuple[int, int, int, int]) -> None:
-        pygame = self.pygame
-        x, y, width, height = rect
-        pygame.draw.rect(self.screen, (18, 18, 18), rect)
-        path = experience.preview_path
-        surface = self._load_preview(path) if path is not None else None
-        if surface is None:
-            self._text("Preview not rendered", (x + 24, y + 24), self.font, (226, 226, 226))
-            self._text("Use Render Preview to create the still image for this card.", (x + 24, y + 58), self.small, (168, 168, 168), max_width=width - 48)
-            return
-        source_width, source_height = surface.get_size()
-        scale = min(width / source_width, height / source_height)
-        target_size = (max(1, int(source_width * scale)), max(1, int(source_height * scale)))
-        scaled = pygame.transform.smoothscale(surface, target_size)
-        self.screen.blit(scaled, (x + (width - target_size[0]) // 2, y + (height - target_size[1]) // 2))
-
-    def _load_preview(self, path: Path | None):
-        if path is None:
-            return None
-        target = ROOT / path
-        if not target.exists():
-            return None
-        mtime = target.stat().st_mtime
-        cached = self.preview_cache.get(path)
-        if cached is not None and cached[0] == mtime:
-            return cached[1]
-        try:
-            image = self.pygame.image.load(str(target)).convert()
-        except self.pygame.error:
-            return None
-        self.preview_cache[path] = (mtime, image)
-        return image
-
-    def _draw_button_bay(self, rect: tuple[int, int, int, int]) -> None:
-        left, top, width, height = rect
-        y = top + height - 58
-        running = self.child is not None
-        actions = (
-            Button("launch", (left + 24, y, 150, 42), "Launch", not running),
-            Button("preview", (left + 186, y, 170, 42), "Render Preview", not running),
-            Button("settings", (left + 368, y, 132, 42), "Settings", not running),
-            Button("stop", (left + width - 270, y, 116, 42), "Stop", running),
-            Button("exit", (left + width - 142, y, 116, 42), "Exit", True),
-        )
-        for button in actions:
-            self._button(button)
-
-    def _draw_settings(self, width: int, height: int) -> None:
-        if self.pending_settings.background_blur:
-            self._blur_screen(width, height)
-        panel_width = min(560, width - 90)
-        panel_height = 324
-        left = (width - panel_width) // 2
-        top = (height - panel_height) // 2
-        self.pygame.draw.rect(self.screen, (24, 24, 24), (left, top, panel_width, panel_height), border_radius=6)
-        self.pygame.draw.rect(self.screen, (154, 154, 154), (left, top, panel_width, panel_height), width=2, border_radius=6)
-        self._text("Graphics Launch Settings", (left + 24, top + 22), self.font, (246, 246, 246))
-        self._text("These settings stage launch profiles for demos that expose render quality. Apply commits them; Exit discards.", (left + 24, top + 58), self.small, (188, 188, 188), max_width=panel_width - 48)
-        self._text(f"Profile: {self._profile_label(self.pending_settings)}", (left + 24, top + 112), self.font, (226, 226, 226))
-        self._button(Button("quality_prev", (left + 24, top + 154, 92, 38), "Previous"))
-        self._button(Button("quality_next", (left + 126, top + 154, 92, 38), "Next"))
-        self._button(Button("safe", (left + 232, top + 154, 178, 38), "Safe Mode On" if self.pending_settings.safe_mode else "Safe Mode Off"))
-        self._button(Button("blur", (left + 24, top + 204, 178, 38), "Blur On" if self.pending_settings.background_blur else "Blur Off"))
-        bay_y = top + panel_height - 62
-        self._button(Button("apply", (left + 24, bay_y, 116, 40), "Apply"))
-        self._button(Button("done", (left + 154, bay_y, 116, 40), "Done"))
-        self._button(Button("cancel", (left + 284, bay_y, 116, 40), "Exit Menu"))
-
-    def _button(self, button: Button) -> None:
-        fill = (68, 68, 68) if button.enabled else (42, 42, 42)
-        border = (196, 196, 196) if button.enabled else (92, 92, 92)
-        text_color = (246, 246, 246) if button.enabled else (134, 134, 134)
-        self.pygame.draw.rect(self.screen, fill, button.rect, border_radius=5)
-        self.pygame.draw.rect(self.screen, border, button.rect, width=2, border_radius=5)
-        text = self.small.render(button.label, True, text_color)
-        x, y, width, height = button.rect
-        self.screen.blit(text, (x + (width - text.get_width()) // 2, y + (height - text.get_height()) // 2))
-        self.buttons.append(button)
-
-    def _experience_rects(self) -> tuple[tuple[int, tuple[int, int, int, int]], ...]:
-        width, height = self.screen.get_size()
-        left, top, panel_width, _panel_height = self._menu_rect(width, height)
-        card_width = min(430, max(300, int(panel_width * 0.40)))
-        return tuple((index, (left + 24, top + 104 + index * 126, card_width, 112)) for index in range(len(EXPERIENCES)))
-
-    def _blur_screen(self, width: int, height: int) -> None:
-        scale = 12
-        small = self.pygame.transform.smoothscale(self.screen, (max(1, width // scale), max(1, height // scale)))
-        blurred = self.pygame.transform.smoothscale(small, (width, height))
-        veil = self.pygame.Surface((width, height), self.pygame.SRCALPHA)
-        veil.fill((0, 0, 0, 72))
-        blurred.blit(veil, (0, 0))
-        self.screen.blit(blurred, (0, 0))
-
-    def _text(
-        self,
-        text: str,
-        position: tuple[int, int],
-        font,
-        color: tuple[int, int, int],
-        *,
-        max_width: int | None = None,
-        max_lines: int = 3,
-    ) -> None:
-        x, y = position
-        lines = self._wrap(text, font, max_width) if max_width else [text]
-        for line in lines[:max_lines]:
-            surface = font.render(line, True, color)
-            self.screen.blit(surface, (x, y))
-            y += surface.get_height() + 3
-
-    @staticmethod
-    def _wrap(text: str, font, max_width: int | None) -> list[str]:
-        if max_width is None:
-            return [text]
-        words = text.split()
-        lines: list[str] = []
-        current = ""
-        for word in words:
-            candidate = word if not current else f"{current} {word}"
-            if font.size(candidate)[0] <= max_width:
-                current = candidate
-            else:
-                if current:
-                    lines.append(current)
-                current = word
-        if current:
-            lines.append(current)
-        return lines or [""]
+    def _draw_soft_background(self, buffer: PixelBuffer) -> None:
+        for y in range(0, buffer.height, 18):
+            shade = 10 + (y // 18) % 3 * 4
+            draw.rect(buffer, (0, y), (buffer.width, 18), (shade, shade, shade), fill=True)
 
     @staticmethod
     def _profile_label(settings: MenuSettings) -> str:
@@ -543,23 +499,16 @@ class ShowcaseMenu:
 
 
 def run_showcase_menu() -> None:
-    try:
-        ShowcaseMenu().run()
-    except ImportError as exc:
-        print(f"Pygame menu unavailable: {exc}")
-        print_menu()
-        choice = input("> ").strip()
-        if choice:
-            run_experience(int(choice))
+    NativeShowcaseMenu().run()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Open the py_3d render engine showcase menu.")
     parser.add_argument("--list", action="store_true", help="Print available experiences and exit.")
-    parser.add_argument("--run", type=int, help="Run a menu item by number without opening the pygame menu.")
+    parser.add_argument("--run", type=int, help="Run a menu item by number without opening the interactive menu.")
     parser.add_argument("--render-preview", type=int, help="Render a preview still for a menu item by number.")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--quality", choices=("safe", "balanced", "high", "ultra"), default="safe")
+    parser.add_argument("--quality", choices=("safe", "balanced", "high", "ultra"), default="balanced")
     args = parser.parse_args()
 
     settings = MenuSettings(quality="balanced" if args.quality == "safe" else args.quality, safe_mode=args.quality == "safe")

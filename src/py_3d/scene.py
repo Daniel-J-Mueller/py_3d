@@ -16,6 +16,7 @@ class Scene:
     lights: list[Any] = field(default_factory=list)
     bulletins: list[Any] = field(default_factory=list)
     background: Color | tuple[int, int, int] = Color(0, 0, 0)
+    portals: list[Any] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.background = Color.from_value(self.background)
@@ -32,7 +33,17 @@ class Scene:
         self.bulletins.extend(bulletins)
         return self
 
+    def add_portal_pair(self, *pairs: Any, add_surfaces: bool = True) -> "Scene":
+        self.portals.extend(pairs)
+        if add_surfaces:
+            for pair in pairs:
+                surfaces = getattr(pair, "surfaces", None)
+                if callable(surfaces):
+                    self.objects.extend(surfaces())
+        return self
+
     def clear(self) -> None:
         self.objects.clear()
         self.lights.clear()
         self.bulletins.clear()
+        self.portals.clear()

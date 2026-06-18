@@ -1,9 +1,13 @@
 import json
+import os
 import runpy
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
-from py_3d.cli import main, scaffold_starter, select_environment_options, write_prefab_docs
+from py_3d.cli import main, scaffold_example_game, scaffold_starter, select_environment_options, write_prefab_docs
 
 
 def test_help_lists_prefab_docs_option(capsys):
@@ -14,6 +18,7 @@ def test_help_lists_prefab_docs_option(capsys):
     output = capsys.readouterr().out
     assert "--write-prefab-docs" in output
     assert "init" in output
+    assert "game" in output
 
 
 def test_write_prefab_docs(tmp_path):
@@ -49,3 +54,15 @@ def test_scaffold_starter_writes_runnable_scene(tmp_path):
     assert len(objects["objects"]) == 2
     runpy.run_path(str(paths["main"]), run_name="__main__")
     assert (target / "starter_render.png").exists()
+
+
+def test_scaffold_example_game_writes_preview_runner(tmp_path):
+    target = tmp_path / "USER-GAMES" / "example-game"
+
+    paths = scaffold_example_game(target, force=True)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
+    result = subprocess.run([sys.executable, str(paths["runner"]), "--render-preview"], cwd=target, env=env)
+
+    assert result.returncode == 0
+    assert (target / "output" / "preview.png").exists()

@@ -103,7 +103,12 @@ class RenderEngine:
         target: PixelBuffer | None = None,
     ) -> PixelBuffer:
         active_settings = settings or RenderSettings()
-        return self.renderer.render(scene, camera, active_settings, target)
+        active_scene = scene
+        if getattr(scene, "portals", None):
+            from .portal import scene_with_portal_textures
+
+            active_scene = scene_with_portal_textures(scene, camera, active_settings, self.renderer)
+        return self.renderer.render(active_scene, camera, active_settings, target)
 
 
 class CPURenderer:

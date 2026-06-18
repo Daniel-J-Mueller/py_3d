@@ -75,3 +75,86 @@ def test_pixel_buffer_reads_png_asset():
     assert yellow_bar.r > 180 and yellow_bar.g > 180 and yellow_bar.b < 40
     assert cyan_bar.r < 40 and cyan_bar.g > 150 and cyan_bar.b > 150
     assert blue_bar.r < 40 and blue_bar.g < 40 and blue_bar.b > 120
+
+
+def test_rgb_backed_pixel_buffer_updates_single_pixel_without_materializing():
+    buffer = PixelBuffer.from_rgb_bytes(2, 1, bytes((0, 0, 0, 10, 20, 30)))
+
+    buffer.set_pixel(0, 0, Color(1, 2, 3))
+
+    assert buffer.to_rgb_bytes() == bytes((1, 2, 3, 10, 20, 30))
+    assert hasattr(buffer.pixels, "raw_rgb_bytes")
+
+
+def test_rgb_backed_pixel_buffer_updates_slice_without_materializing():
+    buffer = PixelBuffer.from_rgb_bytes(3, 1, bytes((0, 0, 0, 0, 0, 0, 0, 0, 0)))
+
+    buffer.pixels[1:3] = [Color(4, 5, 6), Color(7, 8, 9)]
+
+    assert buffer.to_rgb_bytes() == bytes((0, 0, 0, 4, 5, 6, 7, 8, 9))
+    assert hasattr(buffer.pixels, "raw_rgb_bytes")
+
+
+def test_rgb_backed_pixel_buffer_clears_without_materializing():
+    buffer = PixelBuffer.from_rgb_bytes(2, 2, bytes((0, 0, 0)) * 4)
+
+    buffer.clear(Color(11, 12, 13))
+
+    assert buffer.to_rgb_bytes() == bytes((11, 12, 13)) * 4
+    assert hasattr(buffer.pixels, "raw_rgb_bytes")
+
+
+def test_rgb_backed_pixel_buffer_fills_rect_without_materializing():
+    buffer = PixelBuffer.from_rgb_bytes(4, 3, bytes((0, 0, 0)) * 12)
+
+    buffer.fill_rect((1, 1), (2, 2), Color(20, 30, 40))
+
+    assert buffer.get_pixel(0, 0) == Color(0, 0, 0)
+    assert buffer.get_pixel(1, 1) == Color(20, 30, 40)
+    assert buffer.get_pixel(2, 2) == Color(20, 30, 40)
+    assert buffer.get_pixel(3, 2) == Color(0, 0, 0)
+    assert hasattr(buffer.pixels, "raw_rgb_bytes")
+
+
+def test_rgb_backed_pixel_buffer_blits_rows_without_materializing():
+    target = PixelBuffer.from_rgb_bytes(4, 3, bytes((0, 0, 0)) * 12)
+    source = PixelBuffer.from_rgb_bytes(
+        2,
+        2,
+        bytes(
+            (
+                10,
+                20,
+                30,
+                40,
+                50,
+                60,
+                70,
+                80,
+                90,
+                100,
+                110,
+                120,
+            )
+        ),
+    )
+
+    target.blit(source, 1, 1)
+
+    assert target.get_pixel(1, 1) == Color(10, 20, 30)
+    assert target.get_pixel(2, 1) == Color(40, 50, 60)
+    assert target.get_pixel(1, 2) == Color(70, 80, 90)
+    assert target.get_pixel(2, 2) == Color(100, 110, 120)
+    assert hasattr(target.pixels, "raw_rgb_bytes")
+
+
+def test_rgb_backed_pixel_buffer_blits_after_materializing_target():
+    target = PixelBuffer.from_rgb_bytes(3, 1, bytes((0, 0, 0)) * 3)
+    source = PixelBuffer.from_rgb_bytes(2, 1, bytes((10, 20, 30, 40, 50, 60)))
+    assert target.pixels[:] == [Color(0, 0, 0), Color(0, 0, 0), Color(0, 0, 0)]
+
+    target.blit(source, 1, 0)
+
+    assert target.get_pixel(0, 0) == Color(0, 0, 0)
+    assert target.get_pixel(1, 0) == Color(10, 20, 30)
+    assert target.get_pixel(2, 0) == Color(40, 50, 60)
