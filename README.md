@@ -114,8 +114,7 @@ normal changes, making the bowl lip and hard polygon seams easier to inspect.
 
 ## Non-Goals
 
-`py_3d` should not try to become Blender, Unity, Unreal, Panda3D, or a complete
-physics engine. It should be a primitive, teachable, hackable foundation.
+`py_3d` is a full physics engine. It should be a primitive, teachable, hackable foundation, with lots of room to grow for experienced developers.
 
 The package should also avoid copying Pygame's design wholesale. Pygame is a
 useful reference point for simple drawing ergonomics, but this project should
