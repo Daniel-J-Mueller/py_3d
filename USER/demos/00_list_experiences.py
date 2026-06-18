@@ -27,6 +27,7 @@ class Experience:
 class MenuSettings:
     quality: str = "balanced"
     safe_mode: bool = True
+    background_blur: bool = False
 
 
 @dataclass(frozen=True)
@@ -218,6 +219,8 @@ class ShowcaseMenu:
                 self._cycle_quality(1)
             elif key == pygame.K_s:
                 self.pending_settings = replace(self.pending_settings, safe_mode=not self.pending_settings.safe_mode)
+            elif key == pygame.K_b:
+                self.pending_settings = replace(self.pending_settings, background_blur=not self.pending_settings.background_blur)
             return True
         if key in (pygame.K_DOWN, pygame.K_s):
             self.selected = (self.selected + 1) % len(EXPERIENCES)
@@ -263,6 +266,8 @@ class ShowcaseMenu:
             self._cycle_quality(1)
         elif action == "safe":
             self.pending_settings = replace(self.pending_settings, safe_mode=not self.pending_settings.safe_mode)
+        elif action == "blur":
+            self.pending_settings = replace(self.pending_settings, background_blur=not self.pending_settings.background_blur)
         elif action == "apply":
             self._apply_settings(close=False)
         elif action == "done":
@@ -328,10 +333,12 @@ class ShowcaseMenu:
         width, height = self.screen.get_size()
         self.buttons = []
         self._draw_background(width, height)
-        self._draw_header(width)
-        self._draw_experience_list(width, height)
-        self._draw_preview_panel(width, height)
-        self._draw_button_bay(width, height)
+        menu_rect = self._menu_rect(width, height)
+        self._draw_menu_box(menu_rect)
+        self._draw_header(menu_rect)
+        self._draw_experience_list(menu_rect)
+        self._draw_preview_panel(menu_rect)
+        self._draw_button_bay(menu_rect)
         if self.show_settings:
             self._draw_settings(width, height)
         self.pygame.display.flip()
@@ -339,58 +346,76 @@ class ShowcaseMenu:
     def _draw_background(self, width: int, height: int) -> None:
         for y in range(height):
             t = y / max(1, height - 1)
-            color = (6 + int(t * 12), 11 + int(t * 24), 19 + int(t * 31))
+            shade = 18 + int(t * 20)
+            color = (shade, shade, shade)
             self.pygame.draw.line(self.screen, color, (0, y), (width, y))
         for index in range(72):
             x = (index * 97 + 31) % max(1, width)
             y = (index * 53 + 17) % max(1, max(1, height - 96))
-            shade = 90 + (index * 37) % 90
-            self.screen.fill((shade, shade, min(255, shade + 25)), (x, y, 2, 2))
+            shade = 72 + (index * 37) % 68
+            self.screen.fill((shade, shade, shade), (x, y, 2, 2))
 
-    def _draw_header(self, width: int) -> None:
-        self._text("py_3d render engine showcase", (32, 24), self.title_font, (244, 248, 255))
+    def _menu_rect(self, width: int, height: int) -> tuple[int, int, int, int]:
+        panel_width = min(max(320, width - 48), 1120)
+        panel_height = min(max(440, height - 48), 660)
+        if panel_width > width - 24:
+            panel_width = max(300, width - 24)
+        if panel_height > height - 24:
+            panel_height = max(360, height - 24)
+        return ((width - panel_width) // 2, (height - panel_height) // 2, panel_width, panel_height)
+
+    def _draw_menu_box(self, rect: tuple[int, int, int, int]) -> None:
+        self.pygame.draw.rect(self.screen, (24, 24, 24), rect, border_radius=6)
+        self.pygame.draw.rect(self.screen, (138, 138, 138), rect, width=2, border_radius=6)
+
+    def _draw_header(self, rect: tuple[int, int, int, int]) -> None:
+        left, top, width, _height = rect
+        self._text("py_3d render engine showcase", (left + 24, top + 22), self.title_font, (246, 246, 246))
         profile = self._profile_label(self.settings)
-        self._text(f"Profile {profile}   {self.status}", (34, 68), self.small, (180, 198, 214), max_width=width - 68)
+        self._text(f"Profile {profile}   {self.status}", (left + 26, top + 66), self.small, (188, 188, 188), max_width=width - 52)
 
-    def _draw_experience_list(self, width: int, height: int) -> None:
-        left = 32
-        top = 106
-        card_width = min(470, max(340, int(width * 0.42)))
-        card_height = 122
+    def _draw_experience_list(self, rect: tuple[int, int, int, int]) -> None:
+        panel_left, panel_top, panel_width, _panel_height = rect
+        left = panel_left + 24
+        top = panel_top + 104
+        card_width = min(430, max(300, int(panel_width * 0.40)))
+        card_height = 112
         for index, experience in enumerate(EXPERIENCES):
             y = top + index * (card_height + 14)
             selected = index == self.selected
-            fill = (24, 39, 52) if selected else (14, 24, 34)
-            border = (112, 178, 210) if selected else (45, 68, 82)
+            fill = (64, 64, 64) if selected else (34, 34, 34)
+            border = (214, 214, 214) if selected else (104, 104, 104)
             rect = (left, y, card_width, card_height)
             self.pygame.draw.rect(self.screen, fill, rect, border_radius=6)
             self.pygame.draw.rect(self.screen, border, rect, width=2, border_radius=6)
-            self._text(experience.title, (left + 16, y + 12), self.font, (242, 247, 255), max_width=card_width - 32)
-            self._text(experience.description, (left + 16, y + 42), self.small, (178, 196, 208), max_width=card_width - 32, max_lines=2)
-            self._text(experience.controls, (left + 16, y + 94), self.small, (138, 160, 176), max_width=card_width - 32, max_lines=1)
+            self._text(experience.title, (left + 16, y + 10), self.font, (246, 246, 246), max_width=card_width - 32)
+            self._text(experience.description, (left + 16, y + 38), self.small, (190, 190, 190), max_width=card_width - 32, max_lines=2)
+            self._text(experience.controls, (left + 16, y + 86), self.small, (154, 154, 154), max_width=card_width - 32, max_lines=1)
 
-    def _draw_preview_panel(self, width: int, height: int) -> None:
-        left = min(540, int(width * 0.48))
-        top = 106
-        panel_width = max(320, width - left - 32)
-        panel_height = max(260, height - top - 126)
-        self.pygame.draw.rect(self.screen, (10, 18, 26), (left, top, panel_width, panel_height), border_radius=6)
-        self.pygame.draw.rect(self.screen, (56, 84, 100), (left, top, panel_width, panel_height), width=2, border_radius=6)
+    def _draw_preview_panel(self, rect: tuple[int, int, int, int]) -> None:
+        panel_left, panel_top, panel_width, panel_height = rect
+        list_width = min(430, max(300, int(panel_width * 0.40)))
+        left = panel_left + 48 + list_width
+        top = panel_top + 104
+        preview_width = max(280, panel_left + panel_width - left - 24)
+        preview_height = max(230, panel_top + panel_height - top - 86)
+        self.pygame.draw.rect(self.screen, (32, 32, 32), (left, top, preview_width, preview_height), border_radius=6)
+        self.pygame.draw.rect(self.screen, (104, 104, 104), (left, top, preview_width, preview_height), width=2, border_radius=6)
         experience = EXPERIENCES[self.selected]
-        image_rect = (left + 18, top + 18, panel_width - 36, max(180, panel_height - 112))
+        image_rect = (left + 18, top + 18, preview_width - 36, max(160, preview_height - 104))
         self._draw_preview_image(experience, image_rect)
-        self._text(experience.script, (left + 20, top + panel_height - 78), self.small, (148, 171, 187), max_width=panel_width - 40)
-        self._text("Preview images are rendered assets; launch opens an interactive demo window.", (left + 20, top + panel_height - 50), self.small, (184, 202, 214), max_width=panel_width - 40)
+        self._text(experience.script, (left + 20, top + preview_height - 72), self.small, (160, 160, 160), max_width=preview_width - 40)
+        self._text("Preview images are rendered assets; launch opens an interactive demo window.", (left + 20, top + preview_height - 46), self.small, (198, 198, 198), max_width=preview_width - 40)
 
     def _draw_preview_image(self, experience: Experience, rect: tuple[int, int, int, int]) -> None:
         pygame = self.pygame
         x, y, width, height = rect
-        pygame.draw.rect(self.screen, (4, 7, 10), rect)
+        pygame.draw.rect(self.screen, (18, 18, 18), rect)
         path = experience.preview_path
         surface = self._load_preview(path) if path is not None else None
         if surface is None:
-            self._text("Preview not rendered", (x + 24, y + 24), self.font, (222, 230, 238))
-            self._text("Use Render Preview to create the still image for this card.", (x + 24, y + 58), self.small, (160, 178, 190), max_width=width - 48)
+            self._text("Preview not rendered", (x + 24, y + 24), self.font, (226, 226, 226))
+            self._text("Use Render Preview to create the still image for this card.", (x + 24, y + 58), self.small, (168, 168, 168), max_width=width - 48)
             return
         source_width, source_height = surface.get_size()
         scale = min(width / source_width, height / source_height)
@@ -415,41 +440,45 @@ class ShowcaseMenu:
         self.preview_cache[path] = (mtime, image)
         return image
 
-    def _draw_button_bay(self, width: int, height: int) -> None:
-        y = height - 74
+    def _draw_button_bay(self, rect: tuple[int, int, int, int]) -> None:
+        left, top, width, height = rect
+        y = top + height - 58
         running = self.child is not None
         actions = (
-            Button("launch", (34, y, 150, 42), "Launch", not running),
-            Button("preview", (196, y, 170, 42), "Render Preview", not running),
-            Button("settings", (378, y, 132, 42), "Settings", not running),
-            Button("stop", (width - 278, y, 116, 42), "Stop", running),
-            Button("exit", (width - 150, y, 116, 42), "Exit", True),
+            Button("launch", (left + 24, y, 150, 42), "Launch", not running),
+            Button("preview", (left + 186, y, 170, 42), "Render Preview", not running),
+            Button("settings", (left + 368, y, 132, 42), "Settings", not running),
+            Button("stop", (left + width - 270, y, 116, 42), "Stop", running),
+            Button("exit", (left + width - 142, y, 116, 42), "Exit", True),
         )
         for button in actions:
             self._button(button)
 
     def _draw_settings(self, width: int, height: int) -> None:
+        if self.pending_settings.background_blur:
+            self._blur_screen(width, height)
         panel_width = min(560, width - 90)
-        panel_height = 300
+        panel_height = 324
         left = (width - panel_width) // 2
         top = (height - panel_height) // 2
-        self.pygame.draw.rect(self.screen, (8, 14, 20), (left, top, panel_width, panel_height), border_radius=6)
-        self.pygame.draw.rect(self.screen, (95, 142, 165), (left, top, panel_width, panel_height), width=2, border_radius=6)
-        self._text("Graphics Launch Settings", (left + 24, top + 22), self.font, (242, 247, 255))
-        self._text("These settings stage launch profiles for demos that expose render quality. Apply commits them; Exit discards.", (left + 24, top + 58), self.small, (172, 192, 206), max_width=panel_width - 48)
-        self._text(f"Profile: {self._profile_label(self.pending_settings)}", (left + 24, top + 112), self.font, (224, 236, 244))
+        self.pygame.draw.rect(self.screen, (24, 24, 24), (left, top, panel_width, panel_height), border_radius=6)
+        self.pygame.draw.rect(self.screen, (154, 154, 154), (left, top, panel_width, panel_height), width=2, border_radius=6)
+        self._text("Graphics Launch Settings", (left + 24, top + 22), self.font, (246, 246, 246))
+        self._text("These settings stage launch profiles for demos that expose render quality. Apply commits them; Exit discards.", (left + 24, top + 58), self.small, (188, 188, 188), max_width=panel_width - 48)
+        self._text(f"Profile: {self._profile_label(self.pending_settings)}", (left + 24, top + 112), self.font, (226, 226, 226))
         self._button(Button("quality_prev", (left + 24, top + 154, 92, 38), "Previous"))
         self._button(Button("quality_next", (left + 126, top + 154, 92, 38), "Next"))
         self._button(Button("safe", (left + 232, top + 154, 178, 38), "Safe Mode On" if self.pending_settings.safe_mode else "Safe Mode Off"))
+        self._button(Button("blur", (left + 24, top + 204, 178, 38), "Blur On" if self.pending_settings.background_blur else "Blur Off"))
         bay_y = top + panel_height - 62
         self._button(Button("apply", (left + 24, bay_y, 116, 40), "Apply"))
         self._button(Button("done", (left + 154, bay_y, 116, 40), "Done"))
         self._button(Button("cancel", (left + 284, bay_y, 116, 40), "Exit Menu"))
 
     def _button(self, button: Button) -> None:
-        fill = (44, 84, 104) if button.enabled else (35, 42, 48)
-        border = (132, 192, 220) if button.enabled else (70, 78, 84)
-        text_color = (240, 248, 255) if button.enabled else (125, 134, 140)
+        fill = (68, 68, 68) if button.enabled else (42, 42, 42)
+        border = (196, 196, 196) if button.enabled else (92, 92, 92)
+        text_color = (246, 246, 246) if button.enabled else (134, 134, 134)
         self.pygame.draw.rect(self.screen, fill, button.rect, border_radius=5)
         self.pygame.draw.rect(self.screen, border, button.rect, width=2, border_radius=5)
         text = self.small.render(button.label, True, text_color)
@@ -458,9 +487,19 @@ class ShowcaseMenu:
         self.buttons.append(button)
 
     def _experience_rects(self) -> tuple[tuple[int, tuple[int, int, int, int]], ...]:
-        width, _height = self.screen.get_size()
-        card_width = min(470, max(340, int(width * 0.42)))
-        return tuple((index, (32, 106 + index * 136, card_width, 122)) for index in range(len(EXPERIENCES)))
+        width, height = self.screen.get_size()
+        left, top, panel_width, _panel_height = self._menu_rect(width, height)
+        card_width = min(430, max(300, int(panel_width * 0.40)))
+        return tuple((index, (left + 24, top + 104 + index * 126, card_width, 112)) for index in range(len(EXPERIENCES)))
+
+    def _blur_screen(self, width: int, height: int) -> None:
+        scale = 12
+        small = self.pygame.transform.smoothscale(self.screen, (max(1, width // scale), max(1, height // scale)))
+        blurred = self.pygame.transform.smoothscale(small, (width, height))
+        veil = self.pygame.Surface((width, height), self.pygame.SRCALPHA)
+        veil.fill((0, 0, 0, 72))
+        blurred.blit(veil, (0, 0))
+        self.screen.blit(blurred, (0, 0))
 
     def _text(
         self,

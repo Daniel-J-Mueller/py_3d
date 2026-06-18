@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "py3dengine"
-version = "0.0.1"
+version = "0.0.2"
 description = "Primitive 3D pixel drawing, rendering, and simulation foundations for Python."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,6 +25,9 @@ classifiers = [
 [project.urls]
 Repository = "https://github.com/Daniel-J-Mueller/py_3d"
 Issues = "https://github.com/Daniel-J-Mueller/py_3d/issues"
+
+[project.scripts]
+py3dengine = "py_3d.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]

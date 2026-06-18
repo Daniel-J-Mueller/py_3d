@@ -208,6 +208,24 @@ Open the main demo menu:
 python USER/demos/00_list_experiences.py
 ```
 
+## Starter JSON CLI
+
+Install the project, then ask the package for its starter commands:
+
+```powershell
+python -m pip install -e .
+py3dengine --help
+```
+
+Use the CLI to pull editable prefab JSON docs or create a starter two-cube
+scene with an environment file, object file, and runnable Python file:
+
+```powershell
+py3dengine --write-prefab-docs USER/prefab-docs
+py3dengine init --output USER/projects/starter-cubes
+python USER/projects/starter-cubes/main.py
+```
+
 List the experiences without opening a window:
 
 ```bash

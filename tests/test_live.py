@@ -114,3 +114,9 @@ def test_live_menu_groups_and_scrolls_options():
     menu.scroll(4)
 
     assert menu.scroll_offsets["Sky"] == 0
+
+
+def test_live_menu_background_blur_is_optional():
+    menu = LiveMenu(background_blur=True)
+
+    assert menu.background_blur is True
