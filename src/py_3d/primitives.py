@@ -761,8 +761,8 @@ class Plane:
         d = self.point - tangent * half + bitangent * half + offset
         if self.thickness <= 0.0:
             return (
-                Triangle(a, b, c, self.material, normal_a=self.normal, normal_b=self.normal, normal_c=self.normal),
-                Triangle(a, c, d, self.material, normal_a=self.normal, normal_b=self.normal, normal_c=self.normal),
+                Triangle(a, b, c, self.material, (0.0, 1.0), (1.0, 1.0), (1.0, 0.0), self.normal, self.normal, self.normal),
+                Triangle(a, c, d, self.material, (0.0, 1.0), (1.0, 0.0), (0.0, 0.0), self.normal, self.normal, self.normal),
             )
 
         bottom_offset = -offset
@@ -773,8 +773,8 @@ class Plane:
         bottom_normal = -self.normal
         side_normals = (tangent, bitangent, -tangent, -bitangent)
         return (
-            Triangle(a, b, c, self.material, normal_a=self.normal, normal_b=self.normal, normal_c=self.normal),
-            Triangle(a, c, d, self.material, normal_a=self.normal, normal_b=self.normal, normal_c=self.normal),
+            Triangle(a, b, c, self.material, (0.0, 1.0), (1.0, 1.0), (1.0, 0.0), self.normal, self.normal, self.normal),
+            Triangle(a, c, d, self.material, (0.0, 1.0), (1.0, 0.0), (0.0, 0.0), self.normal, self.normal, self.normal),
             Triangle(e, g, f, self.material, normal_a=bottom_normal, normal_b=bottom_normal, normal_c=bottom_normal),
             Triangle(e, h, g, self.material, normal_a=bottom_normal, normal_b=bottom_normal, normal_c=bottom_normal),
             Triangle(a, e, f, self.material, normal_a=side_normals[3], normal_b=side_normals[3], normal_c=side_normals[3]),

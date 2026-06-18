@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from math import cos, radians, sin
 from pathlib import Path
 
-from py_3d import Box, Camera, Capsule, Color, Lamp, Material, RenderEngine, RenderSettings, Scene, Sun, TextBulletin, Vec3
+from py_3d import Box, Camera, Color, HUDRect, HUDText, Lamp, Material, PlayerModel, RenderEngine, RenderSettings, Scene, Sun, TextBulletin, Vec3
 
 
 OUTPUT_DIR = Path("renderings-tests") / "live-renders"
@@ -21,7 +21,11 @@ class CapsuleController:
     yaw_degrees: float = 0.0
     radius: float = 0.26
     height: float = 1.45
+    standing_height: float = 1.45
+    crouch_height: float = 0.96
     speed: float = 2.0
+    sprint_multiplier: float = 1.45
+    crouch_speed_multiplier: float = 0.62
     jump_speed: float = 4.2
     on_ground: bool = False
 
@@ -40,6 +44,9 @@ class CapsuleController:
         return Vec3(forward.z, 0.0, -forward.x)
 
     def step(self, dt: float, keys: set[str], blocks: tuple[Box, ...]) -> None:
+        target_height = self.crouch_height if "crouch" in keys else self.standing_height
+        height_blend = min(1.0, dt * 10.0)
+        self.height = self.height + (target_height - self.height) * height_blend
         move = Vec3(0.0, 0.0, 0.0)
         if "w" in keys:
             move = move + self.forward
@@ -51,7 +58,12 @@ class CapsuleController:
             move = move - self.right
         if move.length_squared() > 0.0:
             move = move.normalized()
-        horizontal = move * self.speed
+        speed = self.speed
+        if "crouch" in keys:
+            speed *= self.crouch_speed_multiplier
+        elif "sprint" in keys and self.on_ground:
+            speed *= self.sprint_multiplier
+        horizontal = move * speed
         self.velocity = Vec3(horizontal.x, self.velocity.y - 9.81 * dt, horizontal.z)
         if "space" in keys and self.on_ground:
             self.velocity = Vec3(self.velocity.x, self.jump_speed, self.velocity.z)
@@ -144,6 +156,10 @@ class CapsuleWalkViewer:
         key = event.keysym.lower()
         if key == "v":
             self.camera_mode = {"global": "third", "third": "first", "first": "global"}[self.camera_mode]
+        elif key in {"shift_l", "shift_r"}:
+            self.keys.add("sprint")
+        elif key in {"control_l", "control_r", "c"}:
+            self.keys.add("crouch")
         elif key == "left":
             self.controller.yaw_degrees -= 5.0
         elif key == "right":
@@ -152,7 +168,13 @@ class CapsuleWalkViewer:
             self.keys.add(key)
 
     def on_key_up(self, event) -> None:
-        self.keys.discard(event.keysym.lower())
+        key = event.keysym.lower()
+        if key in {"shift_l", "shift_r"}:
+            self.keys.discard("sprint")
+        elif key in {"control_l", "control_r", "c"}:
+            self.keys.discard("crouch")
+        else:
+            self.keys.discard(key)
 
     def camera(self) -> Camera:
         if self.camera_mode == "first":
@@ -165,7 +187,7 @@ class CapsuleWalkViewer:
         scene = Scene()
         scene.add(Box((0, -0.06, 0), (7.0, 0.12, 7.0), Material(color=(54, 84, 88), roughness=0.55)))
         scene.add(*self.blocks)
-        scene.add(Capsule(self.controller.center, self.controller.radius, self.controller.height, Material(color=(92, 160, 240), roughness=0.28, specular=0.2, shininess=24)))
+        scene.add(*PlayerModel(self.controller.feet, self.controller.yaw_degrees, self.controller.height, self.controller.radius).to_primitives())
         scene.add_light(Sun(direction=(-0.35, -0.85, -0.6), color=(255, 245, 230), intensity=0.9))
         scene.add_light(Lamp(position=(1.6, 2.4, -1.2), color=(120, 170, 255), intensity=4.2))
         scene.add_bulletin(
@@ -207,7 +229,8 @@ class GLCapsuleWalkViewer:
         self.controller = CapsuleController()
         self.keys: set[str] = set()
         self.camera_mode = args.camera_mode
-        self.look_pitch_degrees = 0.0
+        self.look_pitch_degrees = -6.0
+        self.render_camera: Camera | None = None
         global_camera = Camera(position=(3.2, 2.5, -5.2), target=(0.4, 0.65, 0.4), fov_degrees=54)
         self.free_camera = LiveFlyCamera.looking_at(
             global_camera.position,
@@ -253,6 +276,8 @@ class GLCapsuleWalkViewer:
                 for event in self.pygame.event.get():
                     if event.type == self.pygame.QUIT:
                         running = False
+                    elif self.renderer.handle_resize_event(event):
+                        continue
                     elif event.type == self.pygame.MOUSEBUTTONDOWN and not self.renderer.menu.visible:
                         self.renderer.set_mouse_captured(True)
                     elif event.type == self.pygame.MOUSEMOTION and self.renderer.mouse_captured:
@@ -266,8 +291,9 @@ class GLCapsuleWalkViewer:
                     self.free_camera.move(self.keys, dt)
                 else:
                     self.controller.step(dt, self.keys, self.blocks)
-                    self._apply_vertical_camera_motion(dt)
-                stats = self.renderer.render(self.scene(), self.camera(), self.settings)
+                camera = self._smoothed_camera(self.camera(), dt)
+                self._update_hud()
+                stats = self.renderer.render(self.scene(), camera, self.settings)
                 self._update_title(stats)
                 dt = max(1.0 / 240.0, min(0.05, clock.tick(self.args.fps) / 1000.0))
         finally:
@@ -280,6 +306,7 @@ class GLCapsuleWalkViewer:
             return self._handle_menu_action(menu_action)
         if key == pygame.K_v:
             self.camera_mode = {"global": "third", "third": "first", "first": "global"}[self.camera_mode]
+            self.render_camera = None
         elif key == pygame.K_LEFT:
             self.controller.yaw_degrees -= 5.0
         elif key == pygame.K_RIGHT:
@@ -302,9 +329,11 @@ class GLCapsuleWalkViewer:
             return False
         if action == "next_camera":
             self.camera_mode = {"global": "third", "third": "first", "first": "global"}[self.camera_mode]
+            self.render_camera = None
         elif action == "reset":
             self.controller = CapsuleController()
-            self.look_pitch_degrees = 0.0
+            self.look_pitch_degrees = -6.0
+            self.render_camera = None
         self.renderer.set_mouse_captured(True)
         return True
 
@@ -326,10 +355,17 @@ class GLCapsuleWalkViewer:
             yaw = radians(self.controller.yaw_degrees)
             pitch = radians(self.look_pitch_degrees)
             forward = Vec3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch)).normalized(Vec3(0.0, 0.0, 1.0))
-            eye = self.controller.feet + Vec3(0.0, self.controller.height * 0.78, 0.0)
+            eye = self.controller.feet + Vec3(0.0, self.controller.height * 0.86, 0.0)
             return Camera(position=eye, target=eye + forward, fov_degrees=68.0, near=0.03)
         if self.camera_mode == "third":
-            return Camera.third_person(self.controller.feet, self.controller.forward, distance=3.2, height=1.55)
+            yaw = radians(self.controller.yaw_degrees)
+            pitch = radians(self.look_pitch_degrees)
+            aim = Vec3(sin(yaw) * cos(pitch), sin(pitch), cos(yaw) * cos(pitch)).normalized(Vec3(0.0, 0.0, 1.0))
+            right = Vec3(cos(yaw), 0.0, -sin(yaw)).normalized(Vec3(1.0, 0.0, 0.0))
+            shoulder = self.controller.feet + Vec3(0.0, self.controller.height * 0.82, 0.0)
+            camera_position = shoulder - aim * 3.25 + right * 0.54 + Vec3(0.0, 0.16, 0.0)
+            target = shoulder + aim * 18.0
+            return Camera(position=camera_position, target=target, fov_degrees=64.0, near=0.04)
         return self.free_camera.camera()
 
     def scene(self) -> Scene:
@@ -337,7 +373,7 @@ class GLCapsuleWalkViewer:
         scene.add(Box((0, -0.06, 0), (7.0, 0.12, 7.0), Material(color=(54, 84, 88), roughness=0.55)))
         scene.add(*self.blocks)
         if self.camera_mode != "first":
-            scene.add(Capsule(self.controller.center, self.controller.radius, self.controller.height, Material(color=(92, 160, 240), roughness=0.28, specular=0.2, shininess=24)))
+            scene.add(*PlayerModel(self.controller.feet, self.controller.yaw_degrees, self.controller.height, self.controller.radius).to_primitives())
         scene.add_light(Sun(direction=(-0.35, -0.85, -0.6), color=(255, 245, 230), intensity=0.9))
         scene.add_light(Lamp(position=(1.6, 2.4, -1.2), color=(120, 170, 255), intensity=4.2))
         scene.add_bulletin(
@@ -364,22 +400,29 @@ class GLCapsuleWalkViewer:
         if key == pygame.K_SPACE:
             return "space"
         if key in (pygame.K_LSHIFT, pygame.K_RSHIFT):
-            return "shift"
+            return "sprint"
         if key in (pygame.K_LCTRL, pygame.K_RCTRL):
-            return "ctrl"
+            return "crouch"
+        if key == pygame.K_c:
+            return "crouch"
         return None
 
-    def _apply_vertical_camera_motion(self, dt: float) -> None:
-        amount = 0.0
-        if "shift" in self.keys:
-            amount += self.controller.speed * dt
-        if "ctrl" in self.keys:
-            amount -= self.controller.speed * dt
-        if amount == 0.0:
-            return
-        self.controller.feet = self.controller.feet + Vec3(0.0, amount, 0.0)
-        self.controller.velocity = Vec3(self.controller.velocity.x, 0.0, self.controller.velocity.z)
-        self.controller.on_ground = False
+    def _smoothed_camera(self, camera: Camera, dt: float) -> Camera:
+        if self.render_camera is None or self.camera_mode == "global":
+            self.render_camera = camera
+            return camera
+        alpha = min(1.0, dt * 18.0)
+        position = self.render_camera.position + (camera.position - self.render_camera.position) * alpha
+        target = self.render_camera.target + (camera.target - self.render_camera.target) * alpha
+        self.render_camera = Camera(position=position, target=target, fov_degrees=camera.fov_degrees, near=camera.near, far=camera.far)
+        return self.render_camera
+
+    def _update_hud(self) -> None:
+        state = "CROUCH" if "crouch" in self.keys else ("SPRINT" if "sprint" in self.keys else "WALK")
+        self.renderer.hud.set(
+            HUDRect((12, 12), (170, 48), (3, 7, 10), alpha=0.55),
+            HUDText(f"{self.camera_mode.upper()} CAMERA\n{state}", (20, 20), color=(238, 245, 255), alpha=0.94, scale=1),
+        )
 
     def _update_title(self, stats) -> None:
         ticks = self.pygame.time.get_ticks()

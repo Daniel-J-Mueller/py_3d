@@ -1,4 +1,4 @@
-from py_3d import BlobSurface, FluidBlob, FluidWorld, Vec3
+from py_3d import BlobSurface, FluidBlob, FluidWorld, Vec3, VectorFluidParticle, VectorFluidWorld
 
 
 def test_fluid_blob_radius_preserves_volume():
@@ -40,3 +40,15 @@ def test_fluid_world_heals_close_blobs():
 
     assert len(world.blobs) == 1
     assert isinstance(world.blobs[0].position, Vec3)
+
+
+def test_vector_fluid_repels_close_particles_and_accepts_external_force():
+    world = VectorFluidWorld(bounds_min=(-2, -2, -2), bounds_max=(2, 2, 2), gravity=(0, 0, 0), rest_distance=0.5, repel_strength=4.0, self_attraction=0.0)
+    first = world.add_particle(VectorFluidParticle((0.0, 0.0, 0.0)))
+    second = world.add_particle(VectorFluidParticle((0.1, 0.0, 0.0)))
+
+    world.step(0.1, external_force=lambda particle, dt: Vec3(0.0, 1.0, 0.0))
+
+    assert first.position.x < 0.0
+    assert second.position.x > 0.1
+    assert first.velocity.y > 0.0

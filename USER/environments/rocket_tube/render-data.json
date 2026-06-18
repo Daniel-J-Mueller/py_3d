@@ -2,7 +2,7 @@
   "environment": "rocket_tube",
   "rendering_dir": "USER/environments/rocket_tube/renderings",
   "baking_dir": "USER/environments/rocket_tube/baking",
-  "updated": "2026-06-18 02:52:28",
+  "updated": "2026-06-18 05:26:41",
   "system_specs": {
     "python": "3.14.4",
     "platform": "Windows-11-10.0.26200-SP0",
@@ -11,6 +11,56 @@
     "gpu": "NVIDIA GeForce RTX 4090, 580.97, 24564 MiB"
   },
   "runs": [
+    {
+      "command": [
+        "python",
+        "examples/rocket_tube_demo.py",
+        "--output",
+        "USER/environments/rocket_tube/renderings/rocket_tube.png",
+        "--width",
+        "480",
+        "--height",
+        "270",
+        "--time",
+        "1.0",
+        "--gamma",
+        "1.12"
+      ],
+      "seconds": 0.0,
+      "returncode": 0,
+      "dry_run": true,
+      "variant": "still",
+      "expected_seconds": 0,
+      "outputs": [
+        "USER/environments/rocket_tube/renderings/rocket_tube.png"
+      ]
+    },
+    {
+      "command": [
+        "python",
+        "examples/rocket_tube_demo.py",
+        "--video",
+        "USER/environments/rocket_tube/renderings/rocket_tube.mp4",
+        "--frames",
+        "120",
+        "--fps",
+        "24",
+        "--width",
+        "480",
+        "--height",
+        "270",
+        "--gamma",
+        "1.12"
+      ],
+      "seconds": 0.0,
+      "returncode": 0,
+      "dry_run": true,
+      "variant": "video",
+      "expected_seconds": 5,
+      "outputs": [
+        "USER/environments/rocket_tube/renderings/rocket_tube.mp4"
+      ]
+    },
     {
       "command": [
         "python",

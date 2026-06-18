@@ -20,6 +20,9 @@ def _args_for(
     light_mode: str = "multiple",
     edge_highlight: bool = False,
     edge_highlight_angle: float = 35.0,
+    shadow_samples: int | None = None,
+    shadow_softness: float | None = None,
+    reflection_bounces: int = 0,
     ambient: float | None = None,
     frames: int | None = None,
     fps: int | None = None,
@@ -49,6 +52,9 @@ def _args_for(
         gpu_fast_render=False,
         smooth_shading=smooth_shading,
         ray_traced_shadows=ray_traced_shadows,
+        reflection_bounces=reflection_bounces,
+        shadow_samples=shadow_samples or args.shadow_samples,
+        shadow_softness=args.shadow_softness if shadow_softness is None else shadow_softness,
         edge_highlight=edge_highlight,
         edge_highlight_angle=edge_highlight_angle,
         max_render_distance=args.max_render_distance,
@@ -69,6 +75,9 @@ def render_variants(args: argparse.Namespace) -> None:
             label="FRUIT BOWL RAY SHADOWS",
             smooth_shading=False,
             ray_traced_shadows=True,
+            reflection_bounces=2,
+            shadow_samples=args.ray_shadow_samples,
+            shadow_softness=args.ray_shadow_softness,
             ambient=args.ray_ambient,
             frames=args.ray_frames,
             fps=args.ray_fps,
@@ -84,6 +93,7 @@ def render_variants(args: argparse.Namespace) -> None:
             smooth_shading=True,
             bowl_material="mirror",
             light_mode="mirror-prelight",
+            reflection_bounces=3,
             frames=args.mirror_frames,
             fps=args.mirror_fps,
         ),
@@ -119,6 +129,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--warmup", type=float, default=1.25)
     parser.add_argument("--ambient", type=float, default=0.0)
     parser.add_argument("--ray-ambient", type=float, default=0.0)
+    parser.add_argument("--shadow-samples", type=int, default=1)
+    parser.add_argument("--shadow-softness", type=float, default=0.0)
+    parser.add_argument("--ray-shadow-samples", type=int, default=6)
+    parser.add_argument("--ray-shadow-softness", type=float, default=0.16)
     parser.add_argument("--width", type=int, default=320)
     parser.add_argument("--height", type=int, default=180)
     parser.add_argument("--ray-width", type=int, default=240)

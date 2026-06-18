@@ -1,20 +1,24 @@
 {
-  "name": "sea_lion_idle_mesh",
-  "package_type": "py_3d.Mesh",
-  "description": "Decimated OBJ mesh from assets/sea-lion-import-test with idle blubber deformation.",
+  "name": "sea_lion_mesh_asset",
+  "package_type": "py_3d.mesh_asset.v1",
+  "description": "Prepared OBJ mesh asset produced from assets/sea-lion-import-test for standalone render testing.",
   "basic_properties": {
     "source": "assets/sea-lion-import-test/10041_sealion_v1_L3.obj",
-    "face_step": 96,
-    "origin": [2.25, -1.73, 0.4],
-    "scale": 0.018,
+    "asset": "USER/assets/sea_lion/sea_lion.py3dmesh.json",
+    "target_triangles": 12000,
+    "simplification": "vertex_grid",
+    "grid_divisions": 65,
+    "source_up": "z",
+    "scale_to_height": 1.15,
+    "yaw": 90.0,
     "material": {
-      "texture": "procedural sea_lion_texture()",
-      "roughness": 0.26,
-      "fuzziness": 0.05,
+      "color": [96, 78, 64],
+      "texture": "procedural sea_lion_skin_texture()",
+      "roughness": 0.28,
+      "fuzziness": 0.04,
       "specular": 0.24,
       "shininess": 38.0
-    },
-    "idle_motion": "breathing scale plus traveling belly waves"
+    }
   },
-  "demo": "USER/demos/13_live_fruit_bowl_poly_lamp.py"
+  "demo": "USER/demos/14_render_sea_lion_asset.py"
 }

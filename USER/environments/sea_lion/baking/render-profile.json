@@ -1,8 +1,8 @@
 {
-  "environment": "fruit_bowl",
-  "updated": "2026-06-18 05:26:41",
-  "rendering_dir": "USER/environments/fruit_bowl/renderings",
-  "baking_dir": "USER/environments/fruit_bowl/baking",
+  "environment": "sea_lion",
+  "updated": "2026-06-18 04:43:34",
+  "rendering_dir": "USER/environments/sea_lion/renderings",
+  "baking_dir": "USER/environments/sea_lion/baking",
   "standard_render_specs": {
     "gpu": {
       "renderer": "py_gpu",

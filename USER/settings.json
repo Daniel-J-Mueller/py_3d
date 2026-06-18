@@ -10,10 +10,14 @@
       "sphere_segments": 10,
       "sphere_rings": 5,
       "smooth_shading": false,
+      "texture_size": 128,
       "gamma": 1.05,
       "light_wrap": 0.08,
       "bounce_light": 0.04,
       "tone_mapping": false,
+      "reflection_bounces": 0,
+      "shadow_samples": 1,
+      "shadow_softness": 0.0,
       "max_render_distance": 7.0
     },
     "balanced": {
@@ -24,10 +28,14 @@
       "sphere_segments": 18,
       "sphere_rings": 9,
       "smooth_shading": true,
+      "texture_size": 256,
       "gamma": 1.12,
       "light_wrap": 0.16,
       "bounce_light": 0.08,
       "tone_mapping": true,
+      "reflection_bounces": 1,
+      "shadow_samples": 2,
+      "shadow_softness": 0.08,
       "max_render_distance": 8.5
     },
     "high": {
@@ -38,10 +46,14 @@
       "sphere_segments": 24,
       "sphere_rings": 12,
       "smooth_shading": true,
+      "texture_size": 384,
       "gamma": 1.15,
       "light_wrap": 0.24,
       "bounce_light": 0.14,
       "tone_mapping": true,
+      "reflection_bounces": 2,
+      "shadow_samples": 4,
+      "shadow_softness": 0.12,
       "max_render_distance": 10.0
     },
     "ultra": {
@@ -52,10 +64,14 @@
       "sphere_segments": 32,
       "sphere_rings": 16,
       "smooth_shading": true,
+      "texture_size": 512,
       "gamma": 1.18,
       "light_wrap": 0.28,
       "bounce_light": 0.18,
       "tone_mapping": true,
+      "reflection_bounces": 3,
+      "shadow_samples": 8,
+      "shadow_softness": 0.18,
       "max_render_distance": 12.0
     },
     "poly": {
@@ -66,10 +82,14 @@
       "sphere_segments": 7,
       "sphere_rings": 4,
       "smooth_shading": false,
+      "texture_size": 192,
       "gamma": 1.12,
       "light_wrap": 0.18,
       "bounce_light": 0.12,
       "tone_mapping": true,
+      "reflection_bounces": 1,
+      "shadow_samples": 1,
+      "shadow_softness": 0.0,
       "max_render_distance": 9.0
     }
   },

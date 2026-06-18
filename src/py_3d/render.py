@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import ceil, cos, floor, radians, tan
+from math import ceil, cos, floor, radians, sin, sqrt, tan, tau
 from typing import Protocol, runtime_checkable
 import weakref
 
@@ -35,7 +35,10 @@ class RenderSettings:
     smooth_shading: bool = False
     two_sided_lighting: bool = True
     ray_traced_shadows: bool = False
+    reflection_bounces: int = 0
     shadow_bias: float = 1e-4
+    shadow_samples: int = 1
+    shadow_softness: float = 0.0
     edge_highlight: bool = False
     edge_highlight_threshold_degrees: float = 35.0
     edge_highlight_color: Color | tuple[int, int, int] = Color(0, 0, 0)
@@ -43,6 +46,7 @@ class RenderSettings:
     max_render_distance: float | None = None
     sphere_segments: int = 16
     sphere_rings: int = 8
+    texture_size: int = 256
 
     def __post_init__(self) -> None:
         if self.width <= 0 or self.height <= 0:
@@ -52,12 +56,16 @@ class RenderSettings:
         object.__setattr__(self, "gamma", max(0.01, float(self.gamma)))
         object.__setattr__(self, "light_wrap", clamp(float(self.light_wrap), 0.0, 1.0))
         object.__setattr__(self, "bounce_light", clamp(float(self.bounce_light), 0.0, 1.0))
+        object.__setattr__(self, "reflection_bounces", max(0, int(self.reflection_bounces)))
         object.__setattr__(self, "shadow_bias", max(0.0, float(self.shadow_bias)))
+        object.__setattr__(self, "shadow_samples", max(1, int(self.shadow_samples)))
+        object.__setattr__(self, "shadow_softness", max(0.0, float(self.shadow_softness)))
         object.__setattr__(self, "edge_highlight_threshold_degrees", clamp(float(self.edge_highlight_threshold_degrees), 0.0, 180.0))
         object.__setattr__(self, "edge_highlight_color", Color.from_value(self.edge_highlight_color))
         object.__setattr__(self, "edge_highlight_depth_bias", max(0.0, float(self.edge_highlight_depth_bias)))
         if self.max_render_distance is not None:
             object.__setattr__(self, "max_render_distance", max(0.0, float(self.max_render_distance)))
+        object.__setattr__(self, "texture_size", max(16, int(self.texture_size)))
 
 
 @runtime_checkable
@@ -332,6 +340,8 @@ class CPURenderer:
                         pixel_facing = pixel_normal.dot(pixel_view_direction)
                         if settings.two_sided_lighting and pixel_facing < 0.0:
                             pixel_normal = -pixel_normal
+                        shade_normal = pixel_normal
+                        shade_view_direction = pixel_view_direction
                         active_lighting = _lighting_channels(
                             scene,
                             world_point,
@@ -342,6 +352,9 @@ class CPURenderer:
                             triangle,
                             shadow_triangles,
                         )
+                    else:
+                        shade_normal = normal
+                        shade_view_direction = view_direction
                     if use_texture:
                         uv = _interpolate_uv(triangle, w0, w1, w2)
                         texture_color = triangle.material.color_at(uv)
@@ -351,6 +364,7 @@ class CPURenderer:
                             base_color=texture_color,
                             specular_light=active_lighting.specular,
                         )
+                        shaded = _apply_ray_traced_reflection(shaded, triangle.material, shade_normal, shade_view_direction, settings)
                         pixels[index] = _apply_gamma(_apply_surface_attributes(shaded, triangle.material, x, y, z), settings.gamma)
                     elif use_smooth_shading:
                         shaded = triangle.material.shade(
@@ -358,9 +372,11 @@ class CPURenderer:
                             ambient=settings.ambient,
                             specular_light=active_lighting.specular,
                         )
+                        shaded = _apply_ray_traced_reflection(shaded, triangle.material, shade_normal, shade_view_direction, settings)
                         pixels[index] = _apply_gamma(_apply_surface_attributes(shaded, triangle.material, x, y, z), settings.gamma)
                     else:
-                        pixels[index] = _apply_gamma(_apply_surface_attributes(color, triangle.material, x, y, z), settings.gamma)
+                        shaded = _apply_ray_traced_reflection(color, triangle.material, shade_normal, shade_view_direction, settings)
+                        pixels[index] = _apply_gamma(_apply_surface_attributes(shaded, triangle.material, x, y, z), settings.gamma)
 
     def _draw_edge_highlights(
         self,
@@ -523,8 +539,7 @@ def _lighting_channels(
         diffuse_response = max(0.0, (facing + wrap) / (1.0 + wrap)) if wrap > 0.0 else max(0.0, facing)
         strength = diffuse_response * sample.intensity
         if strength > 0.0 and settings is not None and settings.ray_traced_shadows:
-            max_distance = _shadow_max_distance(light, center)
-            strength *= _shadow_transmission(scene, center, light_direction, max_distance, settings, source_triangle, shadow_triangles)
+            strength *= _shadow_factor_for_light(scene, center, light, light_direction, settings, source_triangle, shadow_triangles)
             if strength <= 0.0:
                 continue
         lr, lg, lb = sample.color.to_floats()
@@ -547,6 +562,54 @@ def _shadow_max_distance(light, center: Vec3) -> float:
     if isinstance(light, Lamp):
         return max(0.0, (light.position - center).length())
     return float("inf")
+
+
+def _shadow_factor_for_light(
+    scene: Scene,
+    center: Vec3,
+    light,
+    light_direction: Vec3,
+    settings: RenderSettings,
+    source_triangle: Triangle | None,
+    shadow_triangles: tuple[Triangle, ...] | None,
+) -> float:
+    samples = settings.shadow_samples
+    softness = settings.shadow_softness
+    if not isinstance(light, Lamp) or samples <= 1 or softness <= 0.0:
+        max_distance = _shadow_max_distance(light, center)
+        return _shadow_transmission(scene, center, light_direction, max_distance, settings, source_triangle, shadow_triangles)
+
+    total = _shadow_transmission(
+        scene,
+        center,
+        light_direction,
+        _shadow_max_distance(light, center),
+        settings,
+        source_triangle,
+        shadow_triangles,
+    )
+    tangent, bitangent = _shadow_sample_basis(light_direction)
+    for index in range(1, samples):
+        angle = tau * ((index * 0.6180339887498949) % 1.0)
+        radius = softness * sqrt(index / max(1, samples - 1))
+        sample_position = light.position + tangent * (cos(angle) * radius) + bitangent * (sin(angle) * radius)
+        sample_vector = sample_position - center
+        sample_distance = sample_vector.length()
+        if sample_distance <= settings.shadow_bias:
+            total += 1.0
+            continue
+        sample_direction = sample_vector / sample_distance
+        total += _shadow_transmission(scene, center, sample_direction, sample_distance, settings, source_triangle, shadow_triangles)
+    return clamp(total / samples, 0.0, 1.0)
+
+
+def _shadow_sample_basis(direction: Vec3) -> tuple[Vec3, Vec3]:
+    tangent = direction.cross(Vec3(0.0, 1.0, 0.0))
+    if tangent.length_squared() < 1e-10:
+        tangent = direction.cross(Vec3(1.0, 0.0, 0.0))
+    tangent = tangent.normalized(Vec3(1.0, 0.0, 0.0))
+    bitangent = direction.cross(tangent).normalized(Vec3(0.0, 0.0, 1.0))
+    return tangent, bitangent
 
 
 def _triangle_culled_by_distance(prepared: _PreparedTriangle, camera: Camera, settings: RenderSettings) -> bool:
@@ -623,6 +686,65 @@ def _interpolate_normal(triangle: Triangle, w0: float, w1: float, w2: float, fal
     normal_b = triangle.normal_b or fallback
     normal_c = triangle.normal_c or fallback
     return (normal_a * w0 + normal_b * w1 + normal_c * w2).normalized(fallback)
+
+
+def _apply_ray_traced_reflection(
+    color: Color,
+    material,
+    normal: Vec3,
+    view_direction: Vec3,
+    settings: RenderSettings,
+) -> Color:
+    bounces = settings.reflection_bounces
+    reflectivity = getattr(material, "reflectivity", 0.0)
+    if bounces <= 0 or reflectivity <= 0.0:
+        return color
+
+    incoming = -view_direction.normalized(Vec3(0.0, 0.0, -1.0))
+    reflection = (incoming - normal * (2.0 * incoming.dot(normal))).normalized(normal)
+    traced = _trace_reflection_environment(reflection, bounces)
+    base = color.to_floats()
+    amount = clamp(reflectivity * (0.38 + min(4, bounces) * 0.12), 0.0, 0.92)
+    return Color.from_floats(
+        base[0] * (1.0 - amount) + traced[0] * amount,
+        base[1] * (1.0 - amount) + traced[1] * amount,
+        base[2] * (1.0 - amount) + traced[2] * amount,
+    )
+
+
+def _trace_reflection_environment(direction: Vec3, bounces: int) -> tuple[float, float, float]:
+    ray = direction.normalized(Vec3(0.0, 1.0, 0.0))
+    energy = 1.0
+    total = [0.0, 0.0, 0.0]
+    normalizer = 0.0
+    for index in range(max(1, bounces)):
+        sky = max(0.0, ray.y)
+        floor = max(0.0, -ray.y)
+        horizon = max(0.0, 1.0 - abs(ray.y))
+        glint = max(0.0, ray.dot(Vec3(-0.35, 0.72, -0.58).normalized())) ** 28.0
+        sample = (
+            0.05 + sky * 0.34 + floor * 0.16 + horizon * 0.09 + glint * 0.85,
+            0.06 + sky * 0.42 + floor * 0.22 + horizon * 0.11 + glint * 0.78,
+            0.08 + sky * 0.56 + floor * 0.28 + horizon * 0.14 + glint * 0.62,
+        )
+        total[0] += sample[0] * energy
+        total[1] += sample[1] * energy
+        total[2] += sample[2] * energy
+        normalizer += energy
+        if index == bounces - 1:
+            break
+        if ray.y < 0.0:
+            ray = Vec3(ray.x * 0.82, -ray.y * 0.78 + 0.16, ray.z * 0.82).normalized(ray)
+        else:
+            ray = Vec3(ray.x * 0.76 - ray.z * 0.18, ray.y * 0.54 - 0.12, ray.z * 0.76 + ray.x * 0.18).normalized(ray)
+        energy *= 0.48
+    if normalizer <= 0.0:
+        return (0.0, 0.0, 0.0)
+    return (
+        clamp(total[0] / normalizer, 0.0, 1.0),
+        clamp(total[1] / normalizer, 0.0, 1.0),
+        clamp(total[2] / normalizer, 0.0, 1.0),
+    )
 
 
 def _apply_surface_attributes(color: Color, material, x: int, y: int, depth: float) -> Color:

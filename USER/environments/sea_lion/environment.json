@@ -1,0 +1,22 @@
+{
+  "name": "sea_lion",
+  "description": "Prepared sea lion mesh asset render demo.",
+  "rendering_dir": "USER/environments/sea_lion/renderings",
+  "baking_dir": "USER/environments/sea_lion/baking",
+  "render_data": "USER/environments/sea_lion/render-data.json",
+  "renders": [
+    {
+      "name": "asset_preview",
+      "seconds": 0,
+      "outputs": ["USER/environments/sea_lion/renderings/sea_lion_asset.png"],
+      "command": [
+        "python",
+        "examples/sea_lion_asset_demo.py",
+        "--asset",
+        "USER/assets/sea_lion/sea_lion.py3dmesh.json",
+        "--output",
+        "USER/environments/sea_lion/renderings/sea_lion_asset.png"
+      ]
+    }
+  ]
+}

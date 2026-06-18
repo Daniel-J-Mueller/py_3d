@@ -232,6 +232,19 @@ def test_ray_traced_shadow_respects_material_light_transmission():
     assert transmitted.diffuse[0] < 3.0
 
 
+def test_ray_traced_shadow_samples_soft_lamp_area():
+    material = Material(color=(255, 255, 255))
+    blocker = Material()
+    scene = Scene()
+    scene.add(Triangle((-0.16, -0.16, -1), (0.16, -0.16, -1), (0.0, 0.16, -1), blocker))
+    scene.add_light(Lamp(position=(0, 0, -2), color=(255, 255, 255), intensity=3.0))
+    settings = RenderSettings(width=32, height=32, ray_traced_shadows=True, shadow_samples=7, shadow_softness=0.72)
+
+    soft = _lighting_channels(scene, Vec3(0, 0, 0), Vec3(0, 0, -1), Vec3(0, 0, -1), material, settings)
+
+    assert 0.0 < soft.diffuse[0] < 0.6
+
+
 def test_gamma_brightens_midtones_when_greater_than_one():
     scene = Scene()
     scene.add(Triangle((-1, -1, 0), (1, -1, 0), (0, 1, 0), Material(color=(128, 128, 128), emission=(128, 128, 128))))

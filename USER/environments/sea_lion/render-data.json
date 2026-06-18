@@ -1,0 +1,69 @@
+{
+  "environment": "sea_lion",
+  "rendering_dir": "USER/environments/sea_lion/renderings",
+  "baking_dir": "USER/environments/sea_lion/baking",
+  "updated": "2026-06-18 04:43:37",
+  "system_specs": {
+    "python": "3.14.4",
+    "platform": "Windows-11-10.0.26200-SP0",
+    "cpu": "AMD64 Family 25 Model 80 Stepping 0, AuthenticAMD",
+    "cpu_count": 16,
+    "gpu": "NVIDIA GeForce RTX 4090, 580.97, 24564 MiB"
+  },
+  "runs": [
+    {
+      "command": [
+        "python",
+        "examples/sea_lion_asset_demo.py",
+        "--asset",
+        "USER/assets/sea_lion/sea_lion.py3dmesh.json",
+        "--output",
+        "USER/environments/sea_lion/renderings/sea_lion_asset.png"
+      ],
+      "seconds": 0.0,
+      "returncode": 0,
+      "dry_run": true,
+      "variant": "asset_preview",
+      "expected_seconds": 0,
+      "outputs": [
+        "USER/environments/sea_lion/renderings/sea_lion_asset.png"
+      ]
+    },
+    {
+      "command": [
+        "python",
+        "examples/sea_lion_asset_demo.py",
+        "--asset",
+        "USER/assets/sea_lion/sea_lion.py3dmesh.json",
+        "--output",
+        "USER/environments/sea_lion/renderings/sea_lion_asset.png"
+      ],
+      "seconds": 2.24811500008218,
+      "returncode": 0,
+      "dry_run": false,
+      "variant": "asset_preview",
+      "expected_seconds": 0,
+      "outputs": [
+        "USER/environments/sea_lion/renderings/sea_lion_asset.png"
+      ]
+    },
+    {
+      "command": [
+        "python",
+        "examples/sea_lion_asset_demo.py",
+        "--asset",
+        "USER/assets/sea_lion/sea_lion.py3dmesh.json",
+        "--output",
+        "USER/environments/sea_lion/renderings/sea_lion_asset.png"
+      ],
+      "seconds": 2.175507700070739,
+      "returncode": 0,
+      "dry_run": false,
+      "variant": "asset_preview",
+      "expected_seconds": 0,
+      "outputs": [
+        "USER/environments/sea_lion/renderings/sea_lion_asset.png"
+      ]
+    }
+  ]
+}

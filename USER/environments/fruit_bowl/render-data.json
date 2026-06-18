@@ -2,7 +2,7 @@
   "environment": "fruit_bowl",
   "rendering_dir": "USER/environments/fruit_bowl/renderings",
   "baking_dir": "USER/environments/fruit_bowl/baking",
-  "updated": "2026-06-18 02:52:27",
+  "updated": "2026-06-18 05:26:41",
   "system_specs": {
     "python": "3.14.4",
     "platform": "Windows-11-10.0.26200-SP0",
@@ -11,6 +11,88 @@
     "gpu": "NVIDIA GeForce RTX 4090, 580.97, 24564 MiB"
   },
   "runs": [
+    {
+      "command": [
+        "python",
+        "examples/render_fruit_bowl_variants.py",
+        "--output-dir",
+        "USER/environments/fruit_bowl/renderings",
+        "--max-render-distance",
+        "7.0"
+      ],
+      "seconds": 0.0,
+      "returncode": 0,
+      "dry_run": true,
+      "variant": "pipeline",
+      "expected_seconds": 10,
+      "outputs": [
+        "USER/environments/fruit_bowl/renderings/fruit_bowl_poly.mp4",
+        "USER/environments/fruit_bowl/renderings/fruit_bowl_smooth.mp4",
+        "USER/environments/fruit_bowl/renderings/fruit_bowl_ray_traced.mp4",
+        "USER/environments/fruit_bowl/renderings/fruit_bowl_mirror_prelight.mp4"
+      ]
+    },
+    {
+      "command": [
+        "python",
+        "examples/fruit_bowl_demo.py",
+        "--renderer",
+        "py_gpu",
+        "--gpu-fast-render",
+        "--output",
+        "USER/environments/fruit_bowl/renderings/fruit_bowl_gpu_fast.png",
+        "--width",
+        "480",
+        "--height",
+        "270",
+        "--smooth-shading",
+        "--gamma",
+        "1.15",
+        "--sphere-segments",
+        "16",
+        "--sphere-rings",
+        "8",
+        "--max-render-distance",
+        "7.0"
+      ],
+      "seconds": 0.0,
+      "returncode": 0,
+      "dry_run": true,
+      "variant": "fast_gpu_still",
+      "expected_seconds": 0,
+      "outputs": [
+        "USER/environments/fruit_bowl/renderings/fruit_bowl_gpu_fast.png"
+      ]
+    },
+    {
+      "command": [
+        "python",
+        "examples/fruit_bowl_demo.py",
+        "--renderer",
+        "py_gpu",
+        "--output",
+        "USER/environments/fruit_bowl/renderings/fruit_bowl_live_parity.png",
+        "--width",
+        "480",
+        "--height",
+        "270",
+        "--smooth-shading",
+        "--gamma",
+        "1.15",
+        "--sphere-segments",
+        "18",
+        "--sphere-rings",
+        "9"
+      ],
+      "seconds": 0.0,
+      "returncode": 0,
+      "dry_run": true,
+      "variant": "live_parity_still",
+      "expected_seconds": 0,
+      "outputs": [
+        "USER/environments/fruit_bowl/renderings/fruit_bowl_live_parity.png"
+      ]
+    },
     {
       "command": [
         "python",

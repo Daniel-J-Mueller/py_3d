@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from math import pi
 
@@ -16,6 +17,101 @@ def _radius_from_volume(volume: float) -> float:
 
 def _volume_from_radius(radius: float) -> float:
     return 4.0 * pi * radius * radius * radius / 3.0
+
+
+@dataclass
+class VectorFluidParticle:
+    """A single particle in a vector-cloud fluid."""
+
+    position: Vec3 | tuple[float, float, float]
+    velocity: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
+    mass: float = 1.0
+
+    def __post_init__(self) -> None:
+        self.position = as_vec3(self.position)
+        self.velocity = as_vec3(self.velocity)
+        self.mass = max(1e-6, float(self.mass))
+
+
+@dataclass
+class VectorFluidWorld:
+    """A light vector-cloud fluid model with liquid/gas behavior.
+
+    Liquids use short-range repulsion plus medium-range attraction. Gases can
+    share the same particles while setting ``self_attraction`` to zero.
+    """
+
+    bounds_min: Vec3 | tuple[float, float, float] = Vec3(-2.0, 0.0, -2.0)
+    bounds_max: Vec3 | tuple[float, float, float] = Vec3(2.0, 2.0, 2.0)
+    gravity: Vec3 | tuple[float, float, float] = Vec3(0.0, -9.81, 0.0)
+    rest_distance: float = 0.18
+    repel_strength: float = 10.0
+    self_attraction: float = 2.6
+    viscosity: float = 0.18
+    boundary_bounce: float = 0.18
+
+    def __post_init__(self) -> None:
+        self.bounds_min = as_vec3(self.bounds_min)
+        self.bounds_max = as_vec3(self.bounds_max)
+        self.gravity = as_vec3(self.gravity)
+        self.rest_distance = max(1e-4, float(self.rest_distance))
+        self.repel_strength = max(0.0, float(self.repel_strength))
+        self.self_attraction = max(0.0, float(self.self_attraction))
+        self.viscosity = clamp(float(self.viscosity), 0.0, 1.0)
+        self.boundary_bounce = clamp(float(self.boundary_bounce), 0.0, 1.0)
+        self.particles: list[VectorFluidParticle] = []
+
+    def add_particle(self, particle: VectorFluidParticle) -> VectorFluidParticle:
+        self.particles.append(particle)
+        return particle
+
+    def step(
+        self,
+        dt: float,
+        substeps: int = 1,
+        external_force: Callable[[VectorFluidParticle, float], Vec3] | None = None,
+    ) -> None:
+        if dt < 0.0:
+            raise ValueError("fluid dt must be non-negative")
+        if substeps <= 0:
+            raise ValueError("fluid substeps must be positive")
+        step_dt = dt / substeps
+        for _ in range(substeps):
+            self._step_once(step_dt, external_force)
+
+    def _step_once(self, dt: float, external_force: Callable[[VectorFluidParticle, float], Vec3] | None) -> None:
+        forces = [self.gravity * particle.mass for particle in self.particles]
+        attract_range = self.rest_distance * 3.1
+        for first_index, first in enumerate(self.particles):
+            for second_index in range(first_index + 1, len(self.particles)):
+                second = self.particles[second_index]
+                delta = second.position - first.position
+                distance = delta.length()
+                if distance <= 1e-6 or distance > attract_range:
+                    continue
+                direction = delta / distance
+                if distance < self.rest_distance:
+                    amount = (self.rest_distance - distance) / self.rest_distance
+                    force = direction * (-self.repel_strength * amount)
+                else:
+                    amount = 1.0 - (distance - self.rest_distance) / max(1e-6, attract_range - self.rest_distance)
+                    force = direction * (self.self_attraction * amount)
+                forces[first_index] = forces[first_index] + force
+                forces[second_index] = forces[second_index] - force
+
+        for index, particle in enumerate(self.particles):
+            if external_force is not None:
+                forces[index] = forces[index] + external_force(particle, dt)
+            particle.velocity = (particle.velocity + forces[index] * (dt / particle.mass)) * max(0.0, 1.0 - self.viscosity * dt)
+            particle.position = particle.position + particle.velocity * dt
+            self._resolve_bounds(particle)
+
+    def _resolve_bounds(self, particle: VectorFluidParticle) -> None:
+        x, vx = _bounded_axis(particle.position.x, particle.velocity.x, self.bounds_min.x, self.bounds_max.x, self.boundary_bounce)
+        y, vy = _bounded_axis(particle.position.y, particle.velocity.y, self.bounds_min.y, self.bounds_max.y, self.boundary_bounce)
+        z, vz = _bounded_axis(particle.position.z, particle.velocity.z, self.bounds_min.z, self.bounds_max.z, self.boundary_bounce)
+        particle.position = Vec3(x, y, z)
+        particle.velocity = Vec3(vx, vy, vz)
 
 
 @dataclass

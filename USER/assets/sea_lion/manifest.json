@@ -1,0 +1,53 @@
+{
+  "format": "py_3d.mesh_asset.v1",
+  "name": "sea_lion",
+  "source": "assets\\sea-lion-import-test\\10041_sealion_v1_L3.obj",
+  "bounds": {
+    "min": [
+      -0.8154224632064044,
+      0.0,
+      -0.787505069133002
+    ],
+    "max": [
+      0.8154224632064044,
+      1.15,
+      0.787505069133002
+    ],
+    "size": [
+      1.6308449264128089,
+      1.15,
+      1.575010138266004
+    ]
+  },
+  "vertex_count": 5782,
+  "uv_count": 12701,
+  "triangle_count": 11845,
+  "material": {
+    "color": [
+      96,
+      78,
+      64
+    ],
+    "roughness": 0.28,
+    "fuzziness": 0.04,
+    "specular": 0.24,
+    "shininess": 38.0
+  },
+  "ingest": {
+    "source_vertex_count": 29818,
+    "source_uv_count": 31692,
+    "source_triangle_count": 59568,
+    "target_triangles": 12000,
+    "face_step": null,
+    "simplification": {
+      "method": "vertex_grid",
+      "grid_divisions": 65
+    },
+    "source_up": "z",
+    "scale_to_height": 1.15,
+    "yaw": 90.0,
+    "pitch": 0.0,
+    "roll": 0.0
+  },
+  "asset": "sea_lion.py3dmesh.json"
+}

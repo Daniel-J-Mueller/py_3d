@@ -290,6 +290,9 @@ shadow ray test. It is slower and intended for offline inspection, but it helps
 catch cases where a face receives light that should be occluded by nearby
 geometry. Shadow rays respect `Material.light_transmission`, so an object can
 partially pass direct light instead of acting as a fully opaque blocker.
+`RenderSettings(shadow_samples=..., shadow_softness=...)` turns lamp shadows
+into a deterministic area-light sample when ray-traced shadows are enabled,
+which gives higher-spec renders softer, less binary occlusion.
 
 ### Rendering
 
@@ -347,6 +350,8 @@ The first import helpers are deliberately small:
 - `load_obj(path, material=...)`: loads Wavefront OBJ vertex positions, texture
   coordinates, and faces. Quads and larger polygons are triangulated as fans.
 - `load_stl(path, material=...)`: loads ASCII or binary STL triangles.
+- `load_mesh_asset(path, material=...)`: loads prepared py_3d mesh assets
+  written by `examples/ingest_asset.py`.
 - `PixelBuffer.from_png(path)`: imports PNG images for texture tests and future
   surface texturing.
 - `planar_project_triangles(...)`: assigns UVs by choosing a local center,
@@ -454,9 +459,10 @@ examples/
 This layout is a starting point, not a requirement. Keep modules small and
 split them when a file starts mixing unrelated responsibilities.
 
-Current implemented modules are `buffer`, `camera`, `collision`, `color`, `draw`,
-`gpu`, `importers`, `lights`, `materials`, `math3d`, `overlays`, `physics`,
-`noise`, `primitives`, `render`, `scene`, and `textures`.
+Current implemented modules are `assets`, `buffer`, `camera`, `collision`,
+`color`, `draw`, `gpu`, `importers`, `lights`, `materials`, `math3d`,
+`overlays`, `physics`, `noise`, `primitives`, `render`, `scene`, and
+`textures`.
 
 ## Performance Direction
 
@@ -668,14 +674,17 @@ The OpenGL viewer captures the mouse; click the window to recapture if needed
 and press `Esc` to open the live options menu. Use mouse look, `W/A/S/D` to
 move, `Shift`/`Ctrl` to move up/down, `Space` to pause, `R` to toggle between
 filled OpenGL rendering and wireframe, `X` to reset, and `P` to save a
-snapshot. The GPU live viewer starts filled by default; use `--live-wireframe`
-when you specifically want the mesh view first.
+snapshot. Aim with the center crosshair and left-click fruit to pick it up;
+while holding fruit, mouse look moves it and the scroll wheel changes its
+distance from the camera. The GPU live viewer starts filled by default; use
+`--live-wireframe` when you specifically want the mesh view first.
 
 Live rendering quality can be changed in `USER/settings.json` with
 `render_quality` (`fast`, `balanced`, `high`, `ultra`, or `poly`) and
 `render_quality_presets`. The presets control render dimensions, generated mesh
 density, smooth/flat normals, gamma, wrap lighting, bounce fill, tone mapping,
-and max render distance. CLI flags still win for one-off runs.
+texture size, ray-traced shadow sample count/softness, and max render distance.
+CLI flags still win for one-off runs.
 
 The `12_live_fruit_bowl_mirror_prelight.py` launcher is the high-spec
 performance version of the mirror-prelight scene: 1920x1080, 24x12 generated
@@ -684,9 +693,19 @@ meshes, no vsync, and `--fps 0` for an uncapped render loop.
 The `13_live_fruit_bowl_poly_lamp.py` launcher is the low-poly wood-bowl demo:
 flat live normals, 7x4 generated fruit meshes, a swaying
 `HangingConeLampPrimitive` paired with a warm moving `Lamp`, a fixed in-world
-sign, a separate floating bulletin, and a jiggly side sea lion imported from
-`assets/sea-lion-import-test`. The primitive showcase descriptors live in
-`USER/primitives/`.
+sign, and a separate floating bulletin. The primitive showcase descriptors live
+in `USER/primitives/`.
+
+Prepare imported OBJ assets for py_3d demos:
+
+```bash
+python examples/ingest_asset.py assets/sea-lion-import-test/10041_sealion_v1_L3.obj --name sea_lion --output-dir USER/assets --target-triangles 12000 --source-up z --scale-to-height 1.15 --yaw 90
+python USER/demos/14_render_sea_lion_asset.py
+```
+
+The ingestion script writes a compact `*.py3dmesh.json` plus a manifest with
+source/output counts and transform settings, preserving UVs and geometry unless
+a target triangle budget or face-step is requested.
 
 Render a real video file:
 

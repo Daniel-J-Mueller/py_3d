@@ -21,6 +21,8 @@ from py_3d import (
     FloatingTextBulletin,
     Box,
     HangingConeLampPrimitive,
+    HUDRect,
+    HUDText,
     KinematicBowl,
     Lamp,
     LampPrimitive,
@@ -41,13 +43,13 @@ from py_3d import (
     TextBulletin,
     Triangle,
     Vec3,
+    draw,
 )
 
 
 OUTPUT_DIR = Path("renderings-tests")
 FRUIT_BOWL_OUTPUT_DIR = Path("USER") / "environments" / "fruit_bowl" / "renderings"
 USER_SETTINGS_PATH = Path("USER") / "settings.json"
-SEA_LION_OBJ_PATH = Path("assets") / "sea-lion-import-test" / "10041_sealion_v1_L3.obj"
 
 
 DEFAULT_RENDER_QUALITY_PRESETS = {
@@ -59,10 +61,14 @@ DEFAULT_RENDER_QUALITY_PRESETS = {
         "sphere_segments": 10,
         "sphere_rings": 5,
         "smooth_shading": False,
+        "texture_size": 128,
         "gamma": 1.05,
         "light_wrap": 0.08,
         "bounce_light": 0.04,
         "tone_mapping": False,
+        "reflection_bounces": 0,
+        "shadow_samples": 1,
+        "shadow_softness": 0.0,
         "max_render_distance": 7.0,
     },
     "balanced": {
@@ -73,10 +79,14 @@ DEFAULT_RENDER_QUALITY_PRESETS = {
         "sphere_segments": 18,
         "sphere_rings": 9,
         "smooth_shading": True,
+        "texture_size": 256,
         "gamma": 1.12,
         "light_wrap": 0.16,
         "bounce_light": 0.08,
         "tone_mapping": True,
+        "reflection_bounces": 1,
+        "shadow_samples": 2,
+        "shadow_softness": 0.08,
         "max_render_distance": 8.5,
     },
     "high": {
@@ -87,10 +97,14 @@ DEFAULT_RENDER_QUALITY_PRESETS = {
         "sphere_segments": 24,
         "sphere_rings": 12,
         "smooth_shading": True,
+        "texture_size": 384,
         "gamma": 1.15,
         "light_wrap": 0.24,
         "bounce_light": 0.14,
         "tone_mapping": True,
+        "reflection_bounces": 2,
+        "shadow_samples": 4,
+        "shadow_softness": 0.12,
         "max_render_distance": 10.0,
     },
     "ultra": {
@@ -101,10 +115,14 @@ DEFAULT_RENDER_QUALITY_PRESETS = {
         "sphere_segments": 32,
         "sphere_rings": 16,
         "smooth_shading": True,
+        "texture_size": 512,
         "gamma": 1.18,
         "light_wrap": 0.28,
         "bounce_light": 0.18,
         "tone_mapping": True,
+        "reflection_bounces": 3,
+        "shadow_samples": 8,
+        "shadow_softness": 0.18,
         "max_render_distance": 12.0,
     },
     "poly": {
@@ -115,10 +133,14 @@ DEFAULT_RENDER_QUALITY_PRESETS = {
         "sphere_segments": 7,
         "sphere_rings": 4,
         "smooth_shading": False,
+        "texture_size": 192,
         "gamma": 1.12,
         "light_wrap": 0.18,
         "bounce_light": 0.12,
         "tone_mapping": True,
+        "reflection_bounces": 1,
+        "shadow_samples": 1,
+        "shadow_softness": 0.0,
         "max_render_distance": 9.0,
     },
 }
@@ -131,10 +153,14 @@ QUALITY_FLAG_MAP = {
     "sphere_segments": ("--sphere-segments",),
     "sphere_rings": ("--sphere-rings",),
     "smooth_shading": ("--smooth-shading", "--no-smooth-shading"),
+    "texture_size": ("--texture-size",),
     "gamma": ("--gamma",),
     "light_wrap": ("--light-wrap",),
     "bounce_light": ("--bounce-light",),
     "tone_mapping": ("--tone-mapping", "--no-tone-mapping"),
+    "reflection_bounces": ("--reflection-bounces",),
+    "shadow_samples": ("--shadow-samples",),
+    "shadow_softness": ("--shadow-softness",),
     "max_render_distance": ("--max-render-distance",),
 }
 
@@ -338,11 +364,13 @@ def _ring_center(ring: list[Vec3]) -> Vec3:
 
 
 _WOOD_TEXTURE: PixelBuffer | None = None
+_APPLE_TEXTURE: PixelBuffer | None = None
+_ORANGE_TEXTURE: PixelBuffer | None = None
+_LEMON_TEXTURE: PixelBuffer | None = None
 _WATERMELON_TEXTURE: PixelBuffer | None = None
 _BANANA_TEXTURE: PixelBuffer | None = None
-_SEA_LION_TEXTURE: PixelBuffer | None = None
-_SEA_LION_BASE_TRIANGLES: tuple[Triangle, ...] | None = None
-_SEA_LION_ORIGIN = Vec3(2.25, -1.73, 0.4)
+_FLOOR_TEXTURE: PixelBuffer | None = None
+_SIGN_TEXTURES: dict[tuple[str, str, int, int], PixelBuffer] = {}
 
 
 def _bowl_style(name: str) -> tuple[Material, SurfacePerturbation | None]:
@@ -376,7 +404,7 @@ def _bowl_style(name: str) -> tuple[Material, SurfacePerturbation | None]:
     )
 
 
-def wood_grain_texture(width: int = 128, height: int = 64) -> PixelBuffer:
+def wood_grain_texture(width: int = 512, height: int = 256) -> PixelBuffer:
     global _WOOD_TEXTURE
     if _WOOD_TEXTURE is not None and _WOOD_TEXTURE.width == width and _WOOD_TEXTURE.height == height:
         return _WOOD_TEXTURE
@@ -397,7 +425,83 @@ def wood_grain_texture(width: int = 128, height: int = 64) -> PixelBuffer:
     return _WOOD_TEXTURE
 
 
-def watermelon_texture(width: int = 96, height: int = 48) -> PixelBuffer:
+def _hash_unit(x: int, y: int, salt: int) -> float:
+    value = (x * 73856093) ^ (y * 19349663) ^ salt
+    value = (value ^ (value >> 13)) * 1274126177
+    return (value & 0xFFFF) / 0xFFFF
+
+
+def apple_texture(width: int = 384, height: int = 192) -> PixelBuffer:
+    global _APPLE_TEXTURE
+    if _APPLE_TEXTURE is not None and _APPLE_TEXTURE.width == width and _APPLE_TEXTURE.height == height:
+        return _APPLE_TEXTURE
+    pixels: list[Color] = []
+    for y in range(height):
+        v = y / max(1, height - 1)
+        for x in range(width):
+            u = x / max(1, width - 1)
+            blush = 0.5 + 0.5 * sin((u * 1.3 + 0.08 * sin(v * tau * 1.7)) * tau)
+            vertical = 1.0 - abs(v - 0.45) * 0.9
+            shoulder = max(0.0, 1.0 - ((u - 0.18) / 0.22) ** 2 - ((v - 0.28) / 0.5) ** 2)
+            lenticel = _hash_unit(x // 2, y // 2, 0xA991)
+            speckle = 1.0 if lenticel > 0.965 else 0.0
+            r = 150 + blush * 82 + vertical * 18 + speckle * 34
+            g = 34 + (1.0 - blush) * 32 + shoulder * 46 + speckle * 28
+            b = 30 + (1.0 - blush) * 16 + speckle * 10
+            pixels.append(Color(r, g, b))
+    _APPLE_TEXTURE = PixelBuffer(width, height, pixels)
+    return _APPLE_TEXTURE
+
+
+def orange_texture(width: int = 384, height: int = 192) -> PixelBuffer:
+    global _ORANGE_TEXTURE
+    if _ORANGE_TEXTURE is not None and _ORANGE_TEXTURE.width == width and _ORANGE_TEXTURE.height == height:
+        return _ORANGE_TEXTURE
+    pixels: list[Color] = []
+    for y in range(height):
+        v = y / max(1, height - 1)
+        for x in range(width):
+            u = x / max(1, width - 1)
+            pore = _hash_unit(x, y, 0x0A6E)
+            dimple = _hash_unit(x // 3, y // 3, 0xC17A)
+            rind = 0.5 + 0.5 * sin((u * 5.5 + v * 0.6) * tau)
+            r = 210 + rind * 26 - dimple * 14
+            g = 92 + rind * 38 - dimple * 18
+            b = 30 + rind * 10 - dimple * 8
+            if pore > 0.93:
+                r += 28
+                g += 24
+                b += 8
+            pixels.append(Color(r, g, b))
+    _ORANGE_TEXTURE = PixelBuffer(width, height, pixels)
+    return _ORANGE_TEXTURE
+
+
+def lemon_texture(width: int = 384, height: int = 192) -> PixelBuffer:
+    global _LEMON_TEXTURE
+    if _LEMON_TEXTURE is not None and _LEMON_TEXTURE.width == width and _LEMON_TEXTURE.height == height:
+        return _LEMON_TEXTURE
+    pixels: list[Color] = []
+    for y in range(height):
+        v = y / max(1, height - 1)
+        for x in range(width):
+            u = x / max(1, width - 1)
+            pore = _hash_unit(x, y, 0x1E40)
+            mottled = 0.5 + 0.5 * sin((u * 9.0 + 0.22 * sin(v * tau * 3.0)) * tau)
+            blush = max(0.0, 1.0 - ((u - 0.72) / 0.18) ** 2 - ((v - 0.42) / 0.38) ** 2)
+            r = 214 + mottled * 32 + blush * 10
+            g = 192 + mottled * 38 + blush * 16
+            b = 44 + mottled * 16
+            if pore > 0.925:
+                r += 24
+                g += 22
+                b += 6
+            pixels.append(Color(r, g, b))
+    _LEMON_TEXTURE = PixelBuffer(width, height, pixels)
+    return _LEMON_TEXTURE
+
+
+def watermelon_texture(width: int = 384, height: int = 192) -> PixelBuffer:
     global _WATERMELON_TEXTURE
     if _WATERMELON_TEXTURE is not None and _WATERMELON_TEXTURE.width == width and _WATERMELON_TEXTURE.height == height:
         return _WATERMELON_TEXTURE
@@ -417,7 +521,7 @@ def watermelon_texture(width: int = 96, height: int = 48) -> PixelBuffer:
     return _WATERMELON_TEXTURE
 
 
-def banana_texture(width: int = 128, height: int = 48) -> PixelBuffer:
+def banana_texture(width: int = 384, height: int = 144) -> PixelBuffer:
     global _BANANA_TEXTURE
     if _BANANA_TEXTURE is not None and _BANANA_TEXTURE.width == width and _BANANA_TEXTURE.height == height:
         return _BANANA_TEXTURE
@@ -466,140 +570,70 @@ def banana_texture(width: int = 128, height: int = 48) -> PixelBuffer:
     return _BANANA_TEXTURE
 
 
-def sea_lion_texture(width: int = 128, height: int = 128) -> PixelBuffer:
-    global _SEA_LION_TEXTURE
-    if _SEA_LION_TEXTURE is not None and _SEA_LION_TEXTURE.width == width and _SEA_LION_TEXTURE.height == height:
-        return _SEA_LION_TEXTURE
+def floor_texture(width: int = 512, height: int = 512) -> PixelBuffer:
+    global _FLOOR_TEXTURE
+    if _FLOOR_TEXTURE is not None and _FLOOR_TEXTURE.width == width and _FLOOR_TEXTURE.height == height:
+        return _FLOOR_TEXTURE
     pixels: list[Color] = []
     for y in range(height):
         v = y / max(1, height - 1)
+        tile_y = int(v * 8)
+        local_v = (v * 8) % 1.0
         for x in range(width):
             u = x / max(1, width - 1)
-            ripple = 0.5 + 0.5 * sin((u * 3.2 + 0.28 * sin(v * tau * 2.0)) * tau)
-            mottling = 0.5 + 0.5 * sin((u * 17.0 + v * 13.0 + 0.2 * sin(u * tau * 4.0)) * tau)
-            wet = 0.5 + 0.5 * sin((u * 6.0 - v * 4.0) * tau)
-            r = 78 + ripple * 34 + mottling * 20
-            g = 66 + ripple * 28 + mottling * 16
-            b = 56 + ripple * 24 + wet * 16
-            pixels.append(Color(r, g, b))
-    _SEA_LION_TEXTURE = PixelBuffer(width, height, pixels)
-    return _SEA_LION_TEXTURE
+            tile_x = int(u * 8)
+            local_u = (u * 8) % 1.0
+            grout = local_u < 0.035 or local_v < 0.035
+            grain = 0.5 + 0.5 * sin((u * 18.0 + v * 7.0 + 0.08 * sin(v * tau * 6.0)) * tau)
+            noise = _hash_unit(x // 2, y // 2, 0xF100)
+            checker = (tile_x + tile_y) % 2
+            base = 64 + checker * 10 + grain * 18 + noise * 9
+            if grout:
+                pixels.append(Color(34, 47, 49))
+            else:
+                pixels.append(Color(base * 0.72, base * 1.02, base * 1.04))
+    _FLOOR_TEXTURE = PixelBuffer(width, height, pixels)
+    return _FLOOR_TEXTURE
 
 
-def sea_lion_mesh(time: float, *, face_step: int = 96) -> Mesh | None:
-    base = _sea_lion_base_triangles(face_step=face_step)
-    if not base:
-        return None
-    triangles = []
-    for triangle in base:
-        triangles.append(
-            Triangle(
-                _jiggle_sea_lion_point(triangle.a, time),
-                _jiggle_sea_lion_point(triangle.b, time + 0.07),
-                _jiggle_sea_lion_point(triangle.c, time + 0.13),
-                triangle.material,
-                triangle.uv_a,
-                triangle.uv_b,
-                triangle.uv_c,
-            )
-        )
-    return Mesh(triangles)
+def sign_texture(label: str, quality_label: str, width: int = 384, height: int = 192) -> PixelBuffer:
+    key = (label, quality_label, width, height)
+    cached = _SIGN_TEXTURES.get(key)
+    if cached is not None:
+        return cached
 
+    buffer = PixelBuffer.new(width, height, (16, 22, 27))
+    for y in range(height):
+        for x in range(width):
+            u = x / max(1, width - 1)
+            v = y / max(1, height - 1)
+            grain = 0.5 + 0.5 * sin((u * 11.0 + 0.2 * sin(v * tau * 2.0)) * tau)
+            dust = _hash_unit(x // 2, y // 2, 0x5190)
+            edge = max(abs(u - 0.5) * 2.0, abs(v - 0.5) * 2.0)
+            shade = 1.0 - max(0.0, edge - 0.72) * 0.42
+            buffer.pixels[y * width + x] = Color((15 + grain * 18 + dust * 7) * shade, (21 + grain * 16 + dust * 6) * shade, (27 + grain * 14 + dust * 5) * shade)
 
-def _sea_lion_base_triangles(*, face_step: int) -> tuple[Triangle, ...]:
-    global _SEA_LION_BASE_TRIANGLES
-    if _SEA_LION_BASE_TRIANGLES is not None:
-        return _SEA_LION_BASE_TRIANGLES
-    if not SEA_LION_OBJ_PATH.exists():
-        _SEA_LION_BASE_TRIANGLES = ()
-        return _SEA_LION_BASE_TRIANGLES
+    draw.rect(buffer, (8, 8), (width - 16, height - 16), (122, 90, 55), fill=False)
+    draw.rect(buffer, (14, 14), (width - 28, height - 28), (42, 52, 58), fill=False)
 
-    raw_vertices: list[Vec3] = []
-    texture_coordinates: list[tuple[float, float]] = []
-    faces: list[list[tuple[int, int | None]]] = []
-    for raw_line in SEA_LION_OBJ_PATH.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        parts = line.split()
-        if parts[0] == "v" and len(parts) >= 4:
-            raw_vertices.append(Vec3(float(parts[1]), float(parts[2]), float(parts[3])))
-        elif parts[0] == "vt" and len(parts) >= 3:
-            texture_coordinates.append((float(parts[1]), 1.0 - float(parts[2])))
-        elif parts[0] == "f" and len(parts) >= 4:
-            faces.append([_parse_obj_ref(token, len(raw_vertices), len(texture_coordinates)) for token in parts[1:]])
+    lines = (label.upper(), f"QUALITY {quality_label.upper()}")
+    scale = 3
+    if any(draw.text_size(line, scale=scale)[0] > width - 48 for line in lines):
+        scale = 2
+    if any(draw.text_size(line, scale=scale)[0] > width - 48 for line in lines):
+        scale = 1
+    line_spacing = 2
+    total_height = len(lines) * 7 * scale + (len(lines) - 1) * line_spacing * scale
+    y = (height - total_height) // 2
+    for line in lines:
+        text_width, text_height = draw.text_size(line, scale=scale, line_spacing=line_spacing)
+        x = max(0, (width - text_width) // 2)
+        draw.text(buffer, (x + 2, y + 2), line, (4, 7, 10), scale=scale, line_spacing=line_spacing)
+        draw.text(buffer, (x, y), line, (235, 240, 226), scale=scale, line_spacing=line_spacing)
+        y += text_height + line_spacing * scale
 
-    if not raw_vertices:
-        _SEA_LION_BASE_TRIANGLES = ()
-        return _SEA_LION_BASE_TRIANGLES
-
-    min_z = min(vertex.z for vertex in raw_vertices)
-    center_y = (min(vertex.y for vertex in raw_vertices) + max(vertex.y for vertex in raw_vertices)) * 0.5
-    scale = 0.018
-    vertices = [
-        Vec3(
-            _SEA_LION_ORIGIN.x + vertex.x * scale,
-            _SEA_LION_ORIGIN.y + (vertex.z - min_z) * scale,
-            _SEA_LION_ORIGIN.z - (vertex.y - center_y) * scale,
-        )
-        for vertex in raw_vertices
-    ]
-    material = Material(
-        color=(96, 78, 64),
-        texture=sea_lion_texture(),
-        roughness=0.26,
-        fuzziness=0.05,
-        specular=0.24,
-        shininess=38.0,
-    )
-    triangles: list[Triangle] = []
-    for face_index, face in enumerate(faces):
-        if face_index % max(1, face_step) != 0:
-            continue
-        for index in range(1, len(face) - 1):
-            a, b, c = face[0], face[index], face[index + 1]
-            triangles.append(
-                Triangle(
-                    vertices[a[0]],
-                    vertices[b[0]],
-                    vertices[c[0]],
-                    material,
-                    texture_coordinates[a[1]] if a[1] is not None else None,
-                    texture_coordinates[b[1]] if b[1] is not None else None,
-                    texture_coordinates[c[1]] if c[1] is not None else None,
-                )
-            )
-    _SEA_LION_BASE_TRIANGLES = tuple(triangles)
-    return _SEA_LION_BASE_TRIANGLES
-
-
-def _parse_obj_ref(token: str, vertex_count: int, texture_count: int) -> tuple[int, int | None]:
-    values = token.split("/")
-    vertex_index = _resolve_obj_index(int(values[0]), vertex_count)
-    texture_index = None
-    if len(values) >= 2 and values[1]:
-        texture_index = _resolve_obj_index(int(values[1]), texture_count)
-    return vertex_index, texture_index
-
-
-def _resolve_obj_index(index: int, count: int) -> int:
-    resolved = index - 1 if index > 0 else count + index
-    if resolved < 0 or resolved >= count:
-        raise ValueError("OBJ face index out of range")
-    return resolved
-
-
-def _jiggle_sea_lion_point(point: Vec3, time: float) -> Vec3:
-    local = point - _SEA_LION_ORIGIN
-    breath = 1.0 + 0.026 * sin(time * 1.6)
-    wave = 0.022 * sin(time * 3.1 + local.z * 4.8 + local.x * 2.1)
-    belly = max(0.0, 1.0 - abs(local.z) / 1.25) * max(0.0, 1.0 - max(0.0, local.y - 0.35) / 0.95)
-    side_roll = 0.018 * sin(time * 2.2 + local.z * 6.2)
-    return Vec3(
-        _SEA_LION_ORIGIN.x + local.x * (breath + wave * belly),
-        _SEA_LION_ORIGIN.y + local.y * (1.0 + 0.018 * sin(time * 1.9 + local.z * 2.7)) + abs(wave) * belly,
-        _SEA_LION_ORIGIN.z + local.z + side_roll * belly,
-    )
+    _SIGN_TEXTURES[key] = buffer
+    return buffer
 
 
 class FruitBowlSimulation:
@@ -629,7 +663,15 @@ class FruitBowlSimulation:
             restitution=0.35,
             squishiness=0.1,
             damping=0.12,
-            material=Material(color=(52, 89, 92), absorption=(0.14, 0.08, 0.05), roughness=0.5, specular=0.06, shininess=12.0),
+            material=Material(
+                color=(255, 255, 255),
+                texture=floor_texture(),
+                absorption=(0.14, 0.08, 0.05),
+                roughness=0.64,
+                fuzziness=0.12,
+                specular=0.04,
+                shininess=10.0,
+            ),
             size=6.0,
         )
         self.fruits = [
@@ -646,7 +688,17 @@ class FruitBowlSimulation:
                     kinetic_friction=0.28,
                     squishiness=0.38,
                     damping=0.28,
-                    material=Material(color=(225, 55, 48), absorption=(0.02, 0.15, 0.16), roughness=0.22, fuzziness=0.08, specular=0.22, shininess=28.0),
+                    material=Material(
+                        color=(255, 255, 255),
+                        texture=apple_texture(),
+                        absorption=(0.02, 0.15, 0.16),
+                        roughness=0.2,
+                        fuzziness=0.05,
+                        specular=0.28,
+                        shininess=34.0,
+                        reflectivity=0.04,
+                    ),
+                    visual_perturbation=SurfacePerturbation(magnitude=0.012, scale=3.2, seed=12, octaves=3, gain=0.45),
                 ),
             ),
             Fruit(
@@ -662,7 +714,15 @@ class FruitBowlSimulation:
                     kinetic_friction=0.32,
                     squishiness=0.45,
                     damping=0.34,
-                    material=Material(color=(238, 135, 42), absorption=(0.02, 0.08, 0.22), roughness=0.38, fuzziness=0.18, specular=0.12, shininess=18.0),
+                    material=Material(
+                        color=(255, 255, 255),
+                        texture=orange_texture(),
+                        absorption=(0.02, 0.08, 0.22),
+                        roughness=0.48,
+                        fuzziness=0.2,
+                        specular=0.1,
+                        shininess=16.0,
+                    ),
                     visual_perturbation=SurfacePerturbation(magnitude=0.035, scale=5.5, seed=31, octaves=4, gain=0.55),
                     collision_boundary=SphereCollider(radius=0.27),
                 ),
@@ -680,7 +740,15 @@ class FruitBowlSimulation:
                     kinetic_friction=0.3,
                     squishiness=0.5,
                     damping=0.38,
-                    material=Material(color=(238, 218, 74), absorption=(0.03, 0.03, 0.2), roughness=0.32, fuzziness=0.16, specular=0.16, shininess=22.0),
+                    material=Material(
+                        color=(255, 255, 255),
+                        texture=lemon_texture(),
+                        absorption=(0.03, 0.03, 0.2),
+                        roughness=0.42,
+                        fuzziness=0.18,
+                        specular=0.14,
+                        shininess=18.0,
+                    ),
                     visual_perturbation=SurfacePerturbation(magnitude=0.025, scale=6.4, seed=44, octaves=4, gain=0.55),
                     collision_boundary=SphereCollider(radius=0.19),
                 ),
@@ -706,7 +774,7 @@ class FruitBowlSimulation:
                         fuzziness=0.03,
                         specular=0.12,
                         shininess=28.0,
-                        reflectivity=0.02,
+                        reflectivity=0.03,
                     ),
                 ),
                 marker_color=(18, 55, 34),
@@ -736,6 +804,7 @@ class FruitBowlSimulation:
                         fuzziness=0.03,
                         specular=0.12,
                         shininess=20.0,
+                        reflectivity=0.02,
                     ),
                 ),
                 visual="banana",
@@ -802,10 +871,7 @@ class FruitBowlSimulation:
     ) -> Scene:
         scene = Scene()
         scene.add(self.floor.to_primitive(), self.bowl.to_primitive())
-        scene.add(*self._fixed_sign_primitives())
-        sea_lion = sea_lion_mesh(self.time)
-        if sea_lion is not None:
-            scene.add(sea_lion)
+        scene.add(*self._fixed_sign_primitives(label, quality_label))
         for fruit in self.fruits:
             scene.add(*fruit.to_primitives())
         mode = light_mode.lower().replace("_", "-")
@@ -818,19 +884,7 @@ class FruitBowlSimulation:
             scene.add_light(light)
         scene.add_bulletin(
             FloatingTextBulletin(
-                f"FIXED SIGN\n{label}\nQUALITY {quality_label.upper()}",
-                position=(-1.78, -0.88, -1.23),
-                screen_offset=(0, 0),
-                anchor=(0.5, 0.5),
-                color=(245, 248, 255),
-                background=(5, 7, 11),
-                padding=5,
-                scale=1,
-            )
-        )
-        scene.add_bulletin(
-            FloatingTextBulletin(
-                "FLOATING BULLETIN\nHANGING LAMP + SEA LION",
+                "FLOATING BULLETIN\nE GRAB/DROP - WHEEL DEPTH",
                 position=(0.0, 1.24, 0.04),
                 screen_offset=(0, -20),
                 color=(250, 244, 224),
@@ -841,11 +895,64 @@ class FruitBowlSimulation:
         )
         return scene
 
-    def _fixed_sign_primitives(self) -> tuple[Box, ...]:
-        board = Material(color=(20, 26, 31), roughness=0.55, specular=0.08, shininess=16.0)
+    def pick_fruit(self, camera: Camera, *, max_distance: float = 5.5) -> tuple[Fruit, float] | None:
+        _right, _up, forward = camera.basis()
+        best: tuple[float, Fruit] | None = None
+        for fruit in self.fruits:
+            to_center = fruit.body.position - camera.position
+            distance_along_ray = to_center.dot(forward)
+            if distance_along_ray < camera.near or distance_along_ray > max_distance:
+                continue
+            closest = camera.position + forward * distance_along_ray
+            pick_radius = max(0.14, fruit.body.radius * 1.45)
+            if closest.distance_to(fruit.body.position) <= pick_radius:
+                if best is None or distance_along_ray < best[0]:
+                    best = (distance_along_ray, fruit)
+        if best is None:
+            return None
+        return best[1], best[0]
+
+    def move_held_fruit(self, fruit: Fruit, camera: Camera, distance: float, dt: float) -> None:
+        _right, _up, forward = camera.basis()
+        target = camera.position + forward * distance
+        offset = target - fruit.body.position
+        target_distance = offset.length()
+        if target_distance <= 1e-4:
+            fruit.body.velocity = fruit.body.velocity * 0.35
+            fruit.body.angular_velocity = fruit.body.angular_velocity * 0.8
+            return
+
+        pull_speed = min(8.5, max(2.0, target_distance * 12.0))
+        desired_velocity = offset.normalized() * pull_speed
+        blend = min(1.0, max(0.0, dt) * 18.0)
+        fruit.body.velocity = fruit.body.velocity * (1.0 - blend) + desired_velocity * blend
+        fruit.body.angular_velocity = fruit.body.angular_velocity * 0.82
+        fruit.sync_collision_boundary()
+
+    def _fixed_sign_primitives(self, label: str, quality_label: str) -> tuple[Box | Mesh, ...]:
+        board = Material(
+            color=(255, 255, 255),
+            texture=sign_texture(label, quality_label),
+            roughness=0.5,
+            fuzziness=0.08,
+            specular=0.1,
+            shininess=18.0,
+        )
         trim = Material(color=(100, 72, 42), roughness=0.6, fuzziness=0.12, specular=0.04)
+        panel_z = -1.212
+        left = -2.23
+        right = -1.33
+        bottom = -1.075
+        top = -0.685
+        panel = Mesh(
+            (
+                Triangle((left, bottom, panel_z), (right, top, panel_z), (right, bottom, panel_z), board, (0.0, 1.0), (1.0, 0.0), (1.0, 1.0)),
+                Triangle((left, bottom, panel_z), (left, top, panel_z), (right, top, panel_z), board, (0.0, 1.0), (0.0, 0.0), (1.0, 0.0)),
+            )
+        )
         return (
-            Box((-1.78, -0.88, -1.18), (1.02, 0.46, 0.055), board),
+            Box((-1.78, -0.88, -1.18), (1.02, 0.46, 0.055), Material(color=(20, 26, 31), roughness=0.55, specular=0.08, shininess=16.0)),
+            panel,
             Box((-2.24, -1.18, -1.16), (0.055, 0.72, 0.055), trim),
             Box((-1.32, -1.18, -1.16), (0.055, 0.72, 0.055), trim),
             Box((-1.78, -0.62, -1.16), (1.12, 0.055, 0.075), trim),
@@ -982,11 +1089,15 @@ def make_settings(args: argparse.Namespace) -> RenderSettings:
         smooth_shading=args.smooth_shading,
         two_sided_lighting=False,
         ray_traced_shadows=getattr(args, "ray_traced_shadows", False),
+        reflection_bounces=getattr(args, "reflection_bounces", 0),
+        shadow_samples=getattr(args, "shadow_samples", 1),
+        shadow_softness=getattr(args, "shadow_softness", 0.0),
         edge_highlight=getattr(args, "edge_highlight", False),
         edge_highlight_threshold_degrees=getattr(args, "edge_highlight_angle", 35.0),
         max_render_distance=getattr(args, "max_render_distance", None),
         sphere_segments=args.sphere_segments,
         sphere_rings=args.sphere_rings,
+        texture_size=getattr(args, "texture_size", 256),
     )
 
 
@@ -1337,6 +1448,12 @@ class GLFruitBowlViewer:
         self.keys: set[str] = set()
         self.paused = False
         self.full_render = not getattr(args, "live_wireframe", False)
+        self.held_fruit: Fruit | None = None
+        self.held_distance = 1.6
+        self.quality_presets = render_quality_presets()
+        preferred_order = ("fast", "balanced", "high", "ultra", "poly")
+        extras = tuple(name for name in self.quality_presets if name not in preferred_order)
+        self.quality_order = tuple(name for name in preferred_order if name in self.quality_presets) + extras
         self.renderer = ModernGLLiveRenderer(
             args.window_width,
             args.window_height,
@@ -1347,6 +1464,14 @@ class GLFruitBowlViewer:
             "py_3d fruit bowl",
             (
                 LiveMenuOption("resume", "Resume"),
+                LiveMenuOption("quality_next", "Quality preset"),
+                LiveMenuOption("poly_up", "More polygons"),
+                LiveMenuOption("poly_down", "Fewer polygons"),
+                LiveMenuOption("reflections_up", "More reflections"),
+                LiveMenuOption("reflections_down", "Fewer reflections"),
+                LiveMenuOption("smooth", "Smooth shading"),
+                LiveMenuOption("texture_up", "Texture resolution"),
+                LiveMenuOption("tone_mapping", "Tone mapping"),
                 LiveMenuOption("toggle_render", "Toggle wire/poly"),
                 LiveMenuOption("pause", "Pause/run physics"),
                 LiveMenuOption("reset", "Reset bowl"),
@@ -1354,6 +1479,7 @@ class GLFruitBowlViewer:
                 LiveMenuOption("quit", "Quit"),
             ),
         )
+        self._refresh_menu_options()
         self.renderer.set_mouse_captured(True)
         self._last_title_update = 0
 
@@ -1366,8 +1492,13 @@ class GLFruitBowlViewer:
                 for event in self.pygame.event.get():
                     if event.type == self.pygame.QUIT:
                         running = False
+                    elif self.renderer.handle_resize_event(event):
+                        continue
                     elif event.type == self.pygame.MOUSEBUTTONDOWN and not self.renderer.menu.visible:
                         self.renderer.set_mouse_captured(True)
+                        self.on_mouse_button(event.button)
+                    elif event.type == self.pygame.MOUSEWHEEL and not self.renderer.menu.visible:
+                        self.on_mouse_wheel(event.y)
                     elif event.type == self.pygame.MOUSEMOTION and self.renderer.mouse_captured:
                         self.camera_controller.look(event.rel[0], event.rel[1])
                     elif event.type == self.pygame.KEYDOWN:
@@ -1376,15 +1507,18 @@ class GLFruitBowlViewer:
                         self.on_key_up(event.key)
 
                 self.camera_controller.move(self.keys, dt)
+                self.update_held_fruit(dt)
                 if not self.paused:
-                    self.simulation.step(dt)
+                    self.simulation.step(dt, substeps=6 if self.held_fruit is not None else 3)
+                render_camera = self.camera_controller.smoothed_camera(dt)
+                self._update_hud()
                 stats = self.renderer.render(
                     self.simulation.scene(
                         label=getattr(self.args, "label", "KINEMATIC FRUIT BOWL"),
                         light_mode=self.args.light_mode,
                         quality_label=getattr(self.args, "quality", "balanced"),
                     ),
-                    self.camera(),
+                    render_camera,
                     self._active_settings(),
                 )
                 self._update_title(stats)
@@ -1395,6 +1529,37 @@ class GLFruitBowlViewer:
 
     def camera(self) -> Camera:
         return self.camera_controller.camera()
+
+    def on_mouse_button(self, button: int) -> None:
+        if button == 3:
+            self.drop_held_fruit()
+        elif button == 4:
+            self.on_mouse_wheel(1)
+        elif button == 5:
+            self.on_mouse_wheel(-1)
+
+    def on_mouse_wheel(self, amount: int) -> None:
+        if self.held_fruit is None:
+            return
+        self.held_distance = max(0.55, min(6.0, self.held_distance + amount * 0.22))
+
+    def toggle_grabbed_fruit(self) -> None:
+        if self.held_fruit is not None:
+            self.drop_held_fruit()
+            return
+        picked = self.simulation.pick_fruit(self.camera())
+        if picked is not None:
+            self.held_fruit, self.held_distance = picked
+            minimum_distance = self.held_fruit.body.collision_radius() + self.camera().near + 0.35
+            self.held_distance = max(minimum_distance, min(5.5, self.held_distance))
+
+    def update_held_fruit(self, dt: float) -> None:
+        if self.held_fruit is None:
+            return
+        self.simulation.move_held_fruit(self.held_fruit, self.camera(), self.held_distance, dt)
+
+    def drop_held_fruit(self) -> None:
+        self.held_fruit = None
 
     def on_key_down(self, key: int) -> bool:
         pygame = self.pygame
@@ -1416,11 +1581,127 @@ class GLFruitBowlViewer:
             self.save_snapshot()
         elif key == pygame.K_SPACE:
             self.paused = not self.paused
+            self._refresh_menu_options()
         elif key == pygame.K_r:
             self.full_render = not self.full_render
+            self._refresh_menu_options()
         elif key == pygame.K_x:
             self.simulation = FruitBowlSimulation(bowl_material=self.args.bowl_material)
+            self.drop_held_fruit()
+        elif key == pygame.K_e:
+            self.toggle_grabbed_fruit()
         return True
+
+    def _update_hud(self) -> None:
+        held = self.held_fruit.name.upper() if self.held_fruit is not None else "NONE"
+        quality = getattr(self.args, "quality", "custom").upper()
+        self.renderer.hud.set(
+            HUDRect((12, 12), (204, 58), (3, 7, 10), alpha=0.58),
+            HUDText(
+                f"E GRAB/DROP\nHELD {held}\n{quality}  {self.settings.reflection_bounces} REFL",
+                (20, 20),
+                color=(238, 245, 255),
+                alpha=0.92,
+                scale=1,
+            ),
+        )
+
+    def _refresh_menu_options(self) -> None:
+        from py_3d.live import LiveMenuOption
+
+        menu = self.renderer.menu
+        previous_action = menu.selected_action() if menu.options else "resume"
+        quality = getattr(self.args, "quality", "custom")
+        mode = "filled" if self.full_render else "wire"
+        options = (
+            LiveMenuOption("resume", "Resume"),
+            LiveMenuOption("quality_next", "Quality preset", quality),
+            LiveMenuOption("poly_up", "More polygons", f"{self.settings.sphere_segments}x{self.settings.sphere_rings}"),
+            LiveMenuOption("poly_down", "Fewer polygons", f"{self.settings.sphere_segments}x{self.settings.sphere_rings}"),
+            LiveMenuOption("reflections_up", "More reflections", str(self.settings.reflection_bounces)),
+            LiveMenuOption("reflections_down", "Fewer reflections", str(self.settings.reflection_bounces)),
+            LiveMenuOption("smooth", "Smooth shading", "on" if self.settings.smooth_shading else "off"),
+            LiveMenuOption("texture_up", "Texture resolution", str(self.settings.texture_size)),
+            LiveMenuOption("tone_mapping", "Tone mapping", "on" if self.settings.tone_mapping else "off"),
+            LiveMenuOption("toggle_render", "Toggle wire/poly", mode),
+            LiveMenuOption("pause", "Pause/run physics", "paused" if self.paused else "running"),
+            LiveMenuOption("reset", "Reset bowl"),
+            LiveMenuOption("snapshot", "Save snapshot"),
+            LiveMenuOption("quit", "Quit"),
+        )
+        menu.options = options
+        actions = [option.action for option in options]
+        menu.selected_index = actions.index(previous_action) if previous_action in actions else min(menu.selected_index, len(options) - 1)
+
+    def _cycle_quality(self, amount: int) -> None:
+        if not self.quality_order:
+            return
+        current = getattr(self.args, "quality", self.quality_order[0])
+        index = self.quality_order.index(current) if current in self.quality_order else -1
+        next_quality = self.quality_order[(index + amount) % len(self.quality_order)]
+        self._apply_quality(next_quality)
+
+    def _apply_quality(self, quality: str) -> None:
+        preset = self.quality_presets.get(quality)
+        if preset is None:
+            return
+        allowed = {
+            "width",
+            "height",
+            "gamma",
+            "light_wrap",
+            "bounce_light",
+            "tone_mapping",
+            "reflection_bounces",
+            "shadow_samples",
+            "shadow_softness",
+            "max_render_distance",
+            "sphere_segments",
+            "sphere_rings",
+            "smooth_shading",
+            "texture_size",
+        }
+        updates = {key: value for key, value in preset.items() if key in allowed}
+        self.settings = replace(self.settings, **updates)
+        setattr(self.args, "quality", quality)
+        for key, value in updates.items():
+            if hasattr(self.args, key):
+                setattr(self.args, key, value)
+
+    def _mark_custom_quality(self) -> None:
+        setattr(self.args, "quality", "custom")
+
+    def _adjust_polygons(self, amount: int) -> None:
+        self._mark_custom_quality()
+        segments = max(6, min(48, self.settings.sphere_segments + amount * 2))
+        rings = max(3, min(24, self.settings.sphere_rings + amount))
+        self.settings = replace(self.settings, sphere_segments=segments, sphere_rings=rings)
+        self.args.sphere_segments = segments
+        self.args.sphere_rings = rings
+
+    def _adjust_reflections(self, amount: int) -> None:
+        self._mark_custom_quality()
+        bounces = max(0, min(5, self.settings.reflection_bounces + amount))
+        self.settings = replace(self.settings, reflection_bounces=bounces)
+        self.args.reflection_bounces = bounces
+
+    def _adjust_texture_size(self, amount: int) -> None:
+        self._mark_custom_quality()
+        sizes = (128, 192, 256, 384, 512, 768)
+        current_index = min(range(len(sizes)), key=lambda index: abs(sizes[index] - self.settings.texture_size))
+        size = sizes[(current_index + amount) % len(sizes)]
+        self.settings = replace(self.settings, texture_size=size)
+        self.args.texture_size = size
+
+    def _toggle_smooth_shading(self) -> None:
+        self._mark_custom_quality()
+        self.settings = replace(self.settings, smooth_shading=not self.settings.smooth_shading)
+        self.args.smooth_shading = self.settings.smooth_shading
+
+    def _toggle_tone_mapping(self) -> None:
+        self._mark_custom_quality()
+        self.settings = replace(self.settings, tone_mapping=not self.settings.tone_mapping)
+        self.args.tone_mapping = self.settings.tone_mapping
 
     def _handle_menu_action(self, action: str) -> bool:
         if action in {"handled", "navigate"}:
@@ -1432,14 +1713,32 @@ class GLFruitBowlViewer:
         self.renderer.menu.close()
         if action == "quit":
             return False
-        if action == "toggle_render":
+        if action == "quality_next":
+            self._cycle_quality(1)
+        elif action == "poly_up":
+            self._adjust_polygons(1)
+        elif action == "poly_down":
+            self._adjust_polygons(-1)
+        elif action == "reflections_up":
+            self._adjust_reflections(1)
+        elif action == "reflections_down":
+            self._adjust_reflections(-1)
+        elif action == "smooth":
+            self._toggle_smooth_shading()
+        elif action == "texture_up":
+            self._adjust_texture_size(1)
+        elif action == "tone_mapping":
+            self._toggle_tone_mapping()
+        elif action == "toggle_render":
             self.full_render = not self.full_render
         elif action == "pause":
             self.paused = not self.paused
         elif action == "reset":
             self.simulation = FruitBowlSimulation(bowl_material=self.args.bowl_material)
+            self.drop_held_fruit()
         elif action == "snapshot":
             self.save_snapshot()
+        self._refresh_menu_options()
         self.renderer.set_mouse_captured(True)
         return True
 
@@ -1497,8 +1796,11 @@ class GLFruitBowlViewer:
             return
         self._last_title_update = ticks
         mode = "filled" if self.full_render else "wire"
+        held = f" - holding {self.held_fruit.name}" if self.held_fruit is not None else ""
         self.renderer.set_title(
-            f"py_3d fruit bowl - OpenGL live - {mode} - {stats.approx_fps:0.1f} render fps "
+            f"py_3d fruit bowl - OpenGL live - {mode} - {getattr(self.args, 'quality', 'custom')} "
+            f"- {self.settings.sphere_segments}x{self.settings.sphere_rings} - {self.settings.reflection_bounces} refl{held} "
+            f"- {stats.approx_fps:0.1f} render fps "
             f"({stats.build_seconds * 1000:0.1f} ms build, {stats.draw_seconds * 1000:0.1f} ms draw)"
         )
 
@@ -1535,10 +1837,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gpu-fast-render", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--cpu-reduced-specs", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--smooth-shading", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--texture-size", type=int, default=256)
     parser.add_argument("--light-wrap", type=float, default=0.0)
     parser.add_argument("--bounce-light", type=float, default=0.0)
     parser.add_argument("--tone-mapping", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--ray-traced-shadows", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--reflection-bounces", type=int, default=0)
+    parser.add_argument("--shadow-samples", type=int, default=1)
+    parser.add_argument("--shadow-softness", type=float, default=0.0)
     parser.add_argument("--edge-highlight", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--edge-highlight-angle", type=float, default=35.0)
     parser.add_argument("--max-render-distance", type=float)
