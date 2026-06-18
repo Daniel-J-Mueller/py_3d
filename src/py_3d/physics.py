@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import cos, pi, sin
 
-from .collision import BoxCollider, PlaneCollider, SphereCollider
+from .collision import BowlCollider, BoxCollider, PlaneCollider, SphereCollider
 from .materials import Material
 from .math3d import Vec3, as_vec3, clamp
 from .noise import SurfacePerturbation
-from .primitives import Box, Plane, Sphere
+from .primitives import Bowl, Box, Plane, Sphere
 
 
 @dataclass
@@ -146,6 +147,57 @@ class StaticBox:
 
 
 @dataclass
+class KinematicBowl:
+    """A driven bowl that dynamic bodies can collide with."""
+
+    center: Vec3 | tuple[float, float, float]
+    radius: float
+    velocity: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
+    friction: float = 0.2
+    restitution: float = 0.45
+    material: Material = Material()
+    depth: float = 1.0
+    collision_boundary: BowlCollider | None = None
+
+    def __post_init__(self) -> None:
+        self.center = as_vec3(self.center)
+        self.velocity = as_vec3(self.velocity)
+        if self.radius <= 0.0:
+            raise ValueError("kinematic bowl radius must be positive")
+        if self.depth <= 0.0 or self.depth > 1.0:
+            raise ValueError("kinematic bowl depth must be in the range (0, 1]")
+        self.friction = clamp(float(self.friction), 0.0, 1.0)
+        self.restitution = clamp(float(self.restitution), 0.0, 1.0)
+
+    def set_center(self, center: Vec3 | tuple[float, float, float], dt: float | None = None) -> None:
+        next_center = as_vec3(center)
+        if dt is not None and dt > 0.0:
+            self.velocity = (next_center - self.center) / dt
+        self.center = next_center
+
+    def to_primitive(self) -> Bowl:
+        return Bowl(self.center, self.radius, self.material, self.depth)
+
+    def synced_collision_boundary(self) -> BowlCollider:
+        return BowlCollider.from_bowl(self.to_primitive(), owner_position=self.center)
+
+    def effective_collision_boundary(self) -> BowlCollider:
+        return self.collision_boundary or self.synced_collision_boundary()
+
+    def sync_collision_boundary(self, *, force: bool = False) -> BowlCollider:
+        if self.collision_boundary is None or force:
+            self.collision_boundary = self.synced_collision_boundary()
+        return self.collision_boundary
+
+    def collision_center(self) -> Vec3:
+        return self.effective_collision_boundary().world_center(self.center)
+
+    def to_collision_primitive(self, material: Material | None = None) -> Bowl:
+        collider = self.effective_collision_boundary()
+        return Bowl(collider.world_center(self.center), collider.radius, material or self.material, collider.depth)
+
+
+@dataclass
 class PhysicsWorld:
     """A fixed-step world for basic sphere interactions."""
 
@@ -156,6 +208,7 @@ class PhysicsWorld:
         self.spheres: list[SphereBody] = []
         self.planes: list[StaticPlane] = []
         self.boxes: list[StaticBox] = []
+        self.bowls: list[KinematicBowl] = []
 
     def add_sphere(self, body: SphereBody) -> SphereBody:
         self.spheres.append(body)
@@ -169,6 +222,10 @@ class PhysicsWorld:
         self.boxes.append(box)
         return box
 
+    def add_bowl(self, bowl: KinematicBowl) -> KinematicBowl:
+        self.bowls.append(bowl)
+        return bowl
+
     def step(self, dt: float, substeps: int = 1) -> None:
         if dt < 0.0:
             raise ValueError("physics dt must be non-negative")
@@ -179,13 +236,30 @@ class PhysicsWorld:
             for sphere in self.spheres:
                 sphere.velocity = sphere.velocity + self.gravity * step_dt
                 sphere.position = sphere.position + sphere.velocity * step_dt
-                for plane in self.planes:
-                    _resolve_sphere_plane(sphere, plane, step_dt)
-                for box in self.boxes:
-                    _resolve_sphere_box(sphere, box, step_dt)
+                _resolve_sphere_environment(sphere, self.planes, self.boxes, self.bowls, step_dt)
+            for first_index in range(len(self.spheres)):
+                for second_index in range(first_index + 1, len(self.spheres)):
+                    _resolve_sphere_sphere(self.spheres[first_index], self.spheres[second_index], step_dt)
+            for sphere in self.spheres:
+                _resolve_sphere_environment(sphere, self.planes, self.boxes, self.bowls, step_dt)
 
 
 World = PhysicsWorld
+
+
+def _resolve_sphere_environment(
+    sphere: SphereBody,
+    planes: list[StaticPlane],
+    boxes: list[StaticBox],
+    bowls: list[KinematicBowl],
+    dt: float,
+) -> None:
+    for plane in planes:
+        _resolve_sphere_plane(sphere, plane, dt)
+    for box in boxes:
+        _resolve_sphere_box(sphere, box, dt)
+    for bowl in bowls:
+        _resolve_sphere_bowl(sphere, bowl, dt)
 
 
 def _resolve_sphere_plane(sphere: SphereBody, plane: StaticPlane, dt: float) -> None:
@@ -233,6 +307,104 @@ def _resolve_sphere_box(sphere: SphereBody, box: StaticBox, dt: float) -> None:
         sphere.velocity = sphere.velocity - normal * ((1.0 + sphere.restitution * box.restitution) * normal_speed)
     tangent = sphere.velocity - normal * sphere.velocity.dot(normal)
     sphere.velocity = sphere.velocity - tangent * min(1.0, (sphere.friction + box.friction) * dt)
+
+
+def _resolve_sphere_bowl(sphere: SphereBody, bowl: KinematicBowl, dt: float) -> None:
+    sphere_collider = sphere.effective_collision_boundary()
+    sphere_center = sphere_collider.world_center(sphere.position)
+    bowl_collider = bowl.effective_collision_boundary()
+    bowl_center = bowl_collider.world_center(bowl.center)
+    local = sphere_center - bowl_center
+    sphere_radius = sphere_collider.radius
+    radius = bowl_collider.radius
+
+    if local.y <= sphere_radius:
+        distance = local.length()
+        if distance + sphere_radius > radius:
+            normal = local.normalized(Vec3(0.0, -1.0, 0.0))
+            penetration = distance + sphere_radius - radius
+            sphere.position = sphere.position - normal * penetration
+            _bounce_against_kinematic_surface(sphere, bowl, normal, dt, outward_speed=True)
+
+    sphere_center = sphere_collider.world_center(sphere.position)
+    local = sphere_center - bowl_center
+    bottom_radius = radius * cos(bowl_collider.depth * pi / 2.0)
+    if bottom_radius <= 1e-9:
+        return
+    bottom_y = bowl_center.y - radius * sin(bowl_collider.depth * pi / 2.0)
+    horizontal_distance_squared = local.x * local.x + local.z * local.z
+    bottom_contact_radius = bottom_radius + sphere_radius
+    if local.y < bottom_y - bowl_center.y + sphere_radius and horizontal_distance_squared <= bottom_contact_radius * bottom_contact_radius:
+        penetration = bottom_y + sphere_radius - sphere_center.y
+        sphere.position = sphere.position + Vec3(0.0, penetration, 0.0)
+        _bounce_against_kinematic_surface(sphere, bowl, Vec3(0.0, 1.0, 0.0), dt, outward_speed=False)
+
+
+def _resolve_sphere_sphere(first: SphereBody, second: SphereBody, dt: float) -> None:
+    first_collider = first.effective_collision_boundary()
+    second_collider = second.effective_collision_boundary()
+    first_center = first_collider.world_center(first.position)
+    second_center = second_collider.world_center(second.position)
+    delta = second_center - first_center
+    distance_squared = delta.length_squared()
+    radius_sum = first_collider.radius + second_collider.radius
+    if distance_squared >= radius_sum * radius_sum:
+        return
+
+    if distance_squared == 0.0:
+        normal = Vec3(1.0, 0.0, 0.0)
+        distance = 0.0
+    else:
+        distance = distance_squared ** 0.5
+        normal = delta / distance
+    penetration = radius_sum - distance
+    first_inverse_mass = 1.0 / first.mass
+    second_inverse_mass = 1.0 / second.mass
+    total_inverse_mass = first_inverse_mass + second_inverse_mass
+    if total_inverse_mass == 0.0:
+        return
+
+    first.position = first.position - normal * (penetration * first_inverse_mass / total_inverse_mass)
+    second.position = second.position + normal * (penetration * second_inverse_mass / total_inverse_mass)
+
+    relative_velocity = second.velocity - first.velocity
+    normal_speed = relative_velocity.dot(normal)
+    if normal_speed >= 0.0:
+        return
+    restitution = first.restitution * second.restitution
+    impulse_strength = -((1.0 + restitution) * normal_speed) / total_inverse_mass
+    impulse = normal * impulse_strength
+    first.velocity = first.velocity - impulse * first_inverse_mass
+    second.velocity = second.velocity + impulse * second_inverse_mass
+
+    tangent = relative_velocity - normal * normal_speed
+    damping = min(1.0, (first.friction + second.friction) * dt)
+    if tangent.length_squared() > 0.0 and damping > 0.0:
+        first.velocity = first.velocity + tangent * (damping * 0.5)
+        second.velocity = second.velocity - tangent * (damping * 0.5)
+
+
+def _bounce_against_kinematic_surface(
+    sphere: SphereBody,
+    bowl: KinematicBowl,
+    normal: Vec3,
+    dt: float,
+    *,
+    outward_speed: bool,
+) -> None:
+    relative_velocity = sphere.velocity - bowl.velocity
+    normal_speed = relative_velocity.dot(normal)
+    if outward_speed:
+        if normal_speed <= 0.0:
+            return
+    elif normal_speed >= 0.0:
+        return
+
+    restitution = sphere.restitution * bowl.restitution
+    reflected = relative_velocity - normal * ((1.0 + restitution) * normal_speed)
+    tangent = reflected - normal * reflected.dot(normal)
+    reflected = reflected - tangent * min(1.0, (sphere.friction + bowl.friction) * dt)
+    sphere.velocity = bowl.velocity + reflected
 
 
 def _box_escape_normal(position: Vec3, center: Vec3, half: Vec3) -> Vec3:

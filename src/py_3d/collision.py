@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .math3d import Vec3, as_vec3
-from .primitives import Box, Plane, Sphere
+from .primitives import Bowl, Box, Plane, Sphere
 
 
 @dataclass(frozen=True)
@@ -66,3 +66,27 @@ class PlaneCollider:
     @classmethod
     def from_plane(cls, plane: Plane) -> "PlaneCollider":
         return cls(point=plane.point, normal=plane.normal)
+
+
+@dataclass(frozen=True)
+class BowlCollider:
+    """An interior spherical-cap collision boundary relative to an owner."""
+
+    radius: float
+    depth: float = 1.0
+    offset: Vec3 | tuple[float, float, float] = Vec3(0.0, 0.0, 0.0)
+
+    def __post_init__(self) -> None:
+        if self.radius <= 0.0:
+            raise ValueError("bowl collider radius must be positive")
+        if self.depth <= 0.0 or self.depth > 1.0:
+            raise ValueError("bowl collider depth must be in the range (0, 1]")
+        object.__setattr__(self, "offset", as_vec3(self.offset))
+
+    @classmethod
+    def from_bowl(cls, bowl: Bowl, owner_position: Vec3 | tuple[float, float, float] | None = None) -> "BowlCollider":
+        owner = as_vec3(owner_position) if owner_position is not None else bowl.center
+        return cls(radius=bowl.radius, depth=bowl.depth, offset=bowl.center - owner)
+
+    def world_center(self, owner_position: Vec3 | tuple[float, float, float]) -> Vec3:
+        return as_vec3(owner_position) + self.offset

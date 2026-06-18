@@ -2,7 +2,7 @@
 
 from .buffer import DepthBuffer, PixelBuffer
 from .camera import Camera, ProjectedPoint
-from .collision import BoxCollider, PlaneCollider, SphereCollider
+from .collision import BowlCollider, BoxCollider, PlaneCollider, SphereCollider
 from .color import Color
 from . import draw
 from .importers import load_obj, load_stl
@@ -11,8 +11,8 @@ from .materials import Material
 from .math3d import Vec3, as_vec3, clamp
 from .noise import FractalNoise3D, SurfacePerturbation, ValueNoise3D
 from .overlays import TextBulletin
-from .physics import PhysicsWorld, SphereBody, StaticBox, StaticPlane, World
-from .primitives import Box, Line3, Mesh, Plane, Point3, Sphere, Triangle
+from .physics import KinematicBowl, PhysicsWorld, SphereBody, StaticBox, StaticPlane, World
+from .primitives import Bowl, Box, Line3, Mesh, Plane, Point3, Sphere, Triangle
 from .render import CPURenderer, RenderEngine, RenderSettings, Renderer
 from .scene import Scene
 from .textures import planar_project_triangles
@@ -20,6 +20,8 @@ from .textures import planar_project_triangles
 __all__ = [
     "Box",
     "BoxCollider",
+    "Bowl",
+    "BowlCollider",
     "CPURenderer",
     "Camera",
     "Color",
@@ -27,6 +29,7 @@ __all__ = [
     "Lamp",
     "LightSample",
     "Line3",
+    "KinematicBowl",
     "Material",
     "Mesh",
     "PixelBuffer",

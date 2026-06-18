@@ -53,6 +53,9 @@ behavior while the engine grows.
 - Keep acceleration behind the `Renderer` protocol. The pure-Python CPU renderer
   is the correctness reference; optional NumPy, Numba, Cython, OpenGL, Vulkan,
   WebGPU, or platform compute backends should match its behavior.
+- Keep offline video export as a consumer of rendered `PixelBuffer` frames.
+  ffmpeg integration should be optional, with numbered PNG frames as the
+  dependency-free fallback.
 - Profile before optimizing. Prefer improvements that keep the reference path
   understandable, such as cached projection constants, cached static geometry,
   prepared triangle data, and tight buffer writes.
@@ -87,12 +90,18 @@ behavior while the engine grows.
 
 ## Collision and Physics Guidance
 
-- Start with simple, robust primitives: sphere, plane, axis-aligned box, oriented
-  box, triangle, and ray.
+- Start with simple, robust primitives: sphere, plane, bowl, axis-aligned box,
+  oriented box, triangle, and ray.
 - Keep collision detection separate from time integration.
 - Keep collision boundaries separate from render geometry. Render geometry
   should drive the default collider via sync helpers, and explicit collider
   overrides should be easy to inspect.
+- Keep driven objects such as `KinematicBowl` explicit. User code should be able
+  to coordinate their motion while dynamic bodies respond through ordinary
+  collision resolution.
+- Add pairwise dynamic contacts only when tested. Sphere-sphere collision is the
+  current simple dynamic pair model; broader rigid-body behavior should remain
+  incremental.
 - Use fixed-step world updates for deterministic examples.
 - Keep units explicit in names and docs when possible.
 - Add examples only when the underlying behavior is test-covered.

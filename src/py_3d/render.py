@@ -13,7 +13,7 @@ from . import draw
 from .lights import Lamp, Sun
 from .math3d import Vec3, clamp
 from .overlays import TextBulletin
-from .primitives import Line3, Mesh, Point3, Sphere, Triangle
+from .primitives import Bowl, Line3, Mesh, Point3, Sphere, Triangle
 from .scene import Scene
 
 
@@ -128,7 +128,7 @@ class CPURenderer:
         if not self.cache_static_geometry:
             return _prepare_triangles(_triangles_for(obj, settings))
 
-        if isinstance(obj, Sphere):
+        if isinstance(obj, (Bowl, Sphere)):
             key = (type(obj), id(obj), settings.sphere_segments, settings.sphere_rings)
         else:
             key = (type(obj), id(obj), 0, 0)
@@ -321,7 +321,7 @@ def _triangles_for(obj, settings: RenderSettings) -> tuple[Triangle, ...]:
         return (obj,)
     if isinstance(obj, Mesh):
         return obj.to_triangles()
-    if isinstance(obj, Sphere):
+    if isinstance(obj, (Bowl, Sphere)):
         return obj.to_triangles(segments=settings.sphere_segments, rings=settings.sphere_rings)
     to_triangles = getattr(obj, "to_triangles", None)
     if callable(to_triangles):

@@ -37,6 +37,10 @@ in `renderings-tests/` so visual changes are easy to inspect.
 | --- |
 | ![collision boundary override](renderings-tests/collision_boundary_override.png) |
 
+| Kinematic fruit bowl |
+| --- |
+| ![kinematic fruit bowl](renderings-tests/fruit_bowl.png) |
+
 ## Project Goals
 
 - Provide a clean Python API for 3D pixel drawing on Windows and Linux.
@@ -164,6 +168,7 @@ Useful initial primitives:
 - `Triangle`
 - `Box`
 - `Sphere`
+- `Bowl`
 - `Plane`
 - `Mesh`
 - `VoxelGrid`
@@ -263,6 +268,7 @@ geometry:
 - `SphereCollider(radius, offset=...)`
 - `BoxCollider(size, offset=...)`
 - `PlaneCollider(point, normal)`
+- `BowlCollider(radius, depth=..., offset=...)`
 
 Dynamic and static bodies derive collision boundaries from their render geometry
 by default. For example, a `SphereBody` with no `collision_boundary` uses the
@@ -271,6 +277,12 @@ collider includes that perturbation magnitude as a conservative boundary.
 Supplying `collision_boundary=...` overrides this. Use
 `sync_collision_boundary(force=True)` to intentionally replace an override with
 the current render-derived boundary.
+
+The first kinematic body is `KinematicBowl`: callers drive its center over time,
+and dynamic `SphereBody` instances respond to the moving bowl surface while
+continuing to collide with planes, boxes, and each other. This is useful for
+coordinated demos where the environment is animated directly but contained
+objects are still simulated.
 
 ## Proposed Package Layout
 
@@ -318,7 +330,10 @@ Recommended path:
 
 Potential acceleration options can include NumPy, Numba, Cython, Rust, or C
 extensions later, but no acceleration dependency should become mandatory without
-a strong reason.
+a strong reason. GPU backends should slot in as `Renderer` implementations, not
+as a parallel scene system. Offline video export should also consume ordinary
+`PixelBuffer` frames so CPU and future GPU renderers can share the same output
+pipeline.
 
 ## Development
 
@@ -388,6 +403,37 @@ python examples/collision_boundary_demo.py
 It renders bumpy visual geometry with a separate active collision sphere and
 shows the difference between synced and overridden collision boundaries. It
 writes `renderings-tests/collision_boundary_override.png`.
+
+Generate the kinematic fruit bowl sample:
+
+```bash
+python examples/fruit_bowl_demo.py
+```
+
+It drives a `KinematicBowl` up and down while several dynamic fruit spheres
+bounce inside it and collide with each other. It writes
+`renderings-tests/fruit_bowl.png`.
+
+Run the live fruit bowl viewer:
+
+```bash
+python examples/fruit_bowl_demo.py --live --width 480 --height 270 --window-width 960 --window-height 540
+```
+
+Click into the window to focus controls. Drag or use arrow keys to orbit,
+`W/S` to zoom, `A/D` to pan, `Q/E` to move the target up/down, `Space` to pause,
+`R` to reset, and `P` to save a snapshot.
+
+Render a short video path:
+
+```bash
+python examples/fruit_bowl_demo.py --video renderings-tests/fruit_bowl.mp4 --frames 96 --fps 24
+python examples/fruit_bowl_demo.py --video renderings-tests/fruit_bowl.mov --frames 96 --fps 24
+```
+
+If `ffmpeg` is available, the script pipes rendered frames into an MP4 or MOV.
+If it is not available, it writes numbered PNG frames beside the requested video
+path so the offline rendering path is still exercised.
 
 Run the live navigation example:
 
@@ -460,9 +506,9 @@ Visual examples are valuable, but they should not replace numeric tests.
 - Implement immediate-mode 2D and 3D drawing into an off-screen buffer.
 - Add camera projection and a basic depth buffer.
 - Add `Lamp`, `Sun`, and material absorption.
-- Implement basic primitives: line, triangle, box, sphere, plane.
+- Implement basic primitives: line, triangle, box, sphere, bowl, plane.
 - Add a minimal window backend for Windows and Linux.
-- Add collision detection for spheres, planes, and boxes.
+- Add collision detection for spheres, planes, boxes, bowls, and sphere pairs.
 - Add a fixed-step physics world with gravity and impulses.
 - Expand OBJ/STL import coverage and add more robust texture coordinate paths.
 - Expand image import support for texture maps and overlays.
@@ -495,6 +541,9 @@ sources.
   paths, and GPU backends through OpenGL, Vulkan, WebGPU, or platform-specific
   compute APIs. The pure-Python CPU renderer should remain the correctness
   reference.
+- Add an optional video helper around rendered `PixelBuffer` frames. Keep
+  ffmpeg integration optional and preserve numbered-frame output for machines
+  without video tooling.
 - Expand importers for OBJ materials, normals, binary edge cases, and STL
   metadata. Keep small fixtures in tests.
 - Expand surface texturing beyond affine triangle UVs, including texture

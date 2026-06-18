@@ -1,4 +1,4 @@
-from py_3d import Box, CPURenderer, Camera, Color, Lamp, Material, PixelBuffer, Plane, RenderEngine, RenderSettings, Scene, Sphere, Sun, TextBulletin, Triangle
+from py_3d import Bowl, Box, CPURenderer, Camera, Color, Lamp, Material, PixelBuffer, Plane, RenderEngine, RenderSettings, Scene, Sphere, Sun, TextBulletin, Triangle
 
 
 def test_cpu_renderer_renders_triangle_offscreen():
@@ -66,6 +66,17 @@ def test_high_poly_sphere_and_other_primitives_render():
     )
 
     assert len(sphere.to_triangles(segments=32, rings=16)) == 960
+    assert sum(pixel != Color(0, 0, 0) for pixel in buffer.pixels) > 100
+
+
+def test_bowl_primitive_renders_through_engine():
+    scene = Scene()
+    scene.add(Bowl((0, 0, 0), 1.0, Material(color=(150, 90, 210)), depth=0.9))
+    scene.add_light(Sun(direction=(-0.3, -0.8, -1.0), intensity=0.9))
+    camera = Camera(position=(0, 1.6, -3.4), target=(0, -0.25, 0), fov_degrees=50)
+
+    buffer = RenderEngine().render(scene, camera, RenderSettings(width=96, height=72, sphere_segments=18, sphere_rings=9))
+
     assert sum(pixel != Color(0, 0, 0) for pixel in buffer.pixels) > 100
 
 

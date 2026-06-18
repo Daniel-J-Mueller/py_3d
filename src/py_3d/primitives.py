@@ -193,6 +193,109 @@ class Sphere:
 
 
 @dataclass(frozen=True)
+class Bowl:
+    """An open-top spherical-cap bowl.
+
+    ``center`` is the center of the rim plane. ``depth`` is a fraction of the
+    lower hemisphere angle: 1.0 reaches a pointed hemispherical bottom, while
+    smaller values close the cap with a flat bottom disk.
+    """
+
+    center: Vec3 | tuple[float, float, float]
+    radius: float
+    material: Material = Material()
+    depth: float = 1.0
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "center", as_vec3(self.center))
+        if self.radius <= 0.0:
+            raise ValueError("bowl radius must be positive")
+        if self.depth <= 0.0 or self.depth > 1.0:
+            raise ValueError("bowl depth must be in the range (0, 1]")
+
+    def to_triangles(self, segments: int = 24, rings: int = 8, **kwargs) -> tuple[Triangle, ...]:
+        del kwargs
+        if segments < 3:
+            raise ValueError("bowl segments must be at least 3")
+        if rings < 1:
+            raise ValueError("bowl rings must be at least 1")
+
+        end_phi = pi / 2.0 + self.depth * pi / 2.0
+        vertices: list[list[Vec3]] = []
+        for ring in range(rings + 1):
+            amount = ring / rings
+            phi = pi / 2.0 + (end_phi - pi / 2.0) * amount
+            row = []
+            for segment in range(segments):
+                theta = 2.0 * pi * segment / segments
+                normal = Vec3(
+                    sin(phi) * cos(theta),
+                    cos(phi),
+                    sin(phi) * sin(theta),
+                )
+                row.append(self.center + normal * self.radius)
+            vertices.append(row)
+
+        triangles: list[Triangle] = []
+        for ring in range(rings):
+            for segment in range(segments):
+                next_segment = (segment + 1) % segments
+                u = segment / segments
+                next_u = 1.0 if next_segment == 0 else next_segment / segments
+                v = ring / rings
+                next_v = (ring + 1) / rings
+                top_left = vertices[ring][segment]
+                top_right = vertices[ring][next_segment]
+                bottom_left = vertices[ring + 1][segment]
+                bottom_right = vertices[ring + 1][next_segment]
+                triangles.append(
+                    Triangle(
+                        top_left,
+                        bottom_left,
+                        top_right,
+                        self.material,
+                        (u, v),
+                        (u, next_v),
+                        (next_u, v),
+                    )
+                )
+                if ring != rings - 1 or self.depth < 1.0:
+                    triangles.append(
+                        Triangle(
+                            top_right,
+                            bottom_left,
+                            bottom_right,
+                            self.material,
+                            (next_u, v),
+                            (u, next_v),
+                            (next_u, next_v),
+                        )
+                    )
+
+        if self.depth < 1.0:
+            bottom_phi = end_phi
+            bottom_y = self.center.y + cos(bottom_phi) * self.radius
+            bottom_center = Vec3(self.center.x, bottom_y, self.center.z)
+            bottom_v = 1.0
+            for segment in range(segments):
+                next_segment = (segment + 1) % segments
+                u = segment / segments
+                next_u = 1.0 if next_segment == 0 else next_segment / segments
+                triangles.append(
+                    Triangle(
+                        vertices[-1][next_segment],
+                        vertices[-1][segment],
+                        bottom_center,
+                        self.material,
+                        (next_u, bottom_v),
+                        (u, bottom_v),
+                        (0.5, bottom_v),
+                    )
+                )
+        return tuple(triangles)
+
+
+@dataclass(frozen=True)
 class Plane:
     point: Vec3 | tuple[float, float, float]
     normal: Vec3 | tuple[float, float, float]
