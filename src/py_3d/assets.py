@@ -7,13 +7,14 @@ from pathlib import Path
 import struct
 from typing import Any
 
+from .buffer import PixelBuffer
 from .materials import Material
 from .math3d import Vec3
 from .primitives import Mesh, Triangle
 
 
 MESH_ASSET_FORMAT = "py_3d.mesh_asset.v1"
-FRAMEWORK_FAVICON = "py_3d_favicon.ico"
+FRAMEWORK_FAVICON = "py_3d_logo.png"
 
 
 def framework_asset_path(name: str) -> Path:
@@ -37,11 +38,16 @@ def framework_favicon_path() -> Path:
 
 
 def load_framework_icon_rgba(path: str | Path | None = None) -> tuple[int, int, list[list[tuple[int, int, int, int]]]]:
-    """Load a 32-bit ICO asset as rows of RGBA pixels for GLFW."""
+    """Load the framework icon as rows of RGBA pixels for window backends."""
 
     source = Path(path) if path is not None else framework_favicon_path()
     if not source.exists():
         return _fallback_icon_rgba()
+    if source.suffix.lower() == ".png":
+        try:
+            return _rgba_from_png(source)
+        except Exception:
+            return _fallback_icon_rgba()
     payload = source.read_bytes()
     try:
         return _rgba_from_ico(payload)
@@ -120,6 +126,15 @@ def _rgba_from_ico(payload: bytes) -> tuple[int, int, list[list[tuple[int, int, 
             row.append((int(red), int(green), int(blue), int(alpha)))
         rows.append(row)
     return width, height, rows
+
+
+def _rgba_from_png(path: Path) -> tuple[int, int, list[list[tuple[int, int, int, int]]]]:
+    icon = PixelBuffer.from_png(path).resized_nearest(32, 32)
+    rows = [
+        [(pixel.r, pixel.g, pixel.b, 255) for pixel in row]
+        for row in icon.rows()
+    ]
+    return icon.width, icon.height, rows
 
 
 def _fallback_icon_rgba() -> tuple[int, int, list[list[tuple[int, int, int, int]]]]:

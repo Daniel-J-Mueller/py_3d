@@ -30,9 +30,8 @@ behavior while the engine grows.
 - Keep CPU and GPU compatibility in mind early. The pure-Python CPU renderer is
   the behavioral reference; GPU renderers should match its public interface and
   be tested against equivalent scenes.
-- Keep reusable accelerated renderer-core work in the sibling `py_gpu` package
-  when possible. `py_3d` should keep scene, material, light, physics, and demo
-  behavior clean, then bridge to `py_gpu` through optional adapters.
+- Keep accelerated renderer work optional and behind the renderer interfaces in
+  this repository. The current focus is the `py_3d` engine itself.
 - Avoid mandatory heavy dependencies unless the project has a clear need and
   tests that justify them.
 - Do not add a framework-scale abstraction just because one might be useful
@@ -82,17 +81,12 @@ behavior while the engine grows.
 - Keep live viewing dimensions separate from output render dimensions. A window
   can be 960x540 while the render target is 320x180, 1280x720, or any other
   explicit size.
-- Keep generated visual examples in `renderings-tests/` when they document or
-  test user-facing rendering behavior.
-- Keep reusable demo environments under `USER/environments/<name>/`. Each
-  environment should own an `environment.json`, `renderings/` output directory,
-  `baking/` directory for precomputed/static render data, and `render-data.json`
-  timing records.
-- Run environment batches through `USER/tests/run_environment.py` when possible.
-  Record new batch render variants and expected outputs there instead of
-  scattering one-off scripts.
-- Keep turnkey user experiences under `USER/demos/`, sorted by filename so live
-  demos, still renders, videos, and feature tests are easy to discover.
+- Keep generated visual examples in `renderings-tests/` only when they document
+  or test user-facing rendering behavior.
+- Keep runnable demo environments under `USER/demos/`. Do not add new demo
+  environment scripts under `examples/`.
+- Put user-facing demo tests under `USER/tests/`. Engine package tests can
+  remain under `tests/`.
 - Preserve `USER/settings.json` as the user-level render profile. GPU paths
   should use requested specs where possible; CPU-only paths should reduce render
   dimensions and mesh density by default unless explicitly overridden.

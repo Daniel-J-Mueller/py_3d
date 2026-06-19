@@ -7,6 +7,7 @@ from .collision import BowlCollider, BoxCollider, CompoundSphereCollider, PlaneC
 from .color import Color
 from .fluid import FluidBlob, FluidWorld, GPUVectorFluidWorld, VectorFluidParticle, VectorFluidWorld
 from . import draw
+from .environment import BushInstance, EnvironmentChunk, ProceduralEnvironmentConfig, ProceduralEnvironmentGenerator, RockInstance, TreeInstance, WaterSource, build_environment_chunk
 from .gpu import GPURenderer, GPUSceneBatch, build_gpu_scene_batch, detect_gpu_backends
 from .hud import HUDAnimation, HUDImage, HUDRect, HUDText, LiveHUD
 from .importers import load_obj, load_stl
@@ -28,6 +29,7 @@ from .window import PixelWindow, WindowEvent
 
 __all__ = [
     "BlobSurface",
+    "BushInstance",
     "Box",
     "BoxCollider",
     "Bowl",
@@ -39,6 +41,7 @@ __all__ = [
     "Color",
     "CubePlacer",
     "DepthBuffer",
+    "EnvironmentChunk",
     "FluidBlob",
     "FluidWorld",
     "FloatingTextBulletin",
@@ -70,6 +73,8 @@ __all__ = [
     "PlaneCollider",
     "Point3",
     "PlayerModel",
+    "ProceduralEnvironmentConfig",
+    "ProceduralEnvironmentGenerator",
     "PortalPair",
     "PortalSurface",
     "ProjectedPoint",
@@ -77,6 +82,7 @@ __all__ = [
     "RenderEngine",
     "RenderSettings",
     "Renderer",
+    "RockInstance",
     "Scene",
     "Sphere",
     "SphereCollider",
@@ -89,6 +95,7 @@ __all__ = [
     "Sun",
     "TextBulletin",
     "Triangle",
+    "TreeInstance",
     "TransformedMesh",
     "PixelWindow",
     "ValueNoise3D",
@@ -97,8 +104,10 @@ __all__ = [
     "VectorFluidWorld",
     "WindowEvent",
     "World",
+    "WaterSource",
     "as_vec3",
     "build_gpu_scene_batch",
+    "build_environment_chunk",
     "clamp",
     "draw",
     "detect_gpu_backends",

@@ -6,6 +6,7 @@ import argparse
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
+import sys
 from time import sleep
 from typing import Sequence
 
@@ -13,6 +14,12 @@ from py_3d import PixelBuffer, PixelWindow, draw
 
 
 ROOT = Path(__file__).resolve().parents[2]
+DEMO_DIR = Path(__file__).resolve().parent
+if str(DEMO_DIR) not in sys.path:
+    sys.path.insert(0, str(DEMO_DIR))
+
+from sim_settings import live_settings_for, update_live_settings
+
 FRAME_WIDTH = 960
 FRAME_HEIGHT = 540
 
@@ -62,6 +69,29 @@ EXPERIENCES = [
         None,
         Path("USER/environments/capsule_walk/renderings/capsule_walk_preview.png"),
         "WASD move, mouse aim, Shift sprint, Ctrl/C crouch, V camera.",
+    ),
+    Experience(
+        "Procedural Hill Biome",
+        "19_live_procedural_environment.py",
+        "Infinite deterministic chunk streaming with rolling hills, stable tree placement, and lowland water sources.",
+        ("python", "USER/demos/19_live_procedural_environment.py"),
+        (
+            "python",
+            "USER/demos/19_live_procedural_environment.py",
+            "--still",
+            "--quality",
+            "fast",
+            "--active-radius",
+            "1",
+            "--width",
+            "480",
+            "--height",
+            "270",
+            "--output",
+            "renderings-tests/procedural_hills.png",
+        ),
+        Path("renderings-tests/procedural_hills.png"),
+        "WASD mouse look, Shift sprint, Esc menu, P snapshot.",
     ),
     Experience(
         "Fan Cloth Water",
@@ -133,12 +163,41 @@ QUALITY_ARGS = {
 def command_for(experience: Experience, settings: MenuSettings) -> tuple[str, ...]:
     command = list(experience.launch_command)
     quality = "safe" if settings.safe_mode else settings.quality
-    if "examples/fruit_bowl_live.py" in command or "examples/fan_cloth_water_demo.py" in command or "examples/wind_pool_water_demo.py" in command:
+    if (
+        "examples/fruit_bowl_live.py" in command
+        or "examples/fan_cloth_water_demo.py" in command
+        or "examples/wind_pool_water_demo.py" in command
+        or "USER/demos/19_live_procedural_environment.py" in command
+    ):
         if "--quality" not in command:
             command.extend(QUALITY_ARGS.get(quality, QUALITY_ARGS["balanced"]))
     if settings.background_blur and "--menu-blur" not in command:
         command.append("--menu-blur")
     return tuple(command)
+
+
+def menu_settings_from_user() -> MenuSettings:
+    values = live_settings_for("global")
+    quality = str(values.get("quality", "ultra"))
+    if quality not in NativeShowcaseMenu.quality_order:
+        quality = "ultra"
+    return MenuSettings(
+        quality="balanced" if quality == "safe" else quality,
+        safe_mode=bool(values.get("safe_mode", quality == "safe")),
+        background_blur=bool(values.get("background_blur", False)),
+    )
+
+
+def persist_menu_settings(settings: MenuSettings) -> None:
+    quality = "safe" if settings.safe_mode else settings.quality
+    update_live_settings(
+        "global",
+        {
+            "quality": quality,
+            "safe_mode": settings.safe_mode,
+            "background_blur": settings.background_blur,
+        },
+    )
 
 
 def print_menu() -> None:
@@ -203,7 +262,7 @@ class NativeShowcaseMenu:
         self.window = PixelWindow(FRAME_WIDTH, FRAME_HEIGHT, title="py_3d", fit_window=True)
         self.selected = 0
         self.hover_action = ""
-        self.settings = MenuSettings()
+        self.settings = menu_settings_from_user()
         self.last_safe_settings = self.settings
         self.status = "Select an experience, preview it, or launch it."
         self.child: subprocess.Popen | None = None
@@ -502,11 +561,13 @@ class NativeShowcaseMenu:
         index = self.quality_order.index(current) if current in self.quality_order else 2
         value = self.quality_order[(index + amount) % len(self.quality_order)]
         self.settings = MenuSettings(quality="balanced" if value == "safe" else value, safe_mode=value == "safe", background_blur=self.settings.background_blur)
+        persist_menu_settings(self.settings)
         self.status = f"Profile {self._profile_label(self.settings)}."
         self._mark_dirty()
 
     def _toggle_blur(self) -> None:
         self.settings = MenuSettings(quality=self.settings.quality, safe_mode=self.settings.safe_mode, background_blur=not self.settings.background_blur)
+        persist_menu_settings(self.settings)
         self.status = f"Menu blur {'enabled' if self.settings.background_blur else 'disabled'}."
         self._mark_dirty()
 

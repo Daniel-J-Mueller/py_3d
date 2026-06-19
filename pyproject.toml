@@ -38,5 +38,6 @@ video = ["imageio-ffmpeg>=0.5"]
 where = ["src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "USER/tests"]
 pythonpath = ["src"]
+cache_dir = "_local/pytest_cache"

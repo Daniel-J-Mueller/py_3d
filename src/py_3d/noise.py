@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import floor
 
 from .math3d import Vec3, as_vec3, clamp
@@ -16,12 +16,15 @@ class ValueNoise3D:
 
     def sample(self, point: Vec3 | tuple[float, float, float]) -> float:
         value = as_vec3(point)
-        x0 = floor(value.x)
-        y0 = floor(value.y)
-        z0 = floor(value.z)
-        xf = value.x - x0
-        yf = value.y - y0
-        zf = value.z - z0
+        return self.sample_xyz(value.x, value.y, value.z)
+
+    def sample_xyz(self, x: float, y: float, z: float) -> float:
+        x0 = floor(x)
+        y0 = floor(y)
+        z0 = floor(z)
+        xf = x - x0
+        yf = y - y0
+        zf = z - z0
         u = _smoothstep(xf)
         v = _smoothstep(yf)
         w = _smoothstep(zf)
@@ -58,6 +61,7 @@ class FractalNoise3D:
     octaves: int = 3
     lacunarity: float = 2.0
     gain: float = 0.5
+    _octave_noises: tuple[ValueNoise3D, ...] = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.octaves <= 0:
@@ -66,16 +70,19 @@ class FractalNoise3D:
             raise ValueError("noise lacunarity must be positive")
         if self.gain <= 0.0:
             raise ValueError("noise gain must be positive")
+        object.__setattr__(self, "_octave_noises", tuple(ValueNoise3D(self.seed + octave * 1013) for octave in range(self.octaves)))
 
     def sample(self, point: Vec3 | tuple[float, float, float]) -> float:
         value = as_vec3(point)
+        return self.sample_xyz(value.x, value.y, value.z)
+
+    def sample_xyz(self, x: float, y: float, z: float) -> float:
         amplitude = 1.0
         frequency = 1.0
         total = 0.0
         weight = 0.0
-        for octave in range(self.octaves):
-            noise = ValueNoise3D(self.seed + octave * 1013)
-            total += noise.sample(value * frequency) * amplitude
+        for noise in self._octave_noises:
+            total += noise.sample_xyz(x * frequency, y * frequency, z * frequency) * amplitude
             weight += amplitude
             frequency *= self.lacunarity
             amplitude *= self.gain

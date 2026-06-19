@@ -13,6 +13,7 @@ def test_framework_favicon_asset_loads_for_window_backends():
     width, height, pixels = load_framework_icon_rgba()
 
     assert framework_favicon_path().exists()
+    assert framework_favicon_path().name == "py_3d_logo.png"
     assert (width, height) == (32, 32)
     assert len(pixels) == height
     assert len(pixels[0]) == width

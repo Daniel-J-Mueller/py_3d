@@ -117,10 +117,87 @@
       "max_render_distance": 6.0
     }
   },
+  "live_menu_settings": {
+    "global": {
+      "quality": "ultra",
+      "safe_mode": false,
+      "background_blur": false,
+      "menu_blur": false
+    },
+    "fruit_bowl": {
+      "quality": "ultra",
+      "sphere_segments": 24,
+      "sphere_rings": 12,
+      "reflection_bounces": 3,
+      "smooth_shading": true,
+      "texture_size": 512,
+      "gamma": 1.18,
+      "tone_mapping": true,
+      "wireframe": false,
+      "paused": false,
+      "sky_time": 14.0,
+      "sky_cycle": false,
+      "sky_clouds": true,
+      "sky_stars": true
+    },
+    "capsule_walk": {
+      "camera_mode": "first",
+      "look_smoothing": 18.0,
+      "sky_time": 13.5,
+      "sky_cycle": false,
+      "sky_clouds": true,
+      "sky_stars": true
+    },
+    "fan_cloth_water": {
+      "quality": "ultra",
+      "wind_scale": 1.0,
+      "blade_strength": 0.0,
+      "reflection_bounces": 3,
+      "smooth_shading": true,
+      "vessel_intact": true,
+      "paused": false,
+      "sky_time": 14.0,
+      "sky_cycle": false,
+      "sky_clouds": true,
+      "sky_stars": true
+    },
+    "wind_pool_water": {
+      "quality": "balanced",
+      "wind_strength": 1.0,
+      "reflection_bounces": 3,
+      "vessel_intact": true,
+      "paused": false
+    },
+    "sea_lion_asset": {
+      "sky_time": 15.0,
+      "sky_cycle": false,
+      "sky_clouds": true,
+      "sky_stars": true
+    },
+    "procedural_hills": {
+      "quality": "balanced",
+      "seed": 2701,
+      "active_radius": 4,
+      "live_backend": "auto",
+      "still_renderer": "auto",
+      "chunk_worker": true,
+      "chunk_worker_mode": "process",
+      "preload_margin": 1,
+      "max_pending_chunks": 1,
+      "chunk_activation_rate": 100,
+      "look_smoothing": 18.0,
+      "sky_time": 16.847,
+      "sky_cycle": true,
+      "sky_clouds": true,
+      "sky_stars": true,
+      "reflection_bounces": 2
+    }
+  },
   "notes": [
-    "Live demos should prefer GPU when available.",
+    "Live demos should prefer GPU when available; use --live-backend gl to require the OpenGL live renderer.",
     "CPU-only runs should reduce render dimensions and generated mesh density by default.",
-    "Environment-owned renderings live under USER/environments/<name>/renderings.",
-    "Environment baking data lives under USER/environments/<name>/baking."
+    "Runnable demo environments live under USER/demos.",
+    "User-facing demo tests live under USER/tests.",
+    "Keep generated render outputs out of source unless they are intentional docs or fixtures."
   ]
 }

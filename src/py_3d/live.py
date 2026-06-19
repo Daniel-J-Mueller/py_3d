@@ -1570,7 +1570,7 @@ class _Template:
 
 @dataclass
 class _ResidentObjectEntry:
-    key: tuple[int, str]
+    key: tuple
     fingerprint: tuple
     triangle_bytes: bytes
     line_bytes: bytes
@@ -1921,6 +1921,8 @@ class _FrameClock:
 
 class _PixelLiveRenderer:
     """Render py_3d scenes into the built-in live pixel window."""
+
+    backend = "pixel"
 
     def __init__(
         self,
@@ -3109,10 +3111,11 @@ class _GLFWModernGLLiveRenderer:
         self.builder.begin_frame(textures)
 
         entries: list[_ResidentObjectEntry] = []
-        next_entries: dict[tuple[int, str], _ResidentObjectEntry] = {}
-        dirty_keys: set[tuple[int, str]] = set()
+        next_entries: dict[tuple, _ResidentObjectEntry] = {}
+        dirty_keys: set[tuple] = set()
+        old_offsets = {key: (entry.triangle_first, entry.line_first) for key, entry in self._resident_entries.items()}
         for index, obj in enumerate(scene.objects):
-            key = (index, type(obj).__name__)
+            key = _resident_object_key(index, obj)
             fingerprint = _live_object_fingerprint(obj, settings)
             previous = self._resident_entries.get(key)
             if previous is None or previous.fingerprint != fingerprint or texture_changed:
@@ -3138,11 +3141,12 @@ class _GLFWModernGLLiveRenderer:
             entry.line_first = line_first
             triangle_first += entry.triangle_vertices
             line_first += entry.line_vertices
+            previous_offset = old_offsets.get(entry.key)
+            if previous_offset is not None and previous_offset != (entry.triangle_first, entry.line_first):
+                dirty_keys.add(entry.key)
 
         layout_signature = tuple((entry.key, entry.triangle_vertices, entry.line_vertices) for entry in entries)
         layout_changed = layout_signature != self._resident_layout_signature
-        if layout_changed:
-            dirty_keys = {entry.key for entry in entries}
 
         triangle_bytes_required = triangle_first * _VERTEX_STRIDE_BYTES
         line_bytes_required = line_first * _VERTEX_STRIDE_BYTES
@@ -3628,6 +3632,14 @@ def _material_texture_tuple(material: Material) -> tuple[PixelBuffer, ...]:
     return (material.texture,) if material.texture is not None else ()
 
 
+def _resident_object_key(index: int, obj) -> tuple:
+    if isinstance(obj, Mesh) and len(obj.triangles) > 16:
+        return ("mesh_id", id(obj), type(obj).__name__)
+    if isinstance(obj, LineSet3) and len(obj.segments) > 16:
+        return ("line_set_id", id(obj), type(obj).__name__)
+    return ("index", index, type(obj).__name__)
+
+
 def _live_object_fingerprint(obj, settings: RenderSettings) -> tuple:
     geometry_settings = (
         bool(settings.wireframe),
@@ -3674,7 +3686,16 @@ def _live_object_fingerprint(obj, settings: RenderSettings) -> tuple:
     if isinstance(obj, Line3):
         return ("line", obj.start.as_tuple(), obj.end.as_tuple(), _material_fingerprint(obj.material), geometry_settings)
     if isinstance(obj, LineSet3):
-        return ("line_set", tuple((start.as_tuple(), end.as_tuple()) for start, end in obj.segments), _material_fingerprint(obj.material), geometry_settings)
+        if len(obj.segments) <= 16:
+            line_key = tuple((start.as_tuple(), end.as_tuple()) for start, end in obj.segments)
+        else:
+            line_key = (
+                id(obj),
+                len(obj.segments),
+                (obj.segments[0][0].as_tuple(), obj.segments[0][1].as_tuple()) if obj.segments else None,
+                (obj.segments[-1][0].as_tuple(), obj.segments[-1][1].as_tuple()) if obj.segments else None,
+            )
+        return ("line_set", line_key, _material_fingerprint(obj.material), geometry_settings)
     if isinstance(obj, Sphere):
         return (
             "sphere",

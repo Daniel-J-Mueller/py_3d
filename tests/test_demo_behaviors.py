@@ -137,9 +137,25 @@ def test_showcase_default_profile_launches_fan_water_in_ultra():
     sys.modules[spec.name] = launcher
     spec.loader.exec_module(launcher)
 
-    command = launcher.command_for(launcher.EXPERIENCES[3], launcher.MenuSettings())
+    fan_water = next(experience for experience in launcher.EXPERIENCES if experience.title == "Fan Cloth Water")
+    command = launcher.command_for(fan_water, launcher.MenuSettings())
 
     assert command[command.index("--quality") + 1] == "ultra"
+
+
+def test_procedural_showcase_launch_is_live_and_preview_is_still():
+    launcher_path = Path(__file__).resolve().parents[1] / "USER" / "demos" / "00_list_experiences.py"
+    spec = importlib.util.spec_from_file_location("py3d_launcher_procedural_mode", launcher_path)
+    launcher = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = launcher
+    spec.loader.exec_module(launcher)
+
+    procedural = next(experience for experience in launcher.EXPERIENCES if experience.title == "Procedural Hill Biome")
+
+    assert "--still" not in procedural.launch_command
+    assert procedural.preview_command is not None
+    assert "--still" in procedural.preview_command
 
 
 def test_broken_fan_vessel_expands_fluid_bounds_and_removes_bowl():

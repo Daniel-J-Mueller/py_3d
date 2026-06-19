@@ -9,7 +9,7 @@ from .color import Color
 from .lights import Sun
 from .materials import Material
 from .math3d import Vec3
-from .primitives import Mesh, Sphere, Triangle
+from .primitives import BlobSurface, Sphere
 from .render import RenderSettings
 from .scene import Scene
 
@@ -30,6 +30,7 @@ class SkyPrefab:
     radius: float = 34.0
     star_count: int = 54
     cloud_count: int = 7
+    cloud_seed: int = 0
 
     def step(self, dt: float) -> None:
         if not self.cycle_enabled or dt <= 0.0:
@@ -138,30 +139,33 @@ class SkyPrefab:
             stars.append(Sphere(direction * self.radius, radius, material))
         return tuple(stars)
 
-    def cloud_primitives(self) -> tuple[Mesh, ...]:
-        material = Material(color=(236, 238, 232), emission=(22, 26, 32), diffuse=0.55, roughness=0.8)
-        clouds: list[Mesh] = []
+    def cloud_primitives(self) -> tuple[BlobSurface, ...]:
+        clouds: list[BlobSurface] = []
         count = max(0, int(self.cloud_count))
         for index in range(count):
-            azimuth = radians(-120.0 + index * (240.0 / max(1, count - 1)) + _pseudo_random(index, 0.29) * 18.0)
-            distance = self.radius * (0.46 + _pseudo_random(index, 0.72) * 0.12)
-            center = Vec3(sin(azimuth) * distance, 4.6 + _pseudo_random(index, 0.41) * 1.6, cos(azimuth) * distance)
-            width = 2.4 + _pseudo_random(index, 0.16) * 1.5
-            height = 0.34 + _pseudo_random(index, 0.84) * 0.22
+            azimuth = radians(-130.0 + index * (260.0 / max(1, count - 1)) + _pseudo_random(index, self.cloud_seed + 0.29) * 22.0)
+            distance = self.radius * (0.58 + _pseudo_random(index, self.cloud_seed + 0.72) * 0.18)
+            altitude = max(5.6, self.radius * (0.18 + _pseudo_random(index, self.cloud_seed + 0.41) * 0.08))
+            base = Vec3(sin(azimuth) * distance, altitude, cos(azimuth) * distance)
             right = Vec3(cos(azimuth), 0.0, -sin(azimuth)).normalized(Vec3(1.0, 0.0, 0.0))
-            up = Vec3(0.0, 1.0, 0.0)
-            left = center - right * width
-            right_edge = center + right * width
-            top = up * height
-            bottom = up * -height
-            clouds.append(
-                Mesh(
-                    (
-                        Triangle(left + bottom, right_edge + top, right_edge + bottom, material, (0.0, 1.0), (1.0, 0.0), (1.0, 1.0)),
-                        Triangle(left + bottom, left + top, right_edge + top, material, (0.0, 1.0), (0.0, 0.0), (1.0, 0.0)),
+            forward = Vec3(sin(azimuth), 0.0, cos(azimuth)).normalized(Vec3(0.0, 0.0, 1.0))
+            puff_count = 3 + int(_pseudo_random(index, self.cloud_seed + 0.16) * 4.0)
+            for puff in range(puff_count):
+                side = (_pseudo_random(index * 17 + puff, self.cloud_seed + 0.84) - 0.5) * max(4.2, self.radius * 0.036)
+                depth = (_pseudo_random(index * 17 + puff, self.cloud_seed + 0.53) - 0.5) * max(1.2, self.radius * 0.012)
+                lift = (_pseudo_random(index * 17 + puff, self.cloud_seed + 0.62) - 0.46) * max(0.55, self.radius * 0.006)
+                radius = max(0.58, self.radius * 0.011) + _pseudo_random(index * 17 + puff, self.cloud_seed + 0.73) * max(0.62, self.radius * 0.01)
+                brightness = int(224 + _pseudo_random(index * 17 + puff, self.cloud_seed + 0.91) * 18)
+                material = Material(color=(brightness, brightness, max(210, brightness - 8)), emission=(18, 22, 26), diffuse=0.48, roughness=0.92)
+                clouds.append(
+                    BlobSurface(
+                        base + right * side + forward * depth + Vec3(0.0, lift, 0.0),
+                        radius,
+                        material,
+                        stretch=right * (radius * 0.8) + forward * (radius * 0.18),
+                        surface_tension=0.34,
                     )
                 )
-            )
         return tuple(clouds)
 
 
