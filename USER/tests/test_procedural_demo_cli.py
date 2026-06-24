@@ -31,10 +31,22 @@ def test_procedural_demo_defaults_to_live_mode(monkeypatch):
     assert args.still_renderer == "auto"
     assert args.chunk_worker is True
     assert args.preload_margin >= 1
-    assert args.chunk_worker_mode == "process"
-    assert args.chunk_activation_rate >= 100
+    assert args.max_pending_chunks >= 1
+    assert args.chunk_worker_mode == "thread"
+    assert args.tree_lod_distance_chunks >= 1
+    assert 1 <= args.chunk_activation_rate <= 12
     assert args.reflection_bounces >= 1
     assert args.sky_cycle is True
+
+
+def test_procedural_fast_quality_caps_saved_view_radius(monkeypatch):
+    demo = _load_demo()
+    monkeypatch.setattr(sys, "argv", [str(DEMO_PATH), "--quality", "fast"])
+
+    args = demo.parse_args()
+
+    assert args.active_radius == demo.QUALITY_PROFILES["fast"]["active_radius"]
+    assert args.tree_lod_distance_chunks == demo.QUALITY_PROFILES["fast"]["tree_lod_distance_chunks"]
 
 
 def test_procedural_demo_still_mode_is_explicit_and_repo_anchored(monkeypatch):

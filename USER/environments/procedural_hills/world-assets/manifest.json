@@ -1,0 +1,32 @@
+{
+  "assets": [
+    {
+      "kind": "low-poly crossed grass blade clumps",
+      "name": "grass_tuft_prefabs",
+      "path": "grass-tufts.json",
+      "variants": 4
+    },
+    {
+      "kind": "3-4 leaf five-lobed maple tufts",
+      "name": "maple_leaf_tuft_prefabs",
+      "path": "maple-leaf-tufts.json",
+      "variants": 4
+    },
+    {
+      "kind": "layered low-poly canopy cards for blurred outer chunk rings",
+      "name": "distant_canopy_haze",
+      "variants": 3
+    }
+  ],
+  "chunk_size": 16.0,
+  "description": "Deterministic grass and maple leaf tuft prefabs used by procedural hill chunks.",
+  "format": "py_3d.procedural_world_assets.v1",
+  "placement": {
+    "grass_clump_candidates_per_chunk": 170,
+    "leaf_tufts_per_branch": 2,
+    "tree_density": 0.22,
+    "tree_slots_per_axis": 4
+  },
+  "seed": 2701,
+  "world": "procedural_hills"
+}

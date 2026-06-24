@@ -297,6 +297,17 @@ class CPURenderer:
         if a is None or b is None or c is None:
             return
 
+        raw_min_x = floor(min(a.x, b.x, c.x))
+        raw_max_x = ceil(max(a.x, b.x, c.x))
+        raw_min_y = floor(min(a.y, b.y, c.y))
+        raw_max_y = ceil(max(a.y, b.y, c.y))
+        if raw_max_x < 0 or raw_min_x >= buffer.width or raw_max_y < 0 or raw_min_y >= buffer.height:
+            return
+
+        area = _edge(a.x, a.y, b.x, b.y, c.x, c.y)
+        if abs(area) < 1e-12:
+            return
+
         normal = prepared.normal
         center = prepared.center
         view_direction = (camera.position - center).normalized(Vec3(0.0, 0.0, -1.0))
@@ -310,14 +321,10 @@ class CPURenderer:
         color = triangle.material.shade(lighting.diffuse, ambient=settings.ambient, specular_light=lighting.specular)
         use_texture = triangle.material.texture is not None and triangle.has_texture_coordinates()
         use_smooth_shading = settings.smooth_shading and triangle.has_vertex_normals()
-        min_x = max(0, floor(min(a.x, b.x, c.x)))
-        max_x = min(buffer.width - 1, ceil(max(a.x, b.x, c.x)))
-        min_y = max(0, floor(min(a.y, b.y, c.y)))
-        max_y = min(buffer.height - 1, ceil(max(a.y, b.y, c.y)))
-
-        area = _edge(a.x, a.y, b.x, b.y, c.x, c.y)
-        if abs(area) < 1e-12:
-            return
+        min_x = max(0, raw_min_x)
+        max_x = min(buffer.width - 1, raw_max_x)
+        min_y = max(0, raw_min_y)
+        max_y = min(buffer.height - 1, raw_max_y)
         inv_area = 1.0 / area
         ax, ay, az = a.x, a.y, a.depth
         bx, by, bz = b.x, b.y, b.depth

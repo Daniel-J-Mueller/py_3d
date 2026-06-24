@@ -7,10 +7,24 @@ from dataclasses import dataclass
 from math import cos, radians, sin
 from pathlib import Path
 
-from py_3d import Box, Camera, Color, HUDRect, HUDText, Lamp, Material, PixelWindow, PlayerModel, RenderEngine, RenderSettings, Scene, SkyPrefab, Sun, TextBulletin, Vec3
+from py_3d import Box, Camera, Color, HUDRect, HUDText, Lamp, Material, PixelWindow, PlayerModel, RenderEngine, RenderSettings, Scene, SkyPrefab, Sun, TextBulletin, Vec3, canonical_player_movement_key, next_camera_mode, update_canonical_live_menu
 
 
 OUTPUT_DIR = Path("renderings-tests") / "live-renders"
+
+CAPSULE_LIVE_ACTIONS = {
+    "done",
+    "next_camera",
+    "look_smoothing_down",
+    "look_smoothing_up",
+    "sky_cycle",
+    "sky_time_down",
+    "sky_time_up",
+    "sky_clouds",
+    "sky_stars",
+    "reset",
+    "quit",
+}
 
 
 @dataclass
@@ -205,7 +219,7 @@ class CapsuleWalkViewer:
 
 class GLCapsuleWalkViewer:
     def __init__(self, args: argparse.Namespace) -> None:
-        from py_3d.live import LiveFlyCamera, LiveMenu, LiveMenuOption, ModernGLLiveRenderer
+        from py_3d.live import LiveFlyCamera, LiveMenu, ModernGLLiveRenderer
 
         self.args = args
         self.controller = CapsuleController()
@@ -241,19 +255,6 @@ class GLCapsuleWalkViewer:
         )
         self.renderer.menu = LiveMenu(
             "py_3d capsule walk",
-            (
-                LiveMenuOption("done", "Done"),
-                LiveMenuOption("next_camera", "Next camera"),
-                LiveMenuOption("look_smoothing_up", "More look smoothing"),
-                LiveMenuOption("look_smoothing_down", "Less look smoothing"),
-                LiveMenuOption("sky_cycle", "Day/night cycle"),
-                LiveMenuOption("sky_time_up", "Time later"),
-                LiveMenuOption("sky_time_down", "Time earlier"),
-                LiveMenuOption("sky_clouds", "Clouds"),
-                LiveMenuOption("sky_stars", "Stars"),
-                LiveMenuOption("reset", "Reset capsule"),
-                LiveMenuOption("quit", "Quit demo"),
-            ),
             background_blur=getattr(args, "menu_blur", False),
         )
         self._refresh_menu_options()
@@ -304,8 +305,7 @@ class GLCapsuleWalkViewer:
         if menu_action is not None:
             return self._handle_menu_action(menu_action)
         if self.renderer.key_matches(key, "v"):
-            self.camera_mode = {"global": "third", "third": "first", "first": "global"}[self.camera_mode]
-            self.render_camera = None
+            self._cycle_camera_mode()
         elif self.renderer.key_matches(key, "left"):
             self.controller.yaw_degrees -= 5.0
         elif self.renderer.key_matches(key, "right"):
@@ -331,8 +331,7 @@ class GLCapsuleWalkViewer:
             self.renderer.set_mouse_captured(True)
             return True
         if action == "next_camera":
-            self.camera_mode = {"global": "third", "third": "first", "first": "global"}[self.camera_mode]
-            self.render_camera = None
+            self._cycle_camera_mode()
         elif action == "look_smoothing_up":
             self._adjust_look_smoothing(2.0)
         elif action == "look_smoothing_down":
@@ -355,26 +354,21 @@ class GLCapsuleWalkViewer:
         return True
 
     def _refresh_menu_options(self) -> None:
-        from py_3d.live import LiveMenuOption
-
-        menu = self.renderer.menu
-        previous_action = menu.selected_action() if menu.options else "done"
-        options = (
-            LiveMenuOption("done", "Done"),
-            LiveMenuOption("next_camera", "Camera", self.camera_mode, "Camera"),
-            LiveMenuOption("look_smoothing_up", "Look Smoothing +", f"{self.look_smoothing:0.1f}", "Camera"),
-            LiveMenuOption("look_smoothing_down", "Look Smoothing -", f"{self.look_smoothing:0.1f}", "Camera"),
-            LiveMenuOption("sky_cycle", "Cycle", "on" if self.sky.cycle_enabled else "off", "Sky"),
-            LiveMenuOption("sky_time_up", "Later", f"{self.sky.time_of_day:04.1f}h", "Sky"),
-            LiveMenuOption("sky_time_down", "Earlier", f"{self.sky.time_of_day:04.1f}h", "Sky"),
-            LiveMenuOption("sky_clouds", "Clouds", "on" if self.sky.clouds_enabled else "off", "Sky"),
-            LiveMenuOption("sky_stars", "Stars", "on" if self.sky.stars_enabled else "off", "Sky"),
-            LiveMenuOption("reset", "Reset", "capsule", "Physics"),
-            LiveMenuOption("quit", "Quit demo"),
+        update_canonical_live_menu(
+            self.renderer.menu,
+            details={
+                "next_camera": self.camera_mode,
+                "look_smoothing_down": f"{self.look_smoothing:0.1f}",
+                "look_smoothing_up": f"{self.look_smoothing:0.1f}",
+                "sky_cycle": "on" if self.sky.cycle_enabled else "off",
+                "sky_time_down": f"{self.sky.time_of_day:04.1f}h",
+                "sky_time_up": f"{self.sky.time_of_day:04.1f}h",
+                "sky_clouds": "on" if self.sky.clouds_enabled else "off",
+                "sky_stars": "on" if self.sky.stars_enabled else "off",
+                "reset": "capsule",
+            },
+            enabled_actions=CAPSULE_LIVE_ACTIONS,
         )
-        menu.options = options
-        actions = [option.action for option in options]
-        menu.selected_index = actions.index(previous_action) if previous_action in actions else min(menu.selected_index, len(options) - 1)
 
     def on_key_up(self, key: int) -> None:
         movement_key = self._movement_key(key)
@@ -432,23 +426,12 @@ class GLCapsuleWalkViewer:
         return scene
 
     def _movement_key(self, key: int) -> str | None:
-        if self.renderer.key_matches(key, "w"):
-            return "w"
-        if self.renderer.key_matches(key, "a"):
-            return "a"
-        if self.renderer.key_matches(key, "s"):
-            return "s"
-        if self.renderer.key_matches(key, "d"):
-            return "d"
-        if self.renderer.key_matches(key, "space"):
-            return "space"
-        if self.renderer.key_matches(key, "lshift", "rshift"):
-            return "shift" if self.camera_mode == "global" else "sprint"
-        if self.renderer.key_matches(key, "lctrl", "rctrl"):
-            return "crouch"
-        if self.renderer.key_matches(key, "c"):
-            return "crouch"
-        return None
+        return canonical_player_movement_key(self.renderer, key, camera_mode=self.camera_mode)
+
+    def _cycle_camera_mode(self) -> None:
+        self.camera_mode = next_camera_mode(self.camera_mode)
+        self.keys.clear()
+        self.render_camera = None
 
     def _adjust_look_smoothing(self, amount: float) -> None:
         self.look_smoothing = max(2.0, min(40.0, self.look_smoothing + amount))

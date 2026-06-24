@@ -4,7 +4,23 @@ from types import SimpleNamespace
 
 import pytest
 
-from py_3d import Box, HUDRect, HUDText, Material, Mesh, PixelBuffer, RenderSettings, Scene, Sphere, Sun, Triangle
+from py_3d import (
+    Box,
+    CANONICAL_LIVE_MENU_ACTIONS,
+    HUDRect,
+    HUDText,
+    Material,
+    Mesh,
+    PixelBuffer,
+    RenderSettings,
+    Scene,
+    Sphere,
+    Sun,
+    Triangle,
+    canonical_live_menu_options,
+    canonical_player_movement_key,
+    next_camera_mode,
+)
 from py_3d.live import (
     LiveFlyCamera,
     LiveMenu,
@@ -29,6 +45,11 @@ class _FakeGLFW:
 
     def set_input_mode(self, window, mode, value):
         self.modes.append((window, mode, value))
+
+
+class _FakeKeyRenderer:
+    def key_matches(self, key, *names):
+        return key in names
 
 
 class _FakeGLBuffer:
@@ -272,6 +293,33 @@ def test_live_fly_camera_shift_adds_vertical_thrust_for_noclip():
     assert camera.position.y > 1.0
 
 
+def test_canonical_player_controls_match_fpv_modes():
+    renderer = _FakeKeyRenderer()
+
+    assert canonical_player_movement_key(renderer, "w", camera_mode="first") == "w"
+    assert canonical_player_movement_key(renderer, "space", camera_mode="first") == "space"
+    assert canonical_player_movement_key(renderer, "lshift", camera_mode="first") == "sprint"
+    assert canonical_player_movement_key(renderer, "lshift", camera_mode="global") == "shift"
+    assert canonical_player_movement_key(renderer, "lctrl", camera_mode="first") == "crouch"
+    assert canonical_player_movement_key(renderer, "lctrl", camera_mode="global") == "ctrl"
+    assert next_camera_mode("global") == "third"
+    assert next_camera_mode("third") == "first"
+    assert next_camera_mode("first") == "global"
+
+
+def test_canonical_live_menu_keeps_unsupported_settings_disabled():
+    options = canonical_live_menu_options(details={"sky_cycle": "on"}, enabled_actions={"sky_cycle"})
+    by_action = {option.action: option for option in options}
+
+    assert "quality_next" in CANONICAL_LIVE_MENU_ACTIONS
+    assert by_action["sky_cycle"].enabled is True
+    assert by_action["sky_cycle"].detail == "on"
+    assert by_action["quality_next"].enabled is False
+    assert by_action["quality_next"].detail == "n/a"
+    assert by_action["done"].enabled is True
+    assert by_action["quit"].enabled is True
+
+
 def test_hud_elements_are_public_overlay_types():
     rect = HUDRect((0, 0), (10, 5), (1, 2, 3), alpha=0.5)
     text = HUDText("HUD", (2, 2), alpha=0.75)
@@ -338,6 +386,23 @@ def test_live_menu_option_hover_does_not_reselect_rows():
     assert menu.selected_action() == "done"
     assert menu.handle_pointer_event(SimpleNamespace(kind="motion", pos=pos)) == "handled"
     assert menu.selected_action() == "done"
+
+
+def test_live_menu_disabled_options_render_but_do_not_activate():
+    menu = LiveMenu(
+        options=(
+            LiveMenuOption("done", "Done"),
+            LiveMenuOption("quality_next", "Quality", "n/a", "Graphics", enabled=False),
+        ),
+        visible=True,
+    )
+    render_live_menu_surface(menu, 800, 600)
+    disabled_hitbox = next(hitbox for hitbox in menu.hitboxes if hitbox[4] == 1)
+    pos = (disabled_hitbox[0] + disabled_hitbox[2] // 2, disabled_hitbox[1] + disabled_hitbox[3] // 2)
+
+    assert menu.handle_pointer_event(SimpleNamespace(kind="button", button=1, pos=pos)) == "handled"
+    assert menu.selected_action() == "quality_next"
+    assert menu.handle_key_name("enter") == "handled"
 
 
 def test_live_menu_background_blur_is_optional():

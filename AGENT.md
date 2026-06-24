@@ -90,6 +90,13 @@ behavior while the engine grows.
 - Preserve `USER/settings.json` as the user-level render profile. GPU paths
   should use requested specs where possible; CPU-only paths should reduce render
   dimensions and mesh density by default unless explicitly overridden.
+- Treat live player controls and live settings as a repository-level contract.
+  The live capsule walk demo is the reference for FPV/player movement. New live
+  demos must use `canonical_player_movement_key` and `next_camera_mode` from
+  `py_3d.live_defaults` instead of inventing bindings. There is only one live
+  settings menu inventory: build menus with `LiveMenu` plus
+  `update_canonical_live_menu`, and leave unsupported settings visible but
+  disabled/grayed out rather than omitting them or creating another menu.
 
 ## Import And Texture Guidance
 

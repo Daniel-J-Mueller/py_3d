@@ -30,10 +30,24 @@ from py_3d import (
     Vec3,
     VectorFluidParticle,
     VectorFluidWorld,
+    canonical_player_movement_key,
+    update_canonical_live_menu,
 )
 
 
 OUTPUT_DIR = Path("USER") / "environments" / "wind_pool_water" / "renderings"
+WIND_POOL_LIVE_ACTIONS = {
+    "done",
+    "quality_next",
+    "wind_down",
+    "wind_up",
+    "reflections_down",
+    "reflections_up",
+    "break_vessel",
+    "pause",
+    "reset",
+    "quit",
+}
 
 
 class WindPoolWaterSimulation:
@@ -196,7 +210,7 @@ def make_settings(args: argparse.Namespace) -> RenderSettings:
 
 class GLWindPoolWaterViewer:
     def __init__(self, args: argparse.Namespace) -> None:
-        from py_3d.live import LiveFlyCamera, LiveMenu, LiveMenuOption, ModernGLLiveRenderer
+        from py_3d.live import LiveFlyCamera, LiveMenu, ModernGLLiveRenderer
 
         self.args = args
         self.settings = make_settings(args)
@@ -212,18 +226,6 @@ class GLWindPoolWaterViewer:
         self.simulation = WindPoolWaterSimulation(quality=args.quality, gpu_context=fluid_context)
         self.renderer.menu = LiveMenu(
             "py_3d wind pool water",
-            (
-                LiveMenuOption("done", "Done"),
-                LiveMenuOption("quality_next", "Quality preset"),
-                LiveMenuOption("wind_up", "More wind"),
-                LiveMenuOption("wind_down", "Less wind"),
-                LiveMenuOption("reflections_up", "More reflections"),
-                LiveMenuOption("reflections_down", "Fewer reflections"),
-                LiveMenuOption("break_vessel", "Break/repair bowl"),
-                LiveMenuOption("pause", "Pause/run water"),
-                LiveMenuOption("reset", "Reset pool"),
-                LiveMenuOption("quit", "Quit demo"),
-            ),
             background_blur=getattr(args, "menu_blur", False),
         )
         self._refresh_menu_options()
@@ -299,21 +301,7 @@ class GLWindPoolWaterViewer:
             self.keys.discard(movement_key)
 
     def _movement_key(self, key: int) -> str | None:
-        if self.renderer.key_matches(key, "w"):
-            return "w"
-        if self.renderer.key_matches(key, "a"):
-            return "a"
-        if self.renderer.key_matches(key, "s"):
-            return "s"
-        if self.renderer.key_matches(key, "d"):
-            return "d"
-        if self.renderer.key_matches(key, "space"):
-            return "space"
-        if self.renderer.key_matches(key, "lshift", "rshift"):
-            return "shift"
-        if self.renderer.key_matches(key, "lctrl", "rctrl"):
-            return "ctrl"
-        return None
+        return canonical_player_movement_key(self.renderer, key, camera_mode="global")
 
     def _handle_menu_action(self, action: str) -> bool:
         if action in {"handled", "navigate"}:
@@ -372,25 +360,20 @@ class GLWindPoolWaterViewer:
         return scene
 
     def _refresh_menu_options(self) -> None:
-        from py_3d.live import LiveMenuOption
-
-        menu = self.renderer.menu
-        previous_action = menu.selected_action() if menu.options else "done"
-        options = (
-            LiveMenuOption("done", "Done"),
-            LiveMenuOption("quality_next", "Quality", self.args.quality, "Graphics"),
-            LiveMenuOption("wind_up", "Wind +", f"{self.simulation.wind_strength:0.2f}x", "Physics"),
-            LiveMenuOption("wind_down", "Wind -", f"{self.simulation.wind_strength:0.2f}x", "Physics"),
-            LiveMenuOption("reflections_up", "Reflections +", str(self.settings.reflection_bounces), "Graphics"),
-            LiveMenuOption("reflections_down", "Reflections -", str(self.settings.reflection_bounces), "Graphics"),
-            LiveMenuOption("break_vessel", "Bowl", "intact" if self.simulation.vessel_intact else "broken", "Physics"),
-            LiveMenuOption("pause", "Pause", "paused" if self.paused else "running", "Physics"),
-            LiveMenuOption("reset", "Reset", "pool", "Physics"),
-            LiveMenuOption("quit", "Quit demo"),
+        update_canonical_live_menu(
+            self.renderer.menu,
+            details={
+                "quality_next": self.args.quality,
+                "wind_down": f"{self.simulation.wind_strength:0.2f}x",
+                "wind_up": f"{self.simulation.wind_strength:0.2f}x",
+                "reflections_down": self.settings.reflection_bounces,
+                "reflections_up": self.settings.reflection_bounces,
+                "break_vessel": "intact" if self.simulation.vessel_intact else "broken",
+                "pause": "paused" if self.paused else "running",
+                "reset": "pool",
+            },
+            enabled_actions=WIND_POOL_LIVE_ACTIONS,
         )
-        menu.options = options
-        actions = [option.action for option in options]
-        menu.selected_index = actions.index(previous_action) if previous_action in actions else min(menu.selected_index, len(options) - 1)
 
     def _update_hud(self) -> None:
         self.renderer.hud.set(

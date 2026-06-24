@@ -181,16 +181,20 @@
       "live_backend": "auto",
       "still_renderer": "auto",
       "chunk_worker": true,
-      "chunk_worker_mode": "process",
+      "chunk_worker_mode": "thread",
       "preload_margin": 1,
       "max_pending_chunks": 1,
-      "chunk_activation_rate": 100,
+      "chunk_activation_rate": 12,
       "look_smoothing": 18.0,
-      "sky_time": 16.847,
+      "sky_time": 14.867,
       "sky_cycle": true,
       "sky_clouds": true,
       "sky_stars": true,
-      "reflection_bounces": 2
+      "reflection_bounces": 2,
+      "camera_mode": "first",
+      "tree_lod_distance_chunks": 2,
+      "wind_strength": 0.08,
+      "tree_sway_distance_chunks": 0
     }
   },
   "notes": [

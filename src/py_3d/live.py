@@ -1010,7 +1010,7 @@ _WATER_VERTEX_ATTRIBUTES = ("in_local", "in_uv")
 _FLUID_VOLUME_VERTEX_FORMAT = "2f"
 _FLUID_VOLUME_VERTEX_ATTRIBUTES = ("in_corner",)
 _MENU_BUTTON_ACTIONS = {"apply", "done", "cancel", "resume", "quit"}
-_MENU_GROUP_ORDER = ("Graphics", "Sky", "Physics", "Camera", "Demo", "Main")
+_MENU_GROUP_ORDER = ("Graphics", "Sky", "World", "Physics", "Camera", "Demo", "Main")
 _VERTEX_STRIDE_BYTES = _FLOATS_PER_VERTEX * 4
 
 
@@ -1143,6 +1143,7 @@ class LiveMenuOption:
     label: str
     detail: str = ""
     group: str = ""
+    enabled: bool = True
 
 
 @dataclass(frozen=True)
@@ -1210,6 +1211,9 @@ class LiveMenu:
     def selected_action(self) -> str:
         return self.options[self.selected_index].action
 
+    def selected_enabled(self) -> bool:
+        return self.options[self.selected_index].enabled
+
     def group_for(self, option: LiveMenuOption) -> str:
         if option.group:
             return option.group
@@ -1270,7 +1274,7 @@ class LiveMenu:
         self.scroll_offsets[group] = max(0, min(max_offset, current + amount))
 
     def has_action(self, action: str) -> bool:
-        return any(option.action == action for option in self.options)
+        return any(option.action == action and option.enabled for option in self.options)
 
     def cancel_action(self) -> str:
         if self.has_action("cancel"):
@@ -1322,7 +1326,9 @@ class LiveMenu:
             if index is not None:
                 self.selected_index = index
                 self.active_group = self.group_for(self.options[index])
-                return self.selected_action()
+                if self.options[index].enabled:
+                    return self.selected_action()
+                return "handled"
             return "handled"
         return None
 
@@ -1353,7 +1359,9 @@ class LiveMenu:
             self.scroll(1)
             return "navigate"
         if key in ("return", "enter", "kp_enter", "space"):
-            return self.selected_action()
+            if self.selected_enabled():
+                return self.selected_action()
+            return "handled"
         return "handled"
 
 
@@ -1426,18 +1434,22 @@ def render_live_menu_surface(menu: LiveMenu, width: int, height: int):
             button_left = x + option_width - button_size * 2 - 10
         label_max = max(40, detail_x - x - 24)
         detail_max = max(40, button_left - detail_x - 10)
-        draw.text(surface, (x + 12, y + 14), draw.fit_text(row.label, label_max), theme.text)
+        row_enabled = any(menu.options[index].enabled for index in row.indexes)
+        label_color = theme.text if row_enabled else _disabled_menu_color(theme)
+        detail_color = theme.muted_text if row_enabled else _disabled_menu_color(theme)
+        draw.text(surface, (x + 12, y + 14), draw.fit_text(row.label, label_max), label_color)
         if row.detail:
-            draw.text(surface, (detail_x, y + 14), draw.fit_text(row.detail, detail_max), theme.muted_text)
+            draw.text(surface, (detail_x, y + 14), draw.fit_text(row.detail, detail_max), detail_color)
         if row.down_index is not None and row.up_index is not None:
             button_size = 26
             minus_rect = (x + option_width - button_size * 2 - 10, y + 6, button_size, button_size)
             plus_rect = (x + option_width - button_size - 6, y + 6, button_size, button_size)
-            _draw_menu_small_button(surface, "-", minus_rect, row.down_index == menu.selected_index, theme)
-            _draw_menu_small_button(surface, "+", plus_rect, row.up_index == menu.selected_index, theme)
+            _draw_menu_small_button(surface, "-", minus_rect, row.down_index == menu.selected_index, theme, enabled=menu.options[row.down_index].enabled)
+            _draw_menu_small_button(surface, "+", plus_rect, row.up_index == menu.selected_index, theme, enabled=menu.options[row.up_index].enabled)
             hitboxes.append((panel_left + minus_rect[0], panel_top + minus_rect[1], minus_rect[2], minus_rect[3], row.down_index))
             hitboxes.append((panel_left + plus_rect[0], panel_top + plus_rect[1], plus_rect[2], plus_rect[3], row.up_index))
-            hitboxes.append((panel_left + x, panel_top + y, option_width - button_size * 2 - 18, option_height, row.up_index))
+            body_index = row.up_index if menu.options[row.up_index].enabled else row.down_index
+            hitboxes.append((panel_left + x, panel_top + y, option_width - button_size * 2 - 18, option_height, body_index))
         else:
             hitboxes.append((panel_left + x, panel_top + y, option_width, option_height, row.indexes[0]))
 
@@ -1456,11 +1468,13 @@ def render_live_menu_surface(menu: LiveMenu, width: int, height: int):
         if footer_x + button_width > panel_width - 22:
             break
         selected = option_index == menu.selected_index
-        fill = theme.button_selected if selected else theme.button
-        border = theme.active_border if selected else theme.button_border
+        enabled = option.enabled
+        fill = theme.button_selected if selected and enabled else theme.button
+        border = theme.active_border if selected and enabled else theme.button_border
+        text_color = theme.text if enabled else _disabled_menu_color(theme)
         draw.rect(surface, (footer_x, footer_y), (button_width, 30), fill[:3], fill=True)
         draw.rect(surface, (footer_x, footer_y), (button_width, 30), border[:3])
-        draw.text(surface, (footer_x + (button_width - text_width) // 2, footer_y + 11), label, theme.text)
+        draw.text(surface, (footer_x + (button_width - text_width) // 2, footer_y + 11), label, text_color)
         hitboxes.append((panel_left + footer_x, panel_top + footer_y, button_width, 30, option_index))
         footer_x += button_width + 6
 
@@ -1530,6 +1544,8 @@ def _paired_label(base: str, down: LiveMenuOption, up: LiveMenuOption) -> str:
         "wind": "Wind",
         "blade": "Swirl",
         "look_smoothing": "Look Smoothing",
+        "radius": "View Distance",
+        "tree_lod": "Tree LOD",
         "sun": "Sun",
         "sky_time": "Sky Time",
         "sky_sun": "Sun",
@@ -1553,14 +1569,19 @@ def _strip_direction_label(label: str) -> str:
     return result
 
 
-def _draw_menu_small_button(surface: PixelBuffer, label: str, rect: tuple[int, int, int, int], selected: bool, theme: LiveMenuTheme) -> None:
-    fill = theme.button_selected if selected else theme.button
-    border = theme.active_border if selected else theme.button_border
+def _disabled_menu_color(theme: LiveMenuTheme) -> tuple[int, int, int]:
+    return tuple(max(42, int(channel * 0.62)) for channel in theme.muted_text)
+
+
+def _draw_menu_small_button(surface: PixelBuffer, label: str, rect: tuple[int, int, int, int], selected: bool, theme: LiveMenuTheme, *, enabled: bool = True) -> None:
+    fill = theme.button_selected if selected and enabled else theme.button
+    border = theme.active_border if selected and enabled else theme.button_border
+    text_color = theme.text if enabled else _disabled_menu_color(theme)
     x, y, width, height = rect
     draw.rect(surface, (x, y), (width, height), fill[:3], fill=True)
     draw.rect(surface, (x, y), (width, height), border[:3])
     text_width, text_height = draw.text_size(label)
-    draw.text(surface, (x + (width - text_width) // 2, y + (height - text_height) // 2), label, theme.text)
+    draw.text(surface, (x + (width - text_width) // 2, y + (height - text_height) // 2), label, text_color)
 
 
 @dataclass(frozen=True)
@@ -2123,7 +2144,7 @@ class _PixelLiveRenderer:
 
     def _menu_cache_key(self, width: int, height: int):
         menu = self.menu
-        options = tuple((option.action, option.label, option.detail, option.group) for option in menu.options)
+        options = tuple((option.action, option.label, option.detail, option.group, option.enabled) for option in menu.options)
         scroll = tuple(sorted(menu.scroll_offsets.items()))
         theme = (
             menu.theme.panel,
@@ -3415,7 +3436,7 @@ class _GLFWModernGLLiveRenderer:
 
     def _menu_cache_key(self, width: int, height: int):
         menu = self.menu
-        options = tuple((option.action, option.label, option.detail, option.group) for option in menu.options)
+        options = tuple((option.action, option.label, option.detail, option.group, option.enabled) for option in menu.options)
         scroll = tuple(sorted(menu.scroll_offsets.items()))
         theme = (
             menu.theme.panel,

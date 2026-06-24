@@ -83,7 +83,7 @@ class SkyPrefab:
             int(166 + daylight * 70 + warmth * 20),
             int(190 + daylight * 42),
         )
-        return Sun(direction=-self.sun_vector(), color=color, intensity=0.08 + daylight * 0.9)
+        return Sun(direction=-self.sun_vector(), color=color, intensity=0.16 + daylight * 1.04)
 
     def background_color(self) -> Color:
         daylight = self.daylight_amount()
@@ -99,7 +99,7 @@ class SkyPrefab:
         scene.background = self.background_color()
         if add_sun:
             scene.add_light(self.sun_light())
-        if self.stars_enabled and self.night_amount > 0.18:
+        if self.stars_enabled and self.night_amount > 0.55:
             scene.add(*self.star_primitives())
         if self.clouds_enabled and self.daylight_amount() > 0.08:
             scene.add(*self.cloud_primitives())

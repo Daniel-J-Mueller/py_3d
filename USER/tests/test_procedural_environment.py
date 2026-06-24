@@ -1,4 +1,6 @@
-from py_3d import ProceduralEnvironmentConfig, ProceduralEnvironmentGenerator, build_environment_chunk
+import json
+
+from py_3d import Mesh, ProceduralEnvironmentConfig, ProceduralEnvironmentGenerator, build_environment_chunk, ensure_procedural_world_assets, swayed_tree_primitives
 
 
 def test_procedural_chunks_regenerate_without_feature_changes():
@@ -33,7 +35,7 @@ def test_procedural_scene_streams_water_and_foliage_near_origin():
     assert sum(len(chunk.trees) for chunk in chunks) > 0
     assert sum(len(chunk.bushes) for chunk in chunks) > 0
     assert sum(len(chunk.rocks) for chunk in chunks) > 0
-    assert sum(len(chunk.grass.segments) for chunk in chunks if chunk.grass is not None) > 0
+    assert sum(len(chunk.grass.triangles) for chunk in chunks if chunk.grass is not None) > 0
 
 
 def test_returning_to_evicted_area_keeps_environment_stable():
@@ -70,6 +72,59 @@ def test_worker_chunk_builder_matches_local_generator():
     worker = build_environment_chunk(config, (1, -2))
 
     assert _chunk_signature(worker) == _chunk_signature(local)
+
+
+def test_procedural_world_assets_save_with_world(tmp_path):
+    config = ProceduralEnvironmentConfig(seed=5150, chunk_resolution=4, grass_blades_per_chunk=12, leaf_tufts_per_branch=1)
+
+    manifest_path = ensure_procedural_world_assets(tmp_path / "world-assets", config)
+    first_manifest = manifest_path.read_text(encoding="utf-8")
+    second_manifest_path = ensure_procedural_world_assets(tmp_path / "world-assets", config)
+
+    manifest = json.loads(first_manifest)
+    assert second_manifest_path == manifest_path
+    assert second_manifest_path.read_text(encoding="utf-8") == first_manifest
+    assert manifest["format"] == "py_3d.procedural_world_assets.v1"
+    assert manifest["seed"] == 5150
+    assert (manifest_path.parent / "grass-tufts.json").exists()
+    assert (manifest_path.parent / "maple-leaf-tufts.json").exists()
+
+
+def test_distant_tree_lod_uses_layered_cards_not_canopy_blobs():
+    config = ProceduralEnvironmentConfig(
+        seed=909,
+        chunk_resolution=4,
+        tree_slots_per_axis=3,
+        tree_density=1.0,
+        bush_density=0.0,
+        rock_density=0.0,
+        grass_blades_per_chunk=0,
+    )
+    chunk = ProceduralEnvironmentGenerator(config).chunk((0, 0))
+    meshes = [obj for obj in chunk.distant_objects if isinstance(obj, Mesh)]
+    assert chunk.trees
+
+    card_mesh = next(mesh for mesh in meshes[1:] if _max_repeated_triangle_start(mesh) >= 8)
+
+    assert all(triangle.has_vertex_normals() for triangle in card_mesh.triangles[:12])
+
+
+def test_tree_wind_sway_is_deterministic_and_gentle():
+    config = ProceduralEnvironmentConfig(
+        seed=910,
+        chunk_resolution=4,
+        tree_slots_per_axis=2,
+        tree_density=1.0,
+        grass_blades_per_chunk=0,
+    )
+    tree = ProceduralEnvironmentGenerator(config).chunk((0, 0)).trees[0]
+
+    first = _object_vertex_signature(swayed_tree_primitives(tree, config.seed, wind_time=1.25))
+    repeat = _object_vertex_signature(swayed_tree_primitives(tree, config.seed, wind_time=1.25))
+    later = _object_vertex_signature(swayed_tree_primitives(tree, config.seed, wind_time=2.0))
+
+    assert first == repeat
+    assert first != later
 
 
 def _chunk_signature(chunk):
@@ -127,14 +182,18 @@ def _chunk_signature(chunk):
     )
     grass = tuple(
         (
-            round(start.x, 4),
-            round(start.y, 4),
-            round(start.z, 4),
-            round(end.x, 4),
-            round(end.y, 4),
-            round(end.z, 4),
+            round(triangle.a.x, 4),
+            round(triangle.a.y, 4),
+            round(triangle.a.z, 4),
+            round(triangle.b.x, 4),
+            round(triangle.b.y, 4),
+            round(triangle.b.z, 4),
+            round(triangle.c.x, 4),
+            round(triangle.c.y, 4),
+            round(triangle.c.z, 4),
+            triangle.material.color.to_tuple(),
         )
-        for start, end in (chunk.grass.segments if chunk.grass is not None else ())[:24]
+        for triangle in (chunk.grass.triangles if chunk.grass is not None else ())[:24]
     )
     sources = tuple(
         (
@@ -148,7 +207,33 @@ def _chunk_signature(chunk):
     )
     shoreline_count = len(chunk.shorelines.segments) if chunk.shorelines is not None else 0
     ripple_count = len(chunk.ripples.segments) if chunk.ripples is not None else 0
-    return terrain_vertices, water_vertices, trees, bushes, rocks, grass, shoreline_count, ripple_count, sources
+    distant_count = len(chunk.distant_objects)
+    return terrain_vertices, water_vertices, trees, bushes, rocks, grass, shoreline_count, ripple_count, sources, distant_count
+
+
+def _object_vertex_signature(objects):
+    values = []
+    for obj in objects:
+        if not isinstance(obj, Mesh):
+            continue
+        for triangle in obj.triangles[:12]:
+            values.extend(
+                (
+                    round(vertex.x, 4),
+                    round(vertex.y, 4),
+                    round(vertex.z, 4),
+                )
+                for vertex in (triangle.a, triangle.b, triangle.c)
+            )
+    return tuple(values)
+
+
+def _max_repeated_triangle_start(mesh):
+    fan_centers: dict[tuple[float, float, float], int] = {}
+    for triangle in mesh.triangles:
+        key = (round(triangle.a.x, 3), round(triangle.a.y, 3), round(triangle.a.z, 3))
+        fan_centers[key] = fan_centers.get(key, 0) + 1
+    return max(fan_centers.values()) if fan_centers else 0
 
 
 def _edge_vertices(mesh, *, x: float):

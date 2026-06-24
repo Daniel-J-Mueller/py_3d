@@ -7,12 +7,13 @@ from .collision import BowlCollider, BoxCollider, CompoundSphereCollider, PlaneC
 from .color import Color
 from .fluid import FluidBlob, FluidWorld, GPUVectorFluidWorld, VectorFluidParticle, VectorFluidWorld
 from . import draw
-from .environment import BushInstance, EnvironmentChunk, ProceduralEnvironmentConfig, ProceduralEnvironmentGenerator, RockInstance, TreeInstance, WaterSource, build_environment_chunk
+from .environment import BushInstance, EnvironmentChunk, ProceduralEnvironmentConfig, ProceduralEnvironmentGenerator, RockInstance, TreeInstance, WaterSource, build_environment_chunk, ensure_procedural_world_assets, swayed_tree_primitives
 from .gpu import GPURenderer, GPUSceneBatch, build_gpu_scene_batch, detect_gpu_backends
 from .hud import HUDAnimation, HUDImage, HUDRect, HUDText, LiveHUD
 from .importers import load_obj, load_stl
 from .inventory import CubePlacer, Inventory, InventorySlot, place_cube_from_inventory
 from .lights import Lamp, LightSample, Sun
+from .live_defaults import CANONICAL_CAMERA_MODES, CANONICAL_LIVE_MENU_ACTIONS, canonical_live_menu_options, canonical_player_movement_key, next_camera_mode, update_canonical_live_menu
 from .materials import Material
 from .math3d import Vec3, as_vec3, clamp
 from .noise import FractalNoise3D, SurfacePerturbation, ValueNoise3D
@@ -39,6 +40,8 @@ __all__ = [
     "Camera",
     "Capsule",
     "Color",
+    "CANONICAL_CAMERA_MODES",
+    "CANONICAL_LIVE_MENU_ACTIONS",
     "CubePlacer",
     "DepthBuffer",
     "EnvironmentChunk",
@@ -109,14 +112,20 @@ __all__ = [
     "build_gpu_scene_batch",
     "build_environment_chunk",
     "clamp",
+    "canonical_live_menu_options",
+    "canonical_player_movement_key",
     "draw",
     "detect_gpu_backends",
+    "ensure_procedural_world_assets",
     "load_mesh_asset",
     "load_obj",
     "load_stl",
     "mesh_asset_metadata",
+    "next_camera_mode",
     "planar_project_triangles",
     "place_cube_from_inventory",
     "portal_camera_for",
     "scene_with_portal_textures",
+    "swayed_tree_primitives",
+    "update_canonical_live_menu",
 ]

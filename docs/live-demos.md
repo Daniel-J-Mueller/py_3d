@@ -49,49 +49,66 @@ process exits with an error, the launcher reverts to the last safe settings.
 | `13_live_fruit_bowl_poly_lamp.py` | Low-poly wood bowl, hanging lamp, and baked sign. |
 | `14_render_sea_lion_asset.py` | Prepared mesh asset render. |
 | `15_render_fan_cloth_water.py` | Fan, cloth, and vector-fluid water scene. |
+| `16_live_fruit_bowl_rgb_bulbs.py` | Fruit bowl live variant with blinking RGB bulbs. |
+| `17_render_hud_demo.py` | FPS and third-person HUD still previews. |
+| `18_live_wind_pool_water.py` | Wind-driven vector-fluid pool scene. |
+| `19_live_procedural_environment.py` | Streamed procedural hills, grass, water, and tree tufts. |
 | `20_render_feature_previews.py` | Batch still previews. |
 | `30_render_environment_videos.py` | Batch environment videos. |
 | `40_run_feature_tests.py` | User-facing feature test runner. |
 
 ## Common Live Controls
 
-Controls vary by demo, but the common live controls are:
+The live capsule walk demo is the control reference. Any demo with player/FPV
+movement or free-camera navigation must use `canonical_player_movement_key`
+from `py_3d.live_defaults` instead of copying bindings locally.
 
 | Control | Action |
 | --- | --- |
 | `Esc` | Open or close the menu. |
 | Mouse | Look around while the pointer is captured. |
 | `W/A/S/D` | Move. |
+| `Space` | Jump in first/third-person modes; elevate in global/free-camera mode. |
+| `Shift` | Sprint in first/third-person modes; elevate in global/free-camera mode. |
+| `Ctrl` | Crouch in first/third-person modes; descend in global/free-camera mode. |
+| `C` | Crouch in first/third-person modes. |
+| `V` | Cycle `global -> third -> first -> global` when a demo exposes camera modes. |
 | `E` | Grab or drop supported physics objects. |
-| Mouse wheel | Adjust held-object distance. |
-| `Space` | Jump in player modes or pause in some demo modes. |
-| `Shift` | Sprint in FPS/player modes; elevate in free-camera mode. |
-| `Ctrl` | Descend in free-camera mode; crouch where supported. |
-| `V` | Cycle camera modes where supported. |
+| Mouse wheel | Adjust held-object distance where grabbing is supported. |
 | `P` | Save a snapshot where supported. |
 
 ## Live Menu Structure
 
-Live menus are built from `LiveMenu` and `LiveMenuOption`:
+There is one live settings menu contract. Use `LiveMenu` for the menu shell and
+`update_canonical_live_menu` for the option inventory. Demos enable only the
+actions they support; all other settings remain visible but disabled/grayed out.
 
 ```python
-from py_3d.live import LiveMenu, LiveMenuOption
+from py_3d import update_canonical_live_menu
+from py_3d.live import LiveMenu
 
-menu = LiveMenu(
-    "Demo Settings",
-    (
-        LiveMenuOption("quality", "Quality: High", "Render size and mesh density", "Graphics"),
-        LiveMenuOption("sky_cycle", "Day/Night Cycle", "Animate sky time", "Sky"),
-        LiveMenuOption("pause", "Pause Physics", "Freeze simulation", "Physics"),
-        LiveMenuOption("done", "Done"),
-        LiveMenuOption("apply", "Apply"),
-        LiveMenuOption("cancel", "Exit Menu"),
-    ),
+menu = LiveMenu("Demo Settings")
+update_canonical_live_menu(
+    menu,
+    details={
+        "quality_next": "balanced",
+        "sky_cycle": "on",
+        "pause": "running",
+    },
+    enabled_actions={"quality_next", "sky_cycle", "pause", "done", "quit"},
 )
 ```
 
-Options with a `group` value are shown under category tabs. Footer actions such
-as Done, Apply, Exit Menu, and Quit Demo are drawn in a button bay.
+The canonical inventory covers every setting used by current live demos:
+Graphics quality, polygon density, reflections, smooth shading, texture size,
+gamma, tone mapping, and wire/fill; sky cycle/time/sun/clouds/stars; world view
+distance, tree LOD, rebuild, and seed; physics wind, swirl, vessel, pause, and
+reset; camera mode and look smoothing; snapshot; and Done/Apply/Exit/Quit
+footer actions.
+
+Options with a `group` value are shown under category tabs. Disabled options are
+drawn muted and cannot be activated by mouse click or Enter/Space. Footer
+actions such as Done, Apply, Exit Menu, and Quit Demo are drawn in a button bay.
 
 The menu supports:
 
@@ -101,6 +118,7 @@ The menu supports:
 - Up/down option navigation.
 - Enter/Space selection.
 - Apply/Done/Exit patterns for settings that should not apply immediately.
+- Disabled options for settings not relevant to the current demo.
 
 ## Graphics Settings
 
@@ -212,4 +230,3 @@ Outputs:
 - `renderings-tests/demo_launcher_menu.png`
 - `renderings-tests/demo_launcher_settings.png`
 - `renderings-tests/live_settings_menu.png`
-

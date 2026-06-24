@@ -287,6 +287,13 @@ Current menu entries:
 
 More detail lives in [docs/live-demos.md](docs/live-demos.md).
 
+Live player controls default to the capsule-walk FPV contract: `W/A/S/D` move,
+mouse looks, Space jumps in first/third-person and elevates in free camera,
+Shift sprints in first/third-person and elevates in free camera, Ctrl crouches
+in first/third-person and descends in free camera, and `V` cycles camera modes
+where supported. Live demos share one settings menu inventory; unsupported
+settings are grayed out instead of removed.
+
 ## Portal Game Example
 
 The sibling `portal-python` repo is a thin game shell that calls `py_3d` and
@@ -491,31 +498,28 @@ panels, text can be scaled, images can be drawn from `PixelBuffer`, and
 
 ### Live Menus
 
-`LiveMenu` and `LiveMenuOption` provide the shared settings menu used by the
-live demos. Options can be grouped into tabs:
+`LiveMenu` provides the shared settings menu used by the live demos. Live demos
+use one canonical inventory from `update_canonical_live_menu`; unsupported
+settings stay visible but disabled/grayed out instead of disappearing between
+demos:
 
 ```python
-from py_3d.live import LiveMenu, LiveMenuOption, LiveMenuTheme
+from py_3d import update_canonical_live_menu
+from py_3d.live import LiveMenu, LiveMenuTheme
 
-menu = LiveMenu(
-    "Graphics Settings",
-    (
-        LiveMenuOption("quality", "Quality: High", "Render scale and mesh density", "Graphics"),
-        LiveMenuOption("reflection_up", "Reflections +", "Raise reflection bounce budget", "Graphics"),
-        LiveMenuOption("reflection_down", "Reflections -", "Lower reflection bounce budget", "Graphics"),
-        LiveMenuOption("sky_cycle", "Day/Night Cycle", "Toggle animated sky clock", "Sky"),
-        LiveMenuOption("done", "Done"),
-        LiveMenuOption("apply", "Apply"),
-        LiveMenuOption("cancel", "Exit Menu"),
-    ),
-    theme=LiveMenuTheme(panel=(0, 0, 0, 238)),
+menu = LiveMenu("Graphics Settings", theme=LiveMenuTheme(panel=(0, 0, 0, 238)))
+update_canonical_live_menu(
+    menu,
+    details={"quality_next": "high", "reflections_up": 2, "sky_cycle": "on"},
+    enabled_actions={"quality_next", "reflections_up", "reflections_down", "sky_cycle"},
 )
 ```
 
 The menu supports mouse hover, mouse click, mouse wheel scrolling, keyboard tab
 navigation, Apply/Done/Exit buttons, footer actions, optional background blur,
 custom themes, and paired `*_up`/`*_down` options rendered as compact `-`/`+`
-buttons beside one setting row.
+buttons beside one setting row. Disabled options render muted and cannot be
+activated.
 
 ## GPU Bridge
 

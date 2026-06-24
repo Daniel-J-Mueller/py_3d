@@ -37,10 +37,32 @@ from py_3d import (
     Vec3,
     VectorFluidParticle,
     VectorFluidWorld,
+    canonical_player_movement_key,
+    update_canonical_live_menu,
 )
 
 
 OUTPUT_DIR = Path("USER") / "environments" / "fan_cloth_water" / "renderings"
+FAN_CLOTH_LIVE_ACTIONS = {
+    "done",
+    "quality_next",
+    "smooth",
+    "wind_down",
+    "wind_up",
+    "blade_down",
+    "blade_up",
+    "reflections_down",
+    "reflections_up",
+    "sky_cycle",
+    "sky_time_down",
+    "sky_time_up",
+    "sky_clouds",
+    "sky_stars",
+    "break_vessel",
+    "pause",
+    "reset",
+    "quit",
+}
 
 _WATER_TEXTURE: PixelBuffer | None = None
 _CLOTH_TEXTURE: PixelBuffer | None = None
@@ -954,7 +976,7 @@ def make_settings(args: argparse.Namespace) -> RenderSettings:
 
 class GLFanClothWaterViewer:
     def __init__(self, args: argparse.Namespace) -> None:
-        from py_3d.live import LiveFlyCamera, LiveMenu, LiveMenuOption, ModernGLLiveRenderer
+        from py_3d.live import LiveFlyCamera, LiveMenu, ModernGLLiveRenderer
 
         self.args = args
         self.settings = make_settings(args)
@@ -980,26 +1002,6 @@ class GLFanClothWaterViewer:
         self.simulation = FanWaterSimulation(quality=args.quality, gpu_context=fluid_context)
         self.renderer.menu = LiveMenu(
             "py_3d fan cloth water",
-            (
-                LiveMenuOption("done", "Done"),
-                LiveMenuOption("quality_next", "Quality preset"),
-                LiveMenuOption("smooth_shading", "Surface smoothing"),
-                LiveMenuOption("wind_up", "More cloth wind"),
-                LiveMenuOption("wind_down", "Less cloth wind"),
-                LiveMenuOption("blade_up", "More water swirl"),
-                LiveMenuOption("blade_down", "Less water swirl"),
-                LiveMenuOption("reflections_up", "More reflections"),
-                LiveMenuOption("reflections_down", "Fewer reflections"),
-                LiveMenuOption("sky_cycle", "Day/night cycle"),
-                LiveMenuOption("sky_time_up", "Time later"),
-                LiveMenuOption("sky_time_down", "Time earlier"),
-                LiveMenuOption("sky_clouds", "Clouds"),
-                LiveMenuOption("sky_stars", "Stars"),
-                LiveMenuOption("break_vessel", "Break/repair bowl"),
-                LiveMenuOption("pause", "Pause/run physics"),
-                LiveMenuOption("reset", "Reset simulation"),
-                LiveMenuOption("quit", "Quit demo"),
-            ),
             background_blur=getattr(args, "menu_blur", False),
         )
         self._refresh_menu_options()
@@ -1077,21 +1079,7 @@ class GLFanClothWaterViewer:
             self.keys.discard(movement_key)
 
     def _movement_key(self, key: int) -> str | None:
-        if self.renderer.key_matches(key, "w"):
-            return "w"
-        if self.renderer.key_matches(key, "a"):
-            return "a"
-        if self.renderer.key_matches(key, "s"):
-            return "s"
-        if self.renderer.key_matches(key, "d"):
-            return "d"
-        if self.renderer.key_matches(key, "space"):
-            return "space"
-        if self.renderer.key_matches(key, "lshift", "rshift"):
-            return "shift"
-        if self.renderer.key_matches(key, "lctrl", "rctrl"):
-            return "ctrl"
-        return None
+        return canonical_player_movement_key(self.renderer, key, camera_mode="global")
 
     def _handle_menu_action(self, action: str) -> bool:
         if action in {"handled", "navigate"}:
@@ -1121,7 +1109,7 @@ class GLFanClothWaterViewer:
             self._adjust_reflections(1)
         elif action == "reflections_down":
             self._adjust_reflections(-1)
-        elif action == "smooth_shading":
+        elif action == "smooth":
             self._toggle_smooth_shading()
         elif action == "sky_cycle":
             self.sky.toggle_cycle()
@@ -1185,33 +1173,28 @@ class GLFanClothWaterViewer:
         return scene
 
     def _refresh_menu_options(self) -> None:
-        from py_3d.live import LiveMenuOption
-
-        menu = self.renderer.menu
-        previous_action = menu.selected_action() if menu.options else "done"
-        options = (
-            LiveMenuOption("done", "Done"),
-            LiveMenuOption("quality_next", "Quality", self.args.quality, "Graphics"),
-            LiveMenuOption("wind_up", "Wind +", f"{self.simulation.wind_scale:0.2f}x", "Physics"),
-            LiveMenuOption("wind_down", "Wind -", f"{self.simulation.wind_scale:0.2f}x", "Physics"),
-            LiveMenuOption("blade_up", "Swirl +", f"{self.simulation.blade_strength:0.2f}x", "Physics"),
-            LiveMenuOption("blade_down", "Swirl -", f"{self.simulation.blade_strength:0.2f}x", "Physics"),
-            LiveMenuOption("reflections_up", "Reflections +", str(self.settings.reflection_bounces), "Graphics"),
-            LiveMenuOption("reflections_down", "Reflections -", str(self.settings.reflection_bounces), "Graphics"),
-            LiveMenuOption("smooth_shading", "Smoothing", "on" if self.settings.smooth_shading else "off", "Graphics"),
-            LiveMenuOption("sky_cycle", "Cycle", "on" if self.sky.cycle_enabled else "off", "Sky"),
-            LiveMenuOption("sky_time_up", "Later", f"{self.sky.time_of_day:04.1f}h", "Sky"),
-            LiveMenuOption("sky_time_down", "Earlier", f"{self.sky.time_of_day:04.1f}h", "Sky"),
-            LiveMenuOption("sky_clouds", "Clouds", "on" if self.sky.clouds_enabled else "off", "Sky"),
-            LiveMenuOption("sky_stars", "Stars", "on" if self.sky.stars_enabled else "off", "Sky"),
-            LiveMenuOption("break_vessel", "Bowl", "intact" if self.simulation.vessel_intact else "broken", "Physics"),
-            LiveMenuOption("pause", "Pause", "paused" if self.paused else "running", "Physics"),
-            LiveMenuOption("reset", "Reset", "simulation", "Physics"),
-            LiveMenuOption("quit", "Quit demo"),
+        update_canonical_live_menu(
+            self.renderer.menu,
+            details={
+                "quality_next": self.args.quality,
+                "wind_down": f"{self.simulation.wind_scale:0.2f}x",
+                "wind_up": f"{self.simulation.wind_scale:0.2f}x",
+                "blade_down": f"{self.simulation.blade_strength:0.2f}x",
+                "blade_up": f"{self.simulation.blade_strength:0.2f}x",
+                "reflections_down": self.settings.reflection_bounces,
+                "reflections_up": self.settings.reflection_bounces,
+                "smooth": "on" if self.settings.smooth_shading else "off",
+                "sky_cycle": "on" if self.sky.cycle_enabled else "off",
+                "sky_time_down": f"{self.sky.time_of_day:04.1f}h",
+                "sky_time_up": f"{self.sky.time_of_day:04.1f}h",
+                "sky_clouds": "on" if self.sky.clouds_enabled else "off",
+                "sky_stars": "on" if self.sky.stars_enabled else "off",
+                "break_vessel": "intact" if self.simulation.vessel_intact else "broken",
+                "pause": "paused" if self.paused else "running",
+                "reset": "simulation",
+            },
+            enabled_actions=FAN_CLOTH_LIVE_ACTIONS,
         )
-        menu.options = options
-        actions = [option.action for option in options]
-        menu.selected_index = actions.index(previous_action) if previous_action in actions else min(menu.selected_index, len(options) - 1)
 
     def _update_hud(self) -> None:
         self.renderer.hud.set(

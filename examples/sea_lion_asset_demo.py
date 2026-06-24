@@ -6,12 +6,22 @@ import argparse
 from pathlib import Path
 from math import sin, tau
 
-from py_3d import Camera, FloatingTextBulletin, HUDRect, HUDText, Lamp, Material, PixelBuffer, Plane, RenderEngine, RenderSettings, Scene, SkyPrefab, Sun, TextBulletin, load_mesh_asset
+from py_3d import Camera, FloatingTextBulletin, HUDRect, HUDText, Lamp, Material, PixelBuffer, Plane, RenderEngine, RenderSettings, Scene, SkyPrefab, Sun, TextBulletin, canonical_player_movement_key, load_mesh_asset, update_canonical_live_menu
 from py_3d.color import Color
 
 
 DEFAULT_ASSET = Path("USER") / "assets" / "sea_lion" / "sea_lion.py3dmesh.json"
 DEFAULT_OUTPUT = Path("USER") / "environments" / "sea_lion" / "renderings" / "sea_lion_asset.png"
+SEA_LION_LIVE_ACTIONS = {
+    "done",
+    "sky_cycle",
+    "sky_time_down",
+    "sky_time_up",
+    "sky_clouds",
+    "sky_stars",
+    "snapshot",
+    "quit",
+}
 
 
 def sea_lion_skin_texture(width: int = 384, height: int = 384) -> PixelBuffer:
@@ -70,7 +80,7 @@ def parse_args() -> argparse.Namespace:
 
 class GLSeaLionAssetViewer:
     def __init__(self, args: argparse.Namespace, settings: RenderSettings) -> None:
-        from py_3d.live import LiveFlyCamera, LiveMenu, LiveMenuOption, ModernGLLiveRenderer
+        from py_3d.live import LiveFlyCamera, LiveMenu, ModernGLLiveRenderer
 
         self.args = args
         self.settings = settings
@@ -90,16 +100,6 @@ class GLSeaLionAssetViewer:
         )
         self.renderer.menu = LiveMenu(
             "py_3d sea lion asset",
-            (
-                LiveMenuOption("done", "Done"),
-                LiveMenuOption("sky_cycle", "Day/night cycle"),
-                LiveMenuOption("sky_time_up", "Time later"),
-                LiveMenuOption("sky_time_down", "Time earlier"),
-                LiveMenuOption("sky_clouds", "Clouds"),
-                LiveMenuOption("sky_stars", "Stars"),
-                LiveMenuOption("snapshot", "Save snapshot"),
-                LiveMenuOption("quit", "Quit demo"),
-            ),
             background_blur=getattr(args, "menu_blur", False),
         )
         self._refresh_menu_options()
@@ -165,21 +165,7 @@ class GLSeaLionAssetViewer:
             self.keys.discard(movement_key)
 
     def _movement_key(self, key: int) -> str | None:
-        if self.renderer.key_matches(key, "w"):
-            return "w"
-        if self.renderer.key_matches(key, "a"):
-            return "a"
-        if self.renderer.key_matches(key, "s"):
-            return "s"
-        if self.renderer.key_matches(key, "d"):
-            return "d"
-        if self.renderer.key_matches(key, "space"):
-            return "space"
-        if self.renderer.key_matches(key, "lshift", "rshift"):
-            return "shift"
-        if self.renderer.key_matches(key, "lctrl", "rctrl"):
-            return "ctrl"
-        return None
+        return canonical_player_movement_key(self.renderer, key, camera_mode="global")
 
     def _handle_menu_action(self, action: str) -> bool:
         if action in {"handled", "navigate"}:
@@ -216,23 +202,18 @@ class GLSeaLionAssetViewer:
         print(f"Wrote {self.args.output}")
 
     def _refresh_menu_options(self) -> None:
-        from py_3d.live import LiveMenuOption
-
-        menu = self.renderer.menu
-        previous_action = menu.selected_action() if menu.options else "done"
-        options = (
-            LiveMenuOption("done", "Done"),
-            LiveMenuOption("sky_cycle", "Cycle", "on" if self.sky.cycle_enabled else "off", "Sky"),
-            LiveMenuOption("sky_time_up", "Later", f"{self.sky.time_of_day:04.1f}h", "Sky"),
-            LiveMenuOption("sky_time_down", "Earlier", f"{self.sky.time_of_day:04.1f}h", "Sky"),
-            LiveMenuOption("sky_clouds", "Clouds", "on" if self.sky.clouds_enabled else "off", "Sky"),
-            LiveMenuOption("sky_stars", "Stars", "on" if self.sky.stars_enabled else "off", "Sky"),
-            LiveMenuOption("snapshot", "Snapshot", "PNG", "Demo"),
-            LiveMenuOption("quit", "Quit demo"),
+        update_canonical_live_menu(
+            self.renderer.menu,
+            details={
+                "sky_cycle": "on" if self.sky.cycle_enabled else "off",
+                "sky_time_down": f"{self.sky.time_of_day:04.1f}h",
+                "sky_time_up": f"{self.sky.time_of_day:04.1f}h",
+                "sky_clouds": "on" if self.sky.clouds_enabled else "off",
+                "sky_stars": "on" if self.sky.stars_enabled else "off",
+                "snapshot": "PNG",
+            },
+            enabled_actions=SEA_LION_LIVE_ACTIONS,
         )
-        menu.options = options
-        actions = [option.action for option in options]
-        menu.selected_index = actions.index(previous_action) if previous_action in actions else min(menu.selected_index, len(options) - 1)
 
     def _update_hud(self) -> None:
         self.renderer.hud.set(

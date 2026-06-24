@@ -45,7 +45,9 @@ from py_3d import (
     Triangle,
     TransformedMesh,
     Vec3,
+    canonical_player_movement_key,
     draw,
+    update_canonical_live_menu,
 )
 
 
@@ -53,6 +55,34 @@ OUTPUT_DIR = Path("renderings-tests")
 FRUIT_BOWL_OUTPUT_DIR = Path("USER") / "environments" / "fruit_bowl" / "renderings"
 USER_SETTINGS_PATH = Path("USER") / "settings.json"
 _BANANA_MESH_CACHE: dict[tuple[float, int, int, int], Mesh] = {}
+FRUIT_BOWL_LIVE_ACTIONS = {
+    "done",
+    "apply",
+    "cancel",
+    "quality_next",
+    "poly_down",
+    "poly_up",
+    "reflections_down",
+    "reflections_up",
+    "smooth",
+    "texture_down",
+    "texture_up",
+    "gamma_down",
+    "gamma_up",
+    "tone_mapping",
+    "toggle_render",
+    "sky_cycle",
+    "sky_time_down",
+    "sky_time_up",
+    "sky_sun_down",
+    "sky_sun_up",
+    "sky_clouds",
+    "sky_stars",
+    "pause",
+    "reset",
+    "snapshot",
+    "quit",
+}
 
 
 DEFAULT_RENDER_QUALITY_PRESETS = {
@@ -1451,7 +1481,7 @@ class LiveFruitBowlViewer:
 
 class GLFruitBowlViewer:
     def __init__(self, args: argparse.Namespace) -> None:
-        from py_3d.live import LiveFlyCamera, LiveMenu, LiveMenuOption, ModernGLLiveRenderer
+        from py_3d.live import LiveFlyCamera, LiveMenu, ModernGLLiveRenderer
 
         self.args = args
         self.simulation = FruitBowlSimulation(bowl_material=args.bowl_material)
@@ -1487,34 +1517,6 @@ class GLFruitBowlViewer:
         )
         self.renderer.menu = LiveMenu(
             "py_3d fruit bowl",
-            (
-                LiveMenuOption("done", "Done"),
-                LiveMenuOption("apply", "Apply"),
-                LiveMenuOption("cancel", "Exit menu"),
-                LiveMenuOption("quality_next", "Quality preset"),
-                LiveMenuOption("poly_up", "More polygons"),
-                LiveMenuOption("poly_down", "Fewer polygons"),
-                LiveMenuOption("reflections_up", "More reflections"),
-                LiveMenuOption("reflections_down", "Fewer reflections"),
-                LiveMenuOption("smooth", "Smooth shading"),
-                LiveMenuOption("texture_up", "Texture resolution"),
-                LiveMenuOption("texture_down", "Texture resolution"),
-                LiveMenuOption("gamma_up", "Gamma"),
-                LiveMenuOption("gamma_down", "Gamma"),
-                LiveMenuOption("tone_mapping", "Tone mapping"),
-                LiveMenuOption("sky_cycle", "Day/night cycle"),
-                LiveMenuOption("sky_time_up", "Time later"),
-                LiveMenuOption("sky_time_down", "Time earlier"),
-                LiveMenuOption("sky_sun_up", "Sun higher"),
-                LiveMenuOption("sky_sun_down", "Sun lower"),
-                LiveMenuOption("sky_clouds", "Clouds"),
-                LiveMenuOption("sky_stars", "Stars"),
-                LiveMenuOption("toggle_render", "Toggle wire/poly"),
-                LiveMenuOption("pause", "Pause/run physics"),
-                LiveMenuOption("reset", "Reset bowl"),
-                LiveMenuOption("snapshot", "Save snapshot"),
-                LiveMenuOption("quit", "Quit demo"),
-            ),
             background_blur=getattr(args, "menu_blur", False),
         )
         self._refresh_menu_options()
@@ -1658,44 +1660,39 @@ class GLFruitBowlViewer:
         )
 
     def _refresh_menu_options(self) -> None:
-        from py_3d.live import LiveMenuOption
-
         menu = self.renderer.menu
-        previous_action = menu.selected_action() if menu.options else "done"
         settings = self._menu_settings()
         quality = self._pending_quality if menu.visible else getattr(self.args, "quality", "custom")
         mode = "filled" if self.full_render else "wire"
-        options = (
-            LiveMenuOption("done", "Done"),
-            LiveMenuOption("apply", "Apply", self._menu_status),
-            LiveMenuOption("cancel", "Exit Menu"),
-            LiveMenuOption("quality_next", "Quality", quality, "Graphics"),
-            LiveMenuOption("poly_up", "Polygons +", f"{settings.sphere_segments}x{settings.sphere_rings}", "Graphics"),
-            LiveMenuOption("poly_down", "Polygons -", f"{settings.sphere_segments}x{settings.sphere_rings}", "Graphics"),
-            LiveMenuOption("reflections_up", "Reflections +", str(settings.reflection_bounces), "Graphics"),
-            LiveMenuOption("reflections_down", "Reflections -", str(settings.reflection_bounces), "Graphics"),
-            LiveMenuOption("smooth", "Smooth", "on" if settings.smooth_shading else "off", "Graphics"),
-            LiveMenuOption("texture_up", "Texture +", str(settings.texture_size), "Graphics"),
-            LiveMenuOption("texture_down", "Texture -", str(settings.texture_size), "Graphics"),
-            LiveMenuOption("gamma_up", "Gamma +", f"{settings.gamma:0.2f}", "Graphics"),
-            LiveMenuOption("gamma_down", "Gamma -", f"{settings.gamma:0.2f}", "Graphics"),
-            LiveMenuOption("tone_mapping", "Tone Map", "on" if settings.tone_mapping else "off", "Graphics"),
-            LiveMenuOption("sky_cycle", "Cycle", "on" if self.sky.cycle_enabled else "off", "Sky"),
-            LiveMenuOption("sky_time_up", "Later", f"{self.sky.time_of_day:04.1f}h", "Sky"),
-            LiveMenuOption("sky_time_down", "Earlier", f"{self.sky.time_of_day:04.1f}h", "Sky"),
-            LiveMenuOption("sky_sun_up", "Sun +", f"{self.sky.effective_sun_elevation_degrees():0.0f} deg", "Sky"),
-            LiveMenuOption("sky_sun_down", "Sun -", f"{self.sky.effective_sun_elevation_degrees():0.0f} deg", "Sky"),
-            LiveMenuOption("sky_clouds", "Clouds", "on" if self.sky.clouds_enabled else "off", "Sky"),
-            LiveMenuOption("sky_stars", "Stars", "on" if self.sky.stars_enabled else "off", "Sky"),
-            LiveMenuOption("toggle_render", "Wire/Fill", mode, "Graphics"),
-            LiveMenuOption("pause", "Pause", "paused" if self.paused else "running", "Physics"),
-            LiveMenuOption("reset", "Reset", "bowl", "Physics"),
-            LiveMenuOption("snapshot", "Snapshot", "PNG", "Demo"),
-            LiveMenuOption("quit", "Quit demo"),
+        update_canonical_live_menu(
+            self.renderer.menu,
+            details={
+                "apply": self._menu_status,
+                "quality_next": quality,
+                "poly_down": f"{settings.sphere_segments}x{settings.sphere_rings}",
+                "poly_up": f"{settings.sphere_segments}x{settings.sphere_rings}",
+                "reflections_down": settings.reflection_bounces,
+                "reflections_up": settings.reflection_bounces,
+                "smooth": "on" if settings.smooth_shading else "off",
+                "texture_down": settings.texture_size,
+                "texture_up": settings.texture_size,
+                "gamma_down": f"{settings.gamma:0.2f}",
+                "gamma_up": f"{settings.gamma:0.2f}",
+                "tone_mapping": "on" if settings.tone_mapping else "off",
+                "toggle_render": mode,
+                "sky_cycle": "on" if self.sky.cycle_enabled else "off",
+                "sky_time_down": f"{self.sky.time_of_day:04.1f}h",
+                "sky_time_up": f"{self.sky.time_of_day:04.1f}h",
+                "sky_sun_down": f"{self.sky.effective_sun_elevation_degrees():0.0f} deg",
+                "sky_sun_up": f"{self.sky.effective_sun_elevation_degrees():0.0f} deg",
+                "sky_clouds": "on" if self.sky.clouds_enabled else "off",
+                "sky_stars": "on" if self.sky.stars_enabled else "off",
+                "pause": "paused" if self.paused else "running",
+                "reset": "bowl",
+                "snapshot": "PNG",
+            },
+            enabled_actions=FRUIT_BOWL_LIVE_ACTIONS,
         )
-        menu.options = options
-        actions = [option.action for option in options]
-        menu.selected_index = actions.index(previous_action) if previous_action in actions else min(menu.selected_index, len(options) - 1)
 
     def _begin_menu_edit(self) -> None:
         self._pending_settings = self.settings
@@ -1914,19 +1911,7 @@ class GLFruitBowlViewer:
             self.keys.discard(movement_key)
 
     def _movement_key(self, key: int) -> str | None:
-        if self.renderer.key_matches(key, "w"):
-            return "w"
-        if self.renderer.key_matches(key, "a"):
-            return "a"
-        if self.renderer.key_matches(key, "s"):
-            return "s"
-        if self.renderer.key_matches(key, "d"):
-            return "d"
-        if self.renderer.key_matches(key, "lshift", "rshift"):
-            return "shift"
-        if self.renderer.key_matches(key, "lctrl", "rctrl"):
-            return "ctrl"
-        return None
+        return canonical_player_movement_key(self.renderer, key, camera_mode="global")
 
     def save_snapshot(self) -> None:
         OUTPUT_DIR.mkdir(exist_ok=True)
