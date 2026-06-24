@@ -7,7 +7,7 @@ from .collision import BowlCollider, BoxCollider, CompoundSphereCollider, PlaneC
 from .color import Color
 from .fluid import FluidBlob, FluidWorld, GPUVectorFluidWorld, VectorFluidParticle, VectorFluidWorld
 from . import draw
-from .environment import BushInstance, EnvironmentChunk, ProceduralEnvironmentConfig, ProceduralEnvironmentGenerator, RockInstance, TreeInstance, WaterSource, build_environment_chunk, ensure_procedural_world_assets, swayed_tree_primitives
+from .environment import BiomeSample, BushInstance, EnvironmentChunk, EnvironmentDetailCluster, ProceduralEnvironmentConfig, ProceduralEnvironmentGenerator, RockInstance, TreeInstance, WaterSource, build_environment_chunk, ensure_procedural_world_assets, swayed_tree_primitives
 from .gpu import GPURenderer, GPUSceneBatch, build_gpu_scene_batch, detect_gpu_backends
 from .hud import HUDAnimation, HUDImage, HUDRect, HUDText, LiveHUD
 from .importers import load_obj, load_stl
@@ -30,6 +30,7 @@ from .window import PixelWindow, WindowEvent
 
 __all__ = [
     "BlobSurface",
+    "BiomeSample",
     "BushInstance",
     "Box",
     "BoxCollider",
@@ -45,6 +46,7 @@ __all__ = [
     "CubePlacer",
     "DepthBuffer",
     "EnvironmentChunk",
+    "EnvironmentDetailCluster",
     "FluidBlob",
     "FluidWorld",
     "FloatingTextBulletin",

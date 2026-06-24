@@ -1,6 +1,6 @@
 import json
 
-from py_3d import Mesh, ProceduralEnvironmentConfig, ProceduralEnvironmentGenerator, build_environment_chunk, ensure_procedural_world_assets, swayed_tree_primitives
+from py_3d import EnvironmentDetailCluster, Mesh, ProceduralEnvironmentConfig, ProceduralEnvironmentGenerator, build_environment_chunk, ensure_procedural_world_assets, swayed_tree_primitives
 
 
 def test_procedural_chunks_regenerate_without_feature_changes():
@@ -127,6 +127,46 @@ def test_tree_wind_sway_is_deterministic_and_gentle():
     assert first != later
 
 
+def test_chunks_expose_bounds_biome_and_virtualized_tree_clusters():
+    config = ProceduralEnvironmentConfig(
+        seed=911,
+        chunk_resolution=4,
+        tree_slots_per_axis=3,
+        tree_density=1.0,
+        grass_blades_per_chunk=0,
+    )
+    chunk = ProceduralEnvironmentGenerator(config).chunk((0, 0))
+
+    assert chunk.bounds_radius > config.chunk_size * 0.5
+    assert chunk.bounds_min.x == 0.0
+    assert chunk.bounds_max.z == config.chunk_size
+    assert chunk.biome_name in {"wetland", "ridge", "forest", "meadow", "woodland"}
+    assert chunk.tree_clusters
+    assert all(isinstance(cluster, EnvironmentDetailCluster) for cluster in chunk.tree_clusters)
+    assert all(cluster.objects and cluster.triangle_count > 0 for cluster in chunk.tree_clusters)
+    assert {cluster.source_index for cluster in chunk.tree_clusters} <= set(range(len(chunk.trees)))
+
+
+def test_hlod_proxy_is_compact_and_deterministic():
+    config = ProceduralEnvironmentConfig(
+        seed=912,
+        chunk_resolution=8,
+        tree_slots_per_axis=4,
+        tree_density=1.0,
+        bush_density=1.0,
+        rock_density=1.0,
+        grass_blades_per_chunk=20,
+    )
+
+    first = ProceduralEnvironmentGenerator(config).chunk((1, -1))
+    second = ProceduralEnvironmentGenerator(config).chunk((1, -1))
+
+    assert first.hlod_objects
+    assert len(first.hlod_objects) < len(first.distant_objects)
+    assert _object_vertex_signature(first.hlod_objects) == _object_vertex_signature(second.hlod_objects)
+    assert _triangle_count(first.hlod_objects) < _triangle_count(first.distant_objects)
+
+
 def _chunk_signature(chunk):
     terrain_vertices = tuple(
         tuple(round(value, 4) for value in vertex)
@@ -226,6 +266,14 @@ def _object_vertex_signature(objects):
                 for vertex in (triangle.a, triangle.b, triangle.c)
             )
     return tuple(values)
+
+
+def _triangle_count(objects):
+    total = 0
+    for obj in objects:
+        if isinstance(obj, Mesh):
+            total += len(obj.triangles)
+    return total
 
 
 def _max_repeated_triangle_start(mesh):

@@ -173,6 +173,32 @@ class RockInstance:
 
 
 @dataclass(frozen=True)
+class BiomeSample:
+    name: str
+    height: float
+    moisture: float
+    foliage: float
+    ridge: float
+    slope: float
+    tree_density: float
+    bush_density: float
+    rock_density: float
+    grass_density: float
+
+
+@dataclass(frozen=True)
+class EnvironmentDetailCluster:
+    kind: str
+    coord: tuple[int, int]
+    center: Vec3
+    radius: float
+    objects: tuple[object, ...]
+    triangle_count: int = 0
+    importance: float = 1.0
+    source_index: int = 0
+
+
+@dataclass(frozen=True)
 class EnvironmentChunk:
     coord: tuple[int, int]
     terrain: Mesh
@@ -189,6 +215,13 @@ class EnvironmentChunk:
     base_objects: tuple[object, ...] = ()
     tree_objects: tuple[object, ...] = ()
     tree_detail_loaded: bool = True
+    hlod_objects: tuple[object, ...] = ()
+    tree_clusters: tuple[EnvironmentDetailCluster, ...] = ()
+    bounds_min: Vec3 = Vec3(0.0, 0.0, 0.0)
+    bounds_max: Vec3 = Vec3(0.0, 0.0, 0.0)
+    bounds_center: Vec3 = Vec3(0.0, 0.0, 0.0)
+    bounds_radius: float = 0.0
+    biome_name: str = "meadow"
 
 
 class ProceduralEnvironmentGenerator:
@@ -265,6 +298,27 @@ class ProceduralEnvironmentGenerator:
     def is_water_at(self, x: float, z: float) -> bool:
         return self.height_at(x, z) <= self.config.water_level
 
+    def biome_at(self, x: float, z: float, *, height: float | None = None, normal: Vec3 | None = None) -> BiomeSample:
+        """Return deterministic biome weights used by the PCG placement pass."""
+
+        sample_height = self.height_at(x, z) if height is None else height
+        surface_normal = self.normal_at(x, z) if normal is None else normal
+        moisture = self._basin_noise.sample_xyz(x * 0.026, 19.0, z * 0.026)
+        foliage = self._foliage_noise.sample_xyz(x * 0.042, 23.0, z * 0.042)
+        ridge = self._ridge_noise.sample_xyz(x * 0.048, 29.0, z * 0.048)
+        slope = 1.0 - clamp(surface_normal.y, 0.0, 1.0)
+        above_water = sample_height - self.config.water_level
+
+        if above_water <= 0.18:
+            return BiomeSample("wetland", sample_height, moisture, foliage, ridge, slope, 0.08, 1.25, 0.32, 0.72)
+        if slope > 0.32 or (ridge > 0.68 and above_water > 1.15):
+            return BiomeSample("ridge", sample_height, moisture, foliage, ridge, slope, 0.34, 0.46, 1.8, 0.38)
+        if moisture > 0.58 and foliage > 0.44:
+            return BiomeSample("forest", sample_height, moisture, foliage, ridge, slope, 1.38, 1.15, 0.72, 1.0)
+        if moisture < 0.36 or foliage < 0.34:
+            return BiomeSample("meadow", sample_height, moisture, foliage, ridge, slope, 0.58, 0.74, 0.88, 1.22)
+        return BiomeSample("woodland", sample_height, moisture, foliage, ridge, slope, 1.0, 1.0, 1.0, 1.0)
+
     def chunk(self, coord: tuple[int, int]) -> EnvironmentChunk:
         cached = self._chunk_cache.get(coord)
         if cached is not None:
@@ -336,9 +390,25 @@ class ProceduralEnvironmentGenerator:
         for bush in bushes:
             base_objects.extend(_bush_primitives(bush, self.config.seed))
         tree_objects: list[object] = []
+        tree_clusters: list[EnvironmentDetailCluster] = []
         if tree_detail:
-            for tree in trees:
-                tree_objects.extend(_tree_primitives(tree, self.config.seed, leaf_tufts_per_branch=self.config.leaf_tufts_per_branch))
+            for tree_index, tree in enumerate(trees):
+                primitives = _tree_primitives(tree, self.config.seed, leaf_tufts_per_branch=self.config.leaf_tufts_per_branch)
+                tree_objects.extend(primitives)
+                cluster_radius = max(tree.crown_radius * 1.28, tree.trunk_height * 0.55)
+                cluster_center = tree.position + Vec3(tree.lean.x * 0.5, tree.trunk_height * 0.62, tree.lean.z * 0.5)
+                tree_clusters.append(
+                    EnvironmentDetailCluster(
+                        "tree",
+                        coord,
+                        cluster_center,
+                        cluster_radius,
+                        primitives,
+                        _object_triangle_count(primitives),
+                        1.0 + tree.crown_radius * 0.12,
+                        tree_index,
+                    )
+                )
         objects = [*base_objects, *tree_objects]
 
         distant_objects: list[object] = [terrain]
@@ -356,22 +426,32 @@ class ProceduralEnvironmentGenerator:
             distant_objects.extend(_bush_primitives(bush, self.config.seed))
         for tree in trees:
             distant_objects.extend(_tree_distant_primitives(tree, self.config.seed))
+        hlod_objects = self._hlod_objects(coord, height_at=height_at, water=water, trees=trees, bushes=bushes, rocks=rocks)
+        bounds_min, bounds_max, bounds_center, bounds_radius = self._chunk_bounds(coord, height_at=height_at, trees=trees, bushes=bushes, rocks=rocks)
+        biome_name = self.biome_at(bounds_center.x, bounds_center.z, height=height_at(bounds_center.x, bounds_center.z)).name
         return EnvironmentChunk(
-            coord,
-            terrain,
-            water,
-            trees,
-            bushes,
-            rocks,
-            grass,
-            shorelines,
-            ripples,
-            sources,
-            tuple(objects),
-            tuple(distant_objects),
-            tuple(base_objects),
-            tuple(tree_objects),
-            bool(tree_detail),
+            coord=coord,
+            terrain=terrain,
+            water=water,
+            trees=trees,
+            bushes=bushes,
+            rocks=rocks,
+            grass=grass,
+            shorelines=shorelines,
+            ripples=ripples,
+            water_sources=sources,
+            objects=tuple(objects),
+            distant_objects=tuple(distant_objects),
+            base_objects=tuple(base_objects),
+            tree_objects=tuple(tree_objects),
+            tree_detail_loaded=bool(tree_detail),
+            hlod_objects=hlod_objects,
+            tree_clusters=tuple(tree_clusters),
+            bounds_min=bounds_min,
+            bounds_max=bounds_max,
+            bounds_center=bounds_center,
+            bounds_radius=bounds_radius,
+            biome_name=biome_name,
         )
 
     def _chunk_height_sampler(self) -> Callable[[float, float], float]:
@@ -406,40 +486,47 @@ class ProceduralEnvironmentGenerator:
 
         return sample
 
-    def _terrain_mesh(self, coord: tuple[int, int], *, height_at: Callable[[float, float], float] | None = None) -> Mesh:
+    def _terrain_mesh(
+        self,
+        coord: tuple[int, int],
+        *,
+        height_at: Callable[[float, float], float] | None = None,
+        resolution: int | None = None,
+        jitter: bool = True,
+    ) -> Mesh:
         height = height_at or self.height_at
         cx, cz = coord
         size = self.config.chunk_size
-        resolution = self.config.chunk_resolution
-        step = size / resolution
+        mesh_resolution = self.config.chunk_resolution if resolution is None else max(2, int(resolution))
+        step = size / mesh_resolution
         x0 = cx * size
         z0 = cz * size
         vertices: list[list[Vec3]] = []
         normals: list[list[Vec3]] = []
-        for z_index in range(resolution + 1):
+        for z_index in range(mesh_resolution + 1):
             row: list[Vec3] = []
             normal_row: list[Vec3] = []
             z = z0 + z_index * step
-            for x_index in range(resolution + 1):
+            for x_index in range(mesh_resolution + 1):
                 x = x0 + x_index * step
-                sample_x, sample_z = self._terrain_vertex_xz(coord, x_index, z_index, x, z, step)
+                sample_x, sample_z = self._terrain_vertex_xz(coord, x_index, z_index, x, z, step, mesh_resolution) if jitter else (x, z)
                 row.append(Vec3(sample_x, height(sample_x, sample_z), sample_z))
             vertices.append(row)
-        for z_index in range(resolution + 1):
+        for z_index in range(mesh_resolution + 1):
             normal_row: list[Vec3] = []
-            for x_index in range(resolution + 1):
+            for x_index in range(mesh_resolution + 1):
                 left = vertices[z_index][max(0, x_index - 1)]
-                right = vertices[z_index][min(resolution, x_index + 1)]
+                right = vertices[z_index][min(mesh_resolution, x_index + 1)]
                 back = vertices[max(0, z_index - 1)][x_index]
-                front = vertices[min(resolution, z_index + 1)][x_index]
+                front = vertices[min(mesh_resolution, z_index + 1)][x_index]
                 span_x = max(step, right.x - left.x)
                 span_z = max(step, front.z - back.z)
                 normal_row.append(Vec3(left.y - right.y, (span_x + span_z) * 0.5, back.y - front.y).normalized(Vec3(0.0, 1.0, 0.0)))
             normals.append(normal_row)
 
         triangles: list[Triangle] = []
-        for z_index in range(resolution):
-            for x_index in range(resolution):
+        for z_index in range(mesh_resolution):
+            for x_index in range(mesh_resolution):
                 top_left = vertices[z_index][x_index]
                 top_right = vertices[z_index][x_index + 1]
                 bottom_left = vertices[z_index + 1][x_index]
@@ -495,8 +582,9 @@ class ProceduralEnvironmentGenerator:
                     )
         return Mesh(triangles)
 
-    def _terrain_vertex_xz(self, coord: tuple[int, int], x_index: int, z_index: int, x: float, z: float, step: float) -> tuple[float, float]:
-        if x_index in {0, self.config.chunk_resolution} or z_index in {0, self.config.chunk_resolution}:
+    def _terrain_vertex_xz(self, coord: tuple[int, int], x_index: int, z_index: int, x: float, z: float, step: float, resolution: int | None = None) -> tuple[float, float]:
+        edge = self.config.chunk_resolution if resolution is None else int(resolution)
+        if x_index in {0, edge} or z_index in {0, edge}:
             return x, z
         cx, cz = coord
         amount = step * 0.24
@@ -506,10 +594,11 @@ class ProceduralEnvironmentGenerator:
 
     def _terrain_material(self, point: Vec3, normal: Vec3 | None = None) -> Material:
         surface_normal = normal or self.normal_at(point.x, point.z)
+        biome = self.biome_at(point.x, point.z, height=point.y, normal=surface_normal)
         variation = self._detail_noise.sample_xyz(point.x * 0.045, 27.0, point.z * 0.045)
-        if point.y <= self.config.water_level + 0.18:
+        if biome.name == "wetland" or point.y <= self.config.water_level + 0.18:
             return SHORE_PALETTE[0 if variation < 0.55 else 1]
-        if surface_normal.y < 0.78 or point.y > self.config.water_level + 2.75:
+        if biome.name == "ridge" or surface_normal.y < 0.78 or point.y > self.config.water_level + 2.75:
             return ROCK_PALETTE[min(len(ROCK_PALETTE) - 1, int(variation * len(ROCK_PALETTE)))]
         meadow = self._detail_noise.sample_xyz(point.x * 0.07, 21.0, point.z * 0.07)
         palette = MEADOW_PALETTE if meadow > 0.54 else GRASS_PALETTE
@@ -622,18 +711,26 @@ class ProceduralEnvironmentGenerator:
         trees: list[TreeInstance] = []
         for z_index in range(slots):
             for x_index in range(slots):
-                if _stable_unit(self.config.seed, cx, cz, x_index, z_index, 101) > self.config.tree_density:
-                    continue
                 jitter_x = _stable_unit(self.config.seed, cx, cz, x_index, z_index, 113)
                 jitter_z = _stable_unit(self.config.seed, cx, cz, x_index, z_index, 127)
                 x = x0 + (x_index + 0.18 + jitter_x * 0.64) * slot_size
                 z = z0 + (z_index + 0.18 + jitter_z * 0.64) * slot_size
                 y = sample_height(x, z)
                 normal = normal_sample(x, z)
+                biome = self.biome_at(x, z, height=y, normal=normal)
+                probability = clamp(self.config.tree_density * biome.tree_density, 0.0, 1.0)
+                if _stable_unit(self.config.seed, cx, cz, x_index, z_index, 101) > probability:
+                    continue
                 if y <= self.config.water_level + 0.22 or normal.y < 0.74:
                     continue
                 trunk_height = 4.6 + _stable_unit(self.config.seed, cx, cz, x_index, z_index, 139) * 4.4
                 crown = 2.05 + _stable_unit(self.config.seed, cx, cz, x_index, z_index, 149) * 1.75
+                if biome.name == "forest":
+                    trunk_height *= 1.06
+                    crown *= 1.08
+                elif biome.name == "ridge":
+                    trunk_height *= 0.82
+                    crown *= 0.78
                 radius = 0.2 + _stable_unit(self.config.seed, cx, cz, x_index, z_index, 157) * 0.17
                 yaw = _stable_unit(self.config.seed, cx, cz, x_index, z_index, 167) * tau
                 lean = Vec3(
@@ -642,7 +739,8 @@ class ProceduralEnvironmentGenerator:
                     (_stable_unit(self.config.seed, cx, cz, x_index, z_index, 173) - 0.5) * 0.42,
                 )
                 branch_count = 5 + int(_stable_unit(self.config.seed, cx, cz, x_index, z_index, 179) * 4.0)
-                species = 1 if _stable_unit(self.config.seed, cx, cz, x_index, z_index, 181) > 0.7 else 0
+                species_threshold = 0.62 if biome.name in {"wetland", "woodland"} else 0.78
+                species = 1 if _stable_unit(self.config.seed, cx, cz, x_index, z_index, 181) > species_threshold else 0
                 variant = 1 if _stable_unit(self.config.seed, cx, cz, x_index, z_index, 163) > 0.58 else 0
                 trees.append(TreeInstance(Vec3(x, y, z), trunk_height, radius, crown, yaw, lean, branch_count, species, variant))
         return tuple(trees)
@@ -667,18 +765,24 @@ class ProceduralEnvironmentGenerator:
             for x_index in range(slots):
                 cover = self._foliage_noise.sample_xyz((x0 + x_index * slot_size) * 0.055, 33.0, (z0 + z_index * slot_size) * 0.055)
                 probability = self.config.bush_density * (0.55 + cover * 0.75)
-                if _stable_unit(self.config.seed, cx, cz, x_index, z_index, 601) > probability:
-                    continue
                 jitter_x = _stable_unit(self.config.seed, cx, cz, x_index, z_index, 607)
                 jitter_z = _stable_unit(self.config.seed, cx, cz, x_index, z_index, 613)
                 x = x0 + (x_index + 0.18 + jitter_x * 0.64) * slot_size
                 z = z0 + (z_index + 0.18 + jitter_z * 0.64) * slot_size
                 y = sample_height(x, z)
                 normal = normal_sample(x, z)
+                biome = self.biome_at(x, z, height=y, normal=normal)
+                probability = clamp(probability * biome.bush_density, 0.0, 1.0)
+                if _stable_unit(self.config.seed, cx, cz, x_index, z_index, 601) > probability:
+                    continue
                 if y <= self.config.water_level + 0.12 or normal.y < 0.68:
                     continue
                 radius = 0.42 + _stable_unit(self.config.seed, cx, cz, x_index, z_index, 617) * 0.62
                 bush_height = 0.34 + _stable_unit(self.config.seed, cx, cz, x_index, z_index, 619) * 0.55
+                if biome.name == "wetland":
+                    bush_height *= 1.18
+                elif biome.name == "ridge":
+                    radius *= 0.78
                 variant = 1 if _stable_unit(self.config.seed, cx, cz, x_index, z_index, 631) > 0.5 else 0
                 bushes.append(BushInstance(Vec3(x, y, z), radius, bush_height, variant))
         return tuple(bushes)
@@ -703,18 +807,23 @@ class ProceduralEnvironmentGenerator:
             for x_index in range(slots):
                 ridge = self._ridge_noise.sample_xyz((x0 + x_index * slot_size) * 0.075, 45.0, (z0 + z_index * slot_size) * 0.075)
                 probability = self.config.rock_density * (0.45 + ridge * 0.9)
-                if _stable_unit(self.config.seed, cx, cz, x_index, z_index, 1301) > probability:
-                    continue
                 jitter_x = _stable_unit(self.config.seed, cx, cz, x_index, z_index, 1303)
                 jitter_z = _stable_unit(self.config.seed, cx, cz, x_index, z_index, 1307)
                 x = x0 + (x_index + 0.18 + jitter_x * 0.64) * slot_size
                 z = z0 + (z_index + 0.18 + jitter_z * 0.64) * slot_size
                 y = sample_height(x, z)
                 normal = normal_sample(x, z)
+                biome = self.biome_at(x, z, height=y, normal=normal)
+                probability = clamp(probability * biome.rock_density, 0.0, 1.0)
+                if _stable_unit(self.config.seed, cx, cz, x_index, z_index, 1301) > probability:
+                    continue
                 if y <= self.config.water_level + 0.05 or normal.y < 0.55:
                     continue
                 radius = 0.28 + _stable_unit(self.config.seed, cx, cz, x_index, z_index, 1319) * 0.9
                 height = 0.16 + _stable_unit(self.config.seed, cx, cz, x_index, z_index, 1321) * 0.52
+                if biome.name == "ridge":
+                    radius *= 1.18
+                    height *= 1.24
                 yaw = _stable_unit(self.config.seed, cx, cz, x_index, z_index, 1327) * tau
                 variant = min(len(ROCK_PALETTE) - 1, int(_stable_unit(self.config.seed, cx, cz, x_index, z_index, 1329) * len(ROCK_PALETTE)))
                 rocks.append(RockInstance(Vec3(x, y + 0.02, z), radius, height, yaw, variant))
@@ -744,8 +853,10 @@ class ProceduralEnvironmentGenerator:
             normal = normal_sample(x, z)
             if y <= self.config.water_level + 0.08 or normal.y < 0.72:
                 continue
+            biome = self.biome_at(x, z, height=y, normal=normal)
             cover = self._foliage_noise.sample_xyz(x * 0.11, 41.0, z * 0.11)
             threshold = 0.66 + cover * 0.28 if distant else 0.70 + cover * 0.24
+            threshold = clamp(threshold * biome.grass_density, 0.0, 0.98)
             if _stable_unit(self.config.seed, cx, cz, index, 719) > threshold:
                 continue
             blade_count = (6 + int(_stable_unit(self.config.seed, cx, cz, index, 721) * 5.0)) if distant else (9 + int(_stable_unit(self.config.seed, cx, cz, index, 721) * 9.0))
@@ -764,6 +875,187 @@ class ProceduralEnvironmentGenerator:
                 )
             )
         return Mesh(triangles) if triangles else None
+
+    def _hlod_objects(
+        self,
+        coord: tuple[int, int],
+        *,
+        height_at: Callable[[float, float], float],
+        water: Mesh | None,
+        trees: tuple[TreeInstance, ...],
+        bushes: tuple[BushInstance, ...],
+        rocks: tuple[RockInstance, ...],
+    ) -> tuple[object, ...]:
+        terrain_resolution = max(2, min(6, self.config.chunk_resolution // 3))
+        objects: list[object] = [
+            self._terrain_mesh(coord, height_at=height_at, resolution=terrain_resolution, jitter=False)
+        ]
+        water_proxy = self._water_hlod_mesh(coord, height_at=height_at) if water is not None else None
+        if water_proxy is not None:
+            objects.append(water_proxy)
+        scenery_triangles: list[Triangle] = []
+        for tree in trees:
+            scenery_triangles.extend(_tree_hlod_triangles(tree, self.config.seed))
+        for bush in bushes:
+            scenery_triangles.extend(_bush_hlod_triangles(bush, self.config.seed))
+        for rock in rocks:
+            scenery_triangles.extend(_rock_hlod_triangles(rock))
+        if scenery_triangles:
+            objects.append(Mesh(scenery_triangles))
+        return tuple(objects)
+
+    def _water_hlod_mesh(self, coord: tuple[int, int], *, height_at: Callable[[float, float], float]) -> Mesh | None:
+        cx, cz = coord
+        size = self.config.chunk_size
+        resolution = max(2, min(5, self.config.chunk_resolution // 4))
+        step = size / resolution
+        x0 = cx * size
+        z0 = cz * size
+        normal = Vec3(0.0, 1.0, 0.0)
+        triangles: list[Triangle] = []
+        for z_index in range(resolution):
+            z = z0 + z_index * step
+            for x_index in range(resolution):
+                x = x0 + x_index * step
+                heights = (
+                    height_at(x, z),
+                    height_at(x + step, z),
+                    height_at(x + step, z + step),
+                    height_at(x, z + step),
+                )
+                wet_count = sum(1 for value in heights if value <= self.config.water_level)
+                if wet_count == 0:
+                    continue
+                depth = sum(max(0.0, self.config.water_level - value) for value in heights) / 4.0
+                material = WATER_SHALLOW if depth < 0.34 else WATER_DEEP if depth > 1.15 else WATER
+                a = Vec3(x, self._water_y_at(x, z), z)
+                b = Vec3(x + step, self._water_y_at(x + step, z), z)
+                c = Vec3(x + step, self._water_y_at(x + step, z + step), z + step)
+                d = Vec3(x, self._water_y_at(x, z + step), z + step)
+                triangles.append(Triangle(a, d, b, material, normal_a=normal, normal_b=normal, normal_c=normal))
+                triangles.append(Triangle(b, d, c, material, normal_a=normal, normal_b=normal, normal_c=normal))
+        return Mesh(triangles) if triangles else None
+
+    def _chunk_bounds(
+        self,
+        coord: tuple[int, int],
+        *,
+        height_at: Callable[[float, float], float],
+        trees: tuple[TreeInstance, ...],
+        bushes: tuple[BushInstance, ...],
+        rocks: tuple[RockInstance, ...],
+    ) -> tuple[Vec3, Vec3, Vec3, float]:
+        cx, cz = coord
+        size = self.config.chunk_size
+        x0 = cx * size
+        z0 = cz * size
+        samples = 4
+        heights: list[float] = [self.config.water_level]
+        for z_index in range(samples + 1):
+            z = z0 + size * z_index / samples
+            for x_index in range(samples + 1):
+                x = x0 + size * x_index / samples
+                heights.append(height_at(x, z))
+        min_y = min(heights) - 0.35
+        max_y = max(heights) + 0.35
+        for tree in trees:
+            max_y = max(max_y, tree.position.y + tree.trunk_height + tree.crown_radius * 1.25)
+        for bush in bushes:
+            max_y = max(max_y, bush.position.y + bush.height + bush.radius * 0.65)
+        for rock in rocks:
+            max_y = max(max_y, rock.position.y + rock.height + rock.radius * 0.35)
+        bounds_min = Vec3(x0, min_y, z0)
+        bounds_max = Vec3(x0 + size, max_y, z0 + size)
+        center = (bounds_min + bounds_max) * 0.5
+        radius = (bounds_max - center).length()
+        return bounds_min, bounds_max, center, radius
+
+
+def _object_triangle_count(objects: Iterable[object]) -> int:
+    count = 0
+    for obj in objects:
+        if isinstance(obj, Mesh):
+            count += len(obj.triangles)
+        elif isinstance(obj, Triangle):
+            count += 1
+        elif hasattr(obj, "to_triangles"):
+            try:
+                count += len(obj.to_triangles())
+            except Exception:
+                continue
+    return count
+
+
+def _tree_hlod_triangles(tree: TreeInstance, seed: int) -> tuple[Triangle, ...]:
+    key = _position_key(tree.position)
+    trunk_top = tree.position + Vec3(tree.lean.x * 0.72, tree.trunk_height, tree.lean.z * 0.72)
+    triangles = list(
+        _tapered_cylinder_triangles(
+            tree.position,
+            trunk_top,
+            tree.trunk_radius * 1.08,
+            tree.trunk_radius * 0.42,
+            3,
+            TRUNK,
+        )
+    )
+    canopy_center = trunk_top + Vec3(0.0, tree.crown_radius * (0.58 if tree.species == 0 else 0.78), 0.0)
+    material = CANOPY_HAZE_PALETTE[(tree.material_variant + tree.species) % len(CANOPY_HAZE_PALETTE)]
+    triangles.extend(
+        _canopy_haze_card_triangles(
+            canopy_center,
+            tree.crown_radius * 1.55,
+            tree.crown_radius * 1.12,
+            tree.yaw,
+            material,
+            seed,
+            key,
+            1703,
+        )
+    )
+    if tree.crown_radius > 2.8:
+        triangles.extend(
+            _canopy_haze_card_triangles(
+                canopy_center + Vec3(0.0, tree.crown_radius * 0.08, 0.0),
+                tree.crown_radius * 1.32,
+                tree.crown_radius * 0.96,
+                tree.yaw + tau * 0.25,
+                material,
+                seed,
+                key,
+                1709,
+            )
+        )
+    return tuple(triangles)
+
+
+def _bush_hlod_triangles(bush: BushInstance, seed: int) -> tuple[Triangle, ...]:
+    key = _position_key(bush.position)
+    center = bush.position + Vec3(0.0, bush.height * 0.58, 0.0)
+    material = BUSH_PALETTE[bush.variant % len(BUSH_PALETTE)]
+    return _canopy_haze_card_triangles(
+        center,
+        bush.radius * 1.65,
+        max(0.36, bush.height * 1.24),
+        _stable_unit(seed, *key, 1741) * tau,
+        material,
+        seed,
+        key,
+        1747,
+    )
+
+
+def _rock_hlod_triangles(rock: RockInstance) -> tuple[Triangle, ...]:
+    material = ROCK_PALETTE[rock.variant % len(ROCK_PALETTE)]
+    return _ellipsoid_blob_triangles(
+        rock.position + Vec3(0.0, rock.height * 0.34, 0.0),
+        rock.radius,
+        material,
+        stretch=Vec3(cos(rock.yaw) * rock.radius * 0.22, -rock.height * 0.1, sin(rock.yaw) * rock.radius * 0.18),
+        segments=5,
+        rings=3,
+        scale_y=max(0.16, rock.height / max(0.001, rock.radius)),
+    )
 
 
 def _water_source_for(centers: Iterable[Vec3], step: float, level: float) -> WaterSource:

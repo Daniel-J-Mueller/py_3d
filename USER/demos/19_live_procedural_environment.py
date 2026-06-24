@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, replace
-from math import ceil, cos, radians, sin
+from math import ceil, cos, radians, sin, tan
 from pathlib import Path
 from time import perf_counter
 
@@ -16,6 +16,7 @@ from py_3d import (
     HUDRect,
     HUDText,
     GPURenderer,
+    EnvironmentDetailCluster,
     Lamp,
     ProceduralEnvironmentConfig,
     ProceduralEnvironmentGenerator,
@@ -40,10 +41,10 @@ DEMO_SETTINGS = "procedural_hills"
 
 
 QUALITY_PROFILES = {
-    "fast": dict(chunk_resolution=12, shoreline_detail=1, active_radius=1, tree_lod_distance_chunks=2, tree_slots_per_axis=3, tree_density=0.16, bush_slots_per_axis=4, bush_density=0.18, rock_slots_per_axis=3, rock_density=0.08, grass_blades_per_chunk=96, leaf_tufts_per_branch=1, sphere_segments=8, sphere_rings=4, cloud_count=3, star_count=18),
-    "balanced": dict(chunk_resolution=16, shoreline_detail=1, active_radius=1, tree_lod_distance_chunks=1, tree_slots_per_axis=4, tree_density=0.22, bush_slots_per_axis=5, bush_density=0.25, rock_slots_per_axis=4, rock_density=0.1, grass_blades_per_chunk=170, leaf_tufts_per_branch=2, sphere_segments=10, sphere_rings=5, cloud_count=5, star_count=36),
-    "high": dict(chunk_resolution=20, shoreline_detail=2, active_radius=2, tree_lod_distance_chunks=2, tree_slots_per_axis=5, tree_density=0.26, bush_slots_per_axis=6, bush_density=0.3, rock_slots_per_axis=5, rock_density=0.12, grass_blades_per_chunk=260, leaf_tufts_per_branch=3, sphere_segments=12, sphere_rings=6, cloud_count=8, star_count=54),
-    "ultra": dict(chunk_resolution=24, shoreline_detail=2, active_radius=3, tree_lod_distance_chunks=3, tree_slots_per_axis=5, tree_density=0.3, bush_slots_per_axis=7, bush_density=0.34, rock_slots_per_axis=5, rock_density=0.14, grass_blades_per_chunk=380, leaf_tufts_per_branch=4, sphere_segments=14, sphere_rings=7, cloud_count=11, star_count=72),
+    "fast": dict(chunk_resolution=12, shoreline_detail=1, active_radius=1, hlod_radius=2, virtual_detail_budget=18, virtual_pixel_error=8.0, tree_lod_distance_chunks=2, tree_slots_per_axis=3, tree_density=0.16, bush_slots_per_axis=4, bush_density=0.18, rock_slots_per_axis=3, rock_density=0.08, grass_blades_per_chunk=96, leaf_tufts_per_branch=1, sphere_segments=8, sphere_rings=4, cloud_count=3, star_count=18),
+    "balanced": dict(chunk_resolution=16, shoreline_detail=1, active_radius=1, hlod_radius=3, virtual_detail_budget=34, virtual_pixel_error=6.0, tree_lod_distance_chunks=1, tree_slots_per_axis=4, tree_density=0.22, bush_slots_per_axis=5, bush_density=0.25, rock_slots_per_axis=4, rock_density=0.1, grass_blades_per_chunk=170, leaf_tufts_per_branch=2, sphere_segments=10, sphere_rings=5, cloud_count=5, star_count=36),
+    "high": dict(chunk_resolution=20, shoreline_detail=2, active_radius=2, hlod_radius=3, virtual_detail_budget=58, virtual_pixel_error=4.5, tree_lod_distance_chunks=2, tree_slots_per_axis=5, tree_density=0.26, bush_slots_per_axis=6, bush_density=0.3, rock_slots_per_axis=5, rock_density=0.12, grass_blades_per_chunk=260, leaf_tufts_per_branch=3, sphere_segments=12, sphere_rings=6, cloud_count=8, star_count=54),
+    "ultra": dict(chunk_resolution=24, shoreline_detail=2, active_radius=3, hlod_radius=4, virtual_detail_budget=86, virtual_pixel_error=3.5, tree_lod_distance_chunks=3, tree_slots_per_axis=5, tree_density=0.3, bush_slots_per_axis=7, bush_density=0.34, rock_slots_per_axis=5, rock_density=0.14, grass_blades_per_chunk=380, leaf_tufts_per_branch=4, sphere_segments=14, sphere_rings=7, cloud_count=11, star_count=72),
 }
 
 PROCEDURAL_LIVE_ACTIONS = {
@@ -58,8 +59,12 @@ PROCEDURAL_LIVE_ACTIONS = {
     "sky_stars",
     "radius_down",
     "radius_up",
+    "hlod_down",
+    "hlod_up",
     "tree_lod_down",
     "tree_lod_up",
+    "detail_budget_down",
+    "detail_budget_up",
     "wind_down",
     "wind_up",
     "rebuild",
@@ -217,6 +222,8 @@ class ChunkBuildWorker:
 class StreamLoadStats:
     active_chunks_loaded: int
     active_chunks_total: int
+    hlod_chunks_loaded: int
+    hlod_chunks_total: int
     stream_chunks_loaded: int
     stream_chunks_total: int
     active_objects_loaded: int
@@ -225,6 +232,10 @@ class StreamLoadStats:
     @property
     def active_chunk_percent(self) -> float:
         return _percent(self.active_chunks_loaded, self.active_chunks_total)
+
+    @property
+    def hlod_chunk_percent(self) -> float:
+        return _percent(self.hlod_chunks_loaded, self.hlod_chunks_total)
 
     @property
     def stream_chunk_percent(self) -> float:
@@ -261,6 +272,9 @@ class ProceduralEnvironmentViewer:
         self.render_camera: Camera | None = None
         self.keys: set[str] = set()
         self.active_radius = args.active_radius if args.active_radius is not None else self.config.active_radius
+        self.hlod_radius = max(0, int(args.hlod_radius))
+        self.virtual_detail_budget = max(0, int(args.virtual_detail_budget))
+        self.virtual_pixel_error = max(0.5, float(args.virtual_pixel_error))
         self.tree_lod_distance_chunks = max(1, int(args.tree_lod_distance_chunks))
         self.preload_margin = max(0, int(args.preload_margin))
         self.max_pending_chunks = max(1, int(args.max_pending_chunks))
@@ -288,6 +302,10 @@ class ProceduralEnvironmentViewer:
         self._stream_target: tuple[tuple[int, int], ...] = ()
         self._stream_missing_count = 0
         self._activated_chunk_objects: dict[tuple[int, int], int] = {}
+        self._selected_tree_clusters: dict[tuple[int, int], tuple[EnvironmentDetailCluster, ...]] = {}
+        self._last_virtual_clusters = 0
+        self._last_hlod_chunks = 0
+        self._last_culled_chunks = 0
         self._prime_chunk_activation(self.spawn)
         self.chunk_worker = ChunkBuildWorker(self.config, enabled=args.chunk_worker, mode=args.chunk_worker_mode, max_workers=self.max_pending_chunks)
         self.renderer = ModernGLLiveRenderer(args.window_width, args.window_height, title="py_3d procedural hills", vsync=args.vsync, backend=args.live_backend)
@@ -397,6 +415,7 @@ class ProceduralEnvironmentViewer:
                 f"slow50={slow_50} slow100={slow_100} chunk_frames={chunk_frames} "
                 f"max_collect_ms={max_collect_ms:0.2f} max_scene_ms={max_scene_ms:0.2f} max_build_ms={max_build_ms:0.2f} max_draw_ms={max_draw_ms:0.2f} "
                 f"active_chunks={load_stats.active_chunks_loaded}/{load_stats.active_chunks_total} active_chunks_pct={load_stats.active_chunk_percent:0.1f} "
+                f"hlod_chunks={load_stats.hlod_chunks_loaded}/{load_stats.hlod_chunks_total} hlod_chunks_pct={load_stats.hlod_chunk_percent:0.1f} "
                 f"stream_chunks={load_stats.stream_chunks_loaded}/{load_stats.stream_chunks_total} stream_chunks_pct={load_stats.stream_chunk_percent:0.1f} "
                 f"active_objects_pct={load_stats.active_object_percent:0.1f} cached_chunks={self.environment.cached_chunk_count} pending_chunks={pending_chunks}"
             )
@@ -437,34 +456,66 @@ class ProceduralEnvironmentViewer:
         scene = Scene()
         stream_position = self._stream_position()
         center_coord = self.environment.chunk_coordinate(stream_position)
-        for chunk in self.environment.cached_chunks_around(stream_position, self.active_radius):
+        camera = self.camera()
+        remaining_cluster_budget = self.virtual_detail_budget
+        selected_tree_clusters: dict[tuple[int, int], tuple[EnvironmentDetailCluster, ...]] = {}
+        hlod_chunks = 0
+        culled_chunks = 0
+        for chunk in self.environment.cached_chunks_around(stream_position, self._visual_radius()):
+            distance = self._chunk_distance(chunk.coord, center_coord)
+            if self._chunk_culled(chunk, camera):
+                culled_chunks += 1
+                continue
+            if distance > self.active_radius:
+                if chunk.hlod_objects:
+                    scene.add(*chunk.hlod_objects)
+                elif chunk.distant_objects:
+                    scene.add(*chunk.distant_objects)
+                else:
+                    scene.add(*(chunk.base_objects or chunk.objects))
+                hlod_chunks += 1
+                continue
             if (self._chunk_uses_distant_tree_lod(chunk.coord, center_coord) or not chunk.tree_detail_loaded) and chunk.distant_objects:
                 scene.add(*chunk.distant_objects)
             else:
                 base_objects = chunk.base_objects or chunk.objects
-                visible_count = min(self._activated_chunk_objects.get(chunk.coord, self._initial_chunk_object_count(chunk)), len(chunk.objects))
+                visible_count = min(self._activated_chunk_objects.get(chunk.coord, self._initial_chunk_object_count(chunk)), self._chunk_activation_target(chunk))
                 scene.add(*base_objects[: min(visible_count, len(base_objects))])
+                cluster_activation = self._activated_tree_cluster_count(chunk, visible_count)
+                clusters = self._select_tree_clusters(chunk, camera, remaining_cluster_budget, cluster_activation)
+                selected_tree_clusters[chunk.coord] = clusters
+                remaining_cluster_budget = max(0, remaining_cluster_budget - len(clusters))
                 if not self._chunk_uses_tree_sway(chunk.coord, center_coord):
-                    tree_visible = self._visible_tree_object_count(chunk, visible_count)
-                    if tree_visible > 0:
-                        scene.add(*(chunk.tree_objects or chunk.objects[len(base_objects) :])[:tree_visible])
+                    for cluster in clusters:
+                        scene.add(*cluster.objects)
         if self.sky.stars_enabled and self.sky.night_amount > 0.55:
             scene.add(*self.sky.star_primitives())
         if self.sky.clouds_enabled and self.sky.daylight_amount() > 0.08:
             scene.add(*self.sky.cloud_primitives())
-        self.environment.prune_cache_around(stream_position, self.active_radius, margin=self.preload_margin + 1)
+        self.environment.prune_cache_around(stream_position, self._visual_radius(), margin=self.preload_margin + 1)
+        self._selected_tree_clusters = selected_tree_clusters
+        self._last_virtual_clusters = sum(len(clusters) for clusters in selected_tree_clusters.values())
+        self._last_hlod_chunks = hlod_chunks
+        self._last_culled_chunks = culled_chunks
         self._static_scene = scene
         self._static_scene_cache_key = key
         return scene
 
     def _static_scene_key(self) -> tuple:
         chunk = self.environment.chunk_coordinate(self._stream_position())
+        camera = self.camera()
+        forward = (camera.target - camera.position).normalized(Vec3(0.0, 0.0, 1.0))
         clouds_visible = self.sky.clouds_enabled and self.sky.daylight_amount() > 0.08
         stars_visible = self.sky.stars_enabled and self.sky.night_amount > 0.55
         return (
             self.config,
             chunk,
+            (round(camera.position.x, 1), round(camera.position.y, 1), round(camera.position.z, 1)),
+            (round(forward.x, 2), round(forward.y, 2), round(forward.z, 2)),
             self.active_radius,
+            self.hlod_radius,
+            self.virtual_detail_budget,
+            round(self.virtual_pixel_error, 3),
             self.tree_lod_distance_chunks,
             self.tree_sway_distance_chunks,
             self._stream_version,
@@ -500,7 +551,7 @@ class ProceduralEnvironmentViewer:
         changed = False
         for chunk in self.environment.cached_chunks_around(self._stream_position(), self.active_radius):
             current = self._activated_chunk_objects.get(chunk.coord, self._initial_chunk_object_count(chunk))
-            target = len(chunk.objects)
+            target = self._chunk_activation_target(chunk)
             if current < target:
                 self._activated_chunk_objects[chunk.coord] = min(target, current + self.chunk_activation_rate)
                 changed = True
@@ -527,6 +578,66 @@ class ProceduralEnvironmentViewer:
             count += 1
         return min(len(chunk.objects), max(1, count))
 
+    def _chunk_activation_target(self, chunk) -> int:
+        if chunk.tree_clusters:
+            return len(chunk.base_objects or ()) + len(chunk.tree_clusters)
+        return len(chunk.objects)
+
+    def _activated_tree_cluster_count(self, chunk, visible_count: int | None = None) -> int:
+        if not chunk.tree_clusters:
+            return 0
+        total_visible = self._activated_chunk_objects.get(chunk.coord, self._initial_chunk_object_count(chunk)) if visible_count is None else visible_count
+        return max(0, min(len(chunk.tree_clusters), total_visible - len(chunk.base_objects or ())))
+
+    def _visual_radius(self) -> int:
+        return max(self.active_radius, self.active_radius + self.hlod_radius)
+
+    def _chunk_culled(self, chunk, camera: Camera) -> bool:
+        to_center = chunk.bounds_center - camera.position
+        distance = to_center.length()
+        max_distance = self.settings.max_render_distance
+        if max_distance is not None and distance - chunk.bounds_radius > max_distance:
+            return True
+        if distance <= max(self.config.chunk_size * 0.85, chunk.bounds_radius):
+            return False
+        forward = (camera.target - camera.position).normalized(Vec3(0.0, 0.0, 1.0))
+        facing = forward.dot(to_center.normalized(forward))
+        return facing < -0.28
+
+    def _select_tree_clusters(
+        self,
+        chunk,
+        camera: Camera,
+        budget: int,
+        activated_count: int,
+    ) -> tuple[EnvironmentDetailCluster, ...]:
+        if budget <= 0 or activated_count <= 0 or not chunk.tree_clusters:
+            return ()
+        candidates: list[tuple[float, EnvironmentDetailCluster]] = []
+        for cluster in chunk.tree_clusters[:activated_count]:
+            score = self._cluster_screen_score(cluster, camera)
+            if score <= 0.0:
+                continue
+            candidates.append((score * cluster.importance, cluster))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        return tuple(cluster for _score, cluster in candidates[:budget])
+
+    def _cluster_screen_score(self, cluster: EnvironmentDetailCluster, camera: Camera) -> float:
+        offset = cluster.center - camera.position
+        distance = max(0.001, offset.length())
+        max_distance = self.settings.max_render_distance
+        if max_distance is not None and distance - cluster.radius > max_distance:
+            return 0.0
+        forward = (camera.target - camera.position).normalized(Vec3(0.0, 0.0, 1.0))
+        if distance > self.config.chunk_size * 0.75 and forward.dot(offset.normalized(forward)) < -0.18:
+            return 0.0
+        fov = max(8.0, min(150.0, camera.fov_degrees))
+        pixel_scale = self.args.window_height / max(0.01, 2.0 * tan(radians(fov) * 0.5))
+        screen_radius = cluster.radius * pixel_scale / distance
+        if distance > self.config.chunk_size * 0.65 and screen_radius < self.virtual_pixel_error:
+            return 0.0
+        return screen_radius
+
     def _chunk_uses_distant_tree_lod(self, coord: tuple[int, int], center_coord: tuple[int, int]) -> bool:
         return self._chunk_distance(coord, center_coord) >= self.tree_lod_distance_chunks
 
@@ -534,7 +645,7 @@ class ProceduralEnvironmentViewer:
         return self._chunk_distance(coord, center_coord) <= self.tree_sway_distance_chunks
 
     def _chunk_needs_tree_detail(self, coord: tuple[int, int], center_coord: tuple[int, int]) -> bool:
-        return not self._chunk_uses_distant_tree_lod(coord, center_coord)
+        return self._chunk_distance(coord, center_coord) <= self.active_radius and not self._chunk_uses_distant_tree_lod(coord, center_coord)
 
     def _chunk_ready_for_distance(self, coord: tuple[int, int], center_coord: tuple[int, int]) -> bool:
         chunk = self.environment.cached_chunk(coord)
@@ -579,12 +690,15 @@ class ProceduralEnvironmentViewer:
         for chunk in self.environment.cached_chunks_around(stream_position, self.active_radius):
             if self._chunk_uses_distant_tree_lod(chunk.coord, center_coord) or not self._chunk_uses_tree_sway(chunk.coord, center_coord):
                 continue
-            visible_tree_count = self._visible_tree_count(chunk)
-            if visible_tree_count <= 0:
+            selected_clusters = self._selected_tree_clusters.get(chunk.coord, ())
+            if not selected_clusters:
+                continue
+            selected_tree_indexes = tuple(cluster.source_index for cluster in selected_clusters if cluster.source_index < len(chunk.trees))
+            if not selected_tree_indexes:
                 continue
             cache_key = (
                 chunk.coord,
-                visible_tree_count,
+                selected_tree_indexes,
                 time_bucket,
                 self.config.seed,
                 self.config.leaf_tufts_per_branch,
@@ -593,7 +707,8 @@ class ProceduralEnvironmentViewer:
             cached = self._swayed_chunk_tree_cache.get(cache_key)
             if cached is None:
                 chunk_objects: list[object] = []
-                for tree in chunk.trees[:visible_tree_count]:
+                for tree_index in selected_tree_indexes:
+                    tree = chunk.trees[tree_index]
                     chunk_objects.extend(
                         swayed_tree_primitives(
                             tree,
@@ -614,9 +729,11 @@ class ProceduralEnvironmentViewer:
     def _schedule_chunk_stream(self) -> None:
         stream_position = self._stream_position()
         center = self.environment.chunk_coordinate(stream_position)
-        radius = self.active_radius + self.preload_margin
+        visual_radius = self._visual_radius()
+        radius = visual_radius + self.preload_margin
         target = self.environment.chunk_coords_around(stream_position, radius)
         active_target = set(self.environment.chunk_coords_around(stream_position, self.active_radius))
+        visual_target = set(self.environment.chunk_coords_around(stream_position, visual_radius))
         self._stream_target = target
         self._stream_missing_count = sum(1 for coord in target if not self._chunk_has_base(coord) and coord not in self.chunk_worker.futures)
         current = self.environment.cached_chunk(center)
@@ -654,7 +771,7 @@ class ProceduralEnvironmentViewer:
         stream_base_missing = [
             coord
             for coord in target
-            if coord not in active_target and not self._chunk_has_base(coord) and coord not in self.chunk_worker.futures
+            if coord not in active_target and coord in visual_target and not self._chunk_has_base(coord) and coord not in self.chunk_worker.futures
         ]
         stream_detail_missing = [
             coord
@@ -667,16 +784,20 @@ class ProceduralEnvironmentViewer:
                 and coord not in self.chunk_worker.futures
             )
         ]
+        preload_base_missing = [
+            coord
+            for coord in target
+            if coord not in visual_target and not self._chunk_has_base(coord) and coord not in self.chunk_worker.futures
+        ]
         if active_base_missing:
             candidates = tuple((coord, False) for coord in active_base_missing)
         elif active_detail_missing:
             candidates = tuple((coord, True) for coord in active_detail_missing)
         elif stream_base_missing:
-            request_room = min(request_room, 1)
-            candidates = tuple((coord, self._chunk_needs_tree_detail(coord, center)) for coord in stream_base_missing)
+            candidates = tuple((coord, False) for coord in stream_base_missing)
         else:
             request_room = min(request_room, 1)
-            candidates = tuple((coord, True) for coord in stream_detail_missing)
+            candidates = tuple((coord, True) for coord in stream_detail_missing) or tuple((coord, False) for coord in preload_base_missing)
 
         requested = 0
         for coord, tree_detail in candidates:
@@ -689,7 +810,7 @@ class ProceduralEnvironmentViewer:
                 requested += 1
             if requested >= request_room:
                 break
-        self.environment.prune_cache_around(stream_position, self.active_radius, margin=self.preload_margin + 1)
+        self.environment.prune_cache_around(stream_position, visual_radius, margin=self.preload_margin + 1)
         self._activated_chunk_objects = {
             coord: count
             for coord, count in self._activated_chunk_objects.items()
@@ -700,8 +821,11 @@ class ProceduralEnvironmentViewer:
         stream_position = self._stream_position()
         center_coord = self.environment.chunk_coordinate(stream_position)
         active_target = self.environment.chunk_coords_around(stream_position, self.active_radius)
-        stream_target = self.environment.chunk_coords_around(stream_position, self.active_radius + self.preload_margin)
+        visual_target = self.environment.chunk_coords_around(stream_position, self._visual_radius())
+        stream_target = self.environment.chunk_coords_around(stream_position, self._visual_radius() + self.preload_margin)
         active_loaded = sum(1 for coord in active_target if self._chunk_has_base(coord))
+        hlod_coords = tuple(coord for coord in visual_target if coord not in set(active_target))
+        hlod_loaded = sum(1 for coord in hlod_coords if self._chunk_has_base(coord))
         stream_loaded = sum(1 for coord in stream_target if self._chunk_has_base(coord))
         active_objects_loaded = 0
         active_objects_total = 0
@@ -720,12 +844,14 @@ class ProceduralEnvironmentViewer:
                 active_objects_total += loaded + detail_estimate
                 active_objects_loaded += loaded
             else:
-                total = len(chunk.objects)
+                total = self._chunk_activation_target(chunk)
                 active_objects_total += total
                 active_objects_loaded += min(total, self._activated_chunk_objects.get(coord, self._initial_chunk_object_count(chunk)))
         return StreamLoadStats(
             active_loaded,
             len(active_target),
+            hlod_loaded,
+            len(hlod_coords),
             stream_loaded,
             len(stream_target),
             active_objects_loaded,
@@ -786,6 +912,12 @@ class ProceduralEnvironmentViewer:
         elif action == "radius_down":
             self.active_radius = max(1, self.active_radius - 1)
             self._invalidate_static_scene()
+        elif action == "hlod_up":
+            self.hlod_radius = min(6, self.hlod_radius + 1)
+            self._invalidate_static_scene()
+        elif action == "hlod_down":
+            self.hlod_radius = max(0, self.hlod_radius - 1)
+            self._invalidate_static_scene()
         elif action == "look_smoothing_up":
             self.look_smoothing = max(2.0, min(40.0, self.look_smoothing + 2.0))
         elif action == "look_smoothing_down":
@@ -824,6 +956,12 @@ class ProceduralEnvironmentViewer:
             self._invalidate_static_scene()
         elif action == "tree_lod_down":
             self.tree_lod_distance_chunks = max(1, self.tree_lod_distance_chunks - 1)
+            self._invalidate_static_scene()
+        elif action == "detail_budget_up":
+            self.virtual_detail_budget = min(180, self.virtual_detail_budget + 8)
+            self._invalidate_static_scene()
+        elif action == "detail_budget_down":
+            self.virtual_detail_budget = max(0, self.virtual_detail_budget - 8)
             self._invalidate_static_scene()
         elif action == "wind_up":
             self.wind_strength = min(1.35, self.wind_strength + 0.08)
@@ -886,6 +1024,9 @@ class ProceduralEnvironmentViewer:
                 "still_renderer": self.args.still_renderer,
                 "chunk_worker": self.args.chunk_worker,
                 "chunk_worker_mode": self.args.chunk_worker_mode,
+                "hlod_radius": self.hlod_radius,
+                "virtual_detail_budget": self.virtual_detail_budget,
+                "virtual_pixel_error": round(self.virtual_pixel_error, 3),
                 "tree_lod_distance_chunks": self.tree_lod_distance_chunks,
                 "preload_margin": self.preload_margin,
                 "max_pending_chunks": self.max_pending_chunks,
@@ -910,8 +1051,12 @@ class ProceduralEnvironmentViewer:
                 "reflections_up": self.args.reflection_bounces,
                 "radius_down": self.active_radius,
                 "radius_up": self.active_radius,
+                "hlod_down": self.hlod_radius,
+                "hlod_up": self.hlod_radius,
                 "tree_lod_down": self.tree_lod_distance_chunks,
                 "tree_lod_up": self.tree_lod_distance_chunks,
+                "detail_budget_down": self.virtual_detail_budget,
+                "detail_budget_up": self.virtual_detail_budget,
                 "wind_down": f"{self.wind_strength:0.2f}x",
                 "wind_up": f"{self.wind_strength:0.2f}x",
                 "rebuild": f"{self.environment.cached_chunk_count} cached",
@@ -937,11 +1082,12 @@ class ProceduralEnvironmentViewer:
         move_state = "FREE" if self.camera_mode == "global" else ("CROUCH" if "crouch" in self.keys else ("SPRINT" if "sprint" in self.keys else "WALK"))
         load_stats = self._stream_load_stats()
         self.renderer.hud.set(
-            HUDRect((12, 12), (334, 98), (3, 7, 10), alpha=0.55),
+            HUDRect((12, 12), (392, 112), (3, 7, 10), alpha=0.55),
             HUDText(
                 f"PROCEDURAL HILLS  {self.camera_mode.upper()}  {move_state}\n"
                 f"X {stream_position.x:0.1f}  Z {stream_position.z:0.1f}  {water}\n"
-                f"LOAD {load_stats.active_chunk_percent:0.0f}% CHUNKS  {load_stats.active_object_percent:0.0f}% DETAIL  {load_stats.stream_chunk_percent:0.0f}% PRELOAD\n"
+                f"LOAD {load_stats.active_chunk_percent:0.0f}% ACTIVE  {load_stats.hlod_chunk_percent:0.0f}% HLOD  {load_stats.stream_chunk_percent:0.0f}% STREAM\n"
+                f"DETAIL {load_stats.active_object_percent:0.0f}%  CLUSTERS {self._last_virtual_clusters}/{self.virtual_detail_budget}  CULLED {self._last_culled_chunks}\n"
                 f"CHUNK {chunk[0]},{chunk[1]}  CACHE {self.environment.cached_chunk_count}  STREAM {self.chunk_worker.pending_count}/{self._stream_missing_count}",
                 (20, 20),
                 color=(238, 245, 255),
@@ -1076,7 +1222,7 @@ def render_still(args: argparse.Namespace) -> Path:
     ensure_procedural_world_assets(WORLD_ASSET_DIR, config)
     environment = ProceduralEnvironmentGenerator(config)
     spawn = find_demo_spawn(environment)
-    scene = scene_around_with_lod(environment, spawn, args.active_radius, args.tree_lod_distance_chunks)
+    scene = scene_around_with_lod(environment, spawn, args.active_radius, args.tree_lod_distance_chunks, args.hlod_radius)
     scene.add_light(Lamp(spawn + Vec3(-4.0, 4.5, -2.5), color=(134, 178, 255), intensity=3.6))
     sky = SkyPrefab(
         time_of_day=args.sky_time,
@@ -1096,23 +1242,28 @@ def render_still(args: argparse.Namespace) -> Path:
     return output
 
 
-def scene_around_with_lod(environment: ProceduralEnvironmentGenerator, position: Vec3, radius: int | None, tree_lod_distance_chunks: int) -> Scene:
+def scene_around_with_lod(environment: ProceduralEnvironmentGenerator, position: Vec3, radius: int | None, tree_lod_distance_chunks: int, hlod_radius: int = 0) -> Scene:
     scene = Scene()
     center_coord = environment.chunk_coordinate(position)
+    active_radius = environment.config.active_radius if radius is None else max(0, int(radius))
+    visual_radius = active_radius + max(0, int(hlod_radius))
     lod_distance = max(1, int(tree_lod_distance_chunks))
-    for coord in environment.chunk_coords_around(position, radius):
+    for coord in environment.chunk_coords_around(position, visual_radius):
         distance = max(abs(coord[0] - center_coord[0]), abs(coord[1] - center_coord[1]))
-        if distance >= lod_distance:
+        if distance > active_radius:
             chunk = environment.cached_chunk(coord)
             if chunk is None or chunk.tree_detail_loaded:
                 chunk = build_environment_chunk(environment.config, coord, tree_detail=False)
                 environment.store_chunk(chunk)
+            scene.add(*(chunk.hlod_objects or chunk.distant_objects or chunk.base_objects or chunk.objects))
+        elif distance >= lod_distance:
+            chunk = environment.cached_chunk(coord)
+            if chunk is None or chunk.tree_detail_loaded:
+                chunk = build_environment_chunk(environment.config, coord, tree_detail=False)
+                environment.store_chunk(chunk)
+            scene.add(*(chunk.distant_objects or chunk.hlod_objects or chunk.base_objects or chunk.objects))
         else:
             chunk = environment.chunk(coord)
-        distance = max(abs(chunk.coord[0] - center_coord[0]), abs(chunk.coord[1] - center_coord[1]))
-        if distance >= lod_distance and chunk.distant_objects:
-            scene.add(*chunk.distant_objects)
-        else:
             scene.add(*chunk.objects)
     return scene
 
@@ -1136,6 +1287,9 @@ def parse_args() -> argparse.Namespace:
     active_radius_default = defaults.get("active_radius")
     if active_radius_default is not None:
         active_radius_default = min(int(active_radius_default), QUALITY_PROFILES[selected_quality]["active_radius"])
+    hlod_default = min(max(0, int(defaults.get("hlod_radius", QUALITY_PROFILES[selected_quality]["hlod_radius"]))), 6)
+    virtual_detail_budget_default = min(max(0, int(defaults.get("virtual_detail_budget", QUALITY_PROFILES[selected_quality]["virtual_detail_budget"]))), 180)
+    virtual_pixel_error_default = max(0.5, float(defaults.get("virtual_pixel_error", QUALITY_PROFILES[selected_quality]["virtual_pixel_error"])))
     tree_lod_default = defaults.get("tree_lod_distance_chunks", QUALITY_PROFILES[selected_quality]["tree_lod_distance_chunks"])
     tree_lod_default = min(max(1, int(tree_lod_default)), QUALITY_PROFILES[selected_quality]["tree_lod_distance_chunks"])
     chunk_activation_default = min(max(1, int(defaults.get("chunk_activation_rate", 8))), 12)
@@ -1159,6 +1313,9 @@ def parse_args() -> argparse.Namespace:
         camera_mode_default = "first"
     parser.add_argument("--camera-mode", choices=("global", "third", "first"), default=camera_mode_default)
     parser.add_argument("--active-radius", type=int, default=active_radius_default)
+    parser.add_argument("--hlod-radius", type=int, default=hlod_default)
+    parser.add_argument("--virtual-detail-budget", type=int, default=virtual_detail_budget_default)
+    parser.add_argument("--virtual-pixel-error", type=float, default=virtual_pixel_error_default, help=argparse.SUPPRESS)
     parser.add_argument("--fps", type=int, default=60)
     parser.add_argument("--width", type=int, default=640)
     parser.add_argument("--height", type=int, default=360)

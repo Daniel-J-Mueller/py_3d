@@ -52,7 +52,7 @@ process exits with an error, the launcher reverts to the last safe settings.
 | `16_live_fruit_bowl_rgb_bulbs.py` | Fruit bowl live variant with blinking RGB bulbs. |
 | `17_render_hud_demo.py` | FPS and third-person HUD still previews. |
 | `18_live_wind_pool_water.py` | Wind-driven vector-fluid pool scene. |
-| `19_live_procedural_environment.py` | Streamed procedural hills, grass, water, and tree tufts. |
+| `19_live_procedural_environment.py` | Streamed procedural hills with HLOD scenery rings, virtualized tree clusters, grass, and water. |
 | `20_render_feature_previews.py` | Batch still previews. |
 | `30_render_environment_videos.py` | Batch environment videos. |
 | `40_run_feature_tests.py` | User-facing feature test runner. |

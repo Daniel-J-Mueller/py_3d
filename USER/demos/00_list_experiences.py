@@ -73,7 +73,7 @@ EXPERIENCES = [
     Experience(
         "Procedural Hill Biome",
         "19_live_procedural_environment.py",
-        "Infinite deterministic chunk streaming with rolling hills, stable tree placement, and lowland water sources.",
+        "Virtualized open-world hills with deterministic PCG, HLOD scenery rings, cluster culling, and lowland water sources.",
         ("python", "USER/demos/19_live_procedural_environment.py"),
         (
             "python",
